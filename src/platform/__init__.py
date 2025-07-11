@@ -3,19 +3,37 @@ Sunflower AI Platform Integration Package
 
 This package handles platform-specific features:
 - Hardware detection and capability assessment
-- Model optimization based on system resources
+- Model selection based on system resources
 - OS-specific integration (shortcuts, notifications, etc.)
 - Performance monitoring and tuning
+- Partition detection for USB/CD-ROM drives
 """
 
 from .hardware_detector import HardwareDetector
-from .model_optimizer import ModelOptimizer
-from .os_integration import OSIntegration
+from .os_integration import OSIntegration, get_os_integration
+from .partition_detector import PartitionDetector
+from .base import BasePlatform, PlatformFactory
+
+# Import platform-specific implementations if available
+try:
+    from .windows import WindowsPlatform
+except ImportError:
+    WindowsPlatform = None
+
+try:
+    from .macos import MacOSPlatform
+except ImportError:
+    MacOSPlatform = None
 
 __all__ = [
     'HardwareDetector',
-    'ModelOptimizer',
-    'OSIntegration'
+    'OSIntegration',
+    'PartitionDetector',
+    'BasePlatform',
+    'PlatformFactory',
+    'get_os_integration',
+    'WindowsPlatform',
+    'MacOSPlatform',
 ]
 
 # Package version
