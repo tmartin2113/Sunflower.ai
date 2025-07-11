@@ -1,0 +1,176 @@
+{
+  "version": "6.1.0",
+  "app_name": "Sunflower AI STEM Education System",
+  "app_id": "com.sunflowerai.education",
+  
+  "system": {
+    "min_python_version": "3.7",
+    "min_ram_gb": 4,
+    "recommended_ram_gb": 8,
+    "min_disk_space_gb": 10,
+    "supported_platforms": ["Windows", "Darwin"],
+    "default_data_dir": ".sunflower-ai",
+    "log_level": "INFO",
+    "debug_mode": false
+  },
+  
+  "ollama": {
+    "default_host": "http://127.0.0.1:11434",
+    "connection_timeout": 10,
+    "response_timeout": 60,
+    "max_retries": 3,
+    "auto_start": true,
+    "models": {
+      "kids": "sunflower-kids",
+      "educator": "sunflower-educator"
+    }
+  },
+  
+  "models": {
+    "default_base_model": "llama3.2:3b",
+    "fallback_models": [
+      "llama3.2:1b",
+      "llama3.2:1b-q4_0"
+    ],
+    "auto_optimize": true,
+    "context_size": {
+      "low_memory": 2048,
+      "standard": 4096,
+      "high_memory": 8192
+    },
+    "temperature": {
+      "kids": 0.8,
+      "educator": 0.7
+    }
+  },
+  
+  "family_defaults": {
+    "max_children_per_family": 10,
+    "content_filtering": "strict",
+    "session_recording": true,
+    "parent_alerts": true,
+    "daily_summaries": true,
+    "session_time_limit_minutes": 60,
+    "break_reminder_minutes": 30,
+    "max_daily_time_minutes": 120,
+    "min_break_time_minutes": 5
+  },
+  
+  "safety": {
+    "age_range": {
+      "min": 2,
+      "max": 18
+    },
+    "strike_system": {
+      "enabled": true,
+      "max_strikes": 3,
+      "reset_after_hours": 24
+    },
+    "content_filters": {
+      "violence": true,
+      "adult_content": true,
+      "dangerous_activities": true,
+      "personal_information": true,
+      "medical_advice": true
+    },
+    "parent_notification": {
+      "immediate_alerts": true,
+      "daily_summary": true,
+      "weekly_report": true
+    }
+  },
+  
+  "ui": {
+    "window_size": {
+      "width": 900,
+      "height": 700,
+      "min_width": 800,
+      "min_height": 600
+    },
+    "theme": "default",
+    "colors": {
+      "background": "#FFF8DC",
+      "primary": "#FFD700",
+      "secondary": "#32CD32",
+      "accent": "#FF6347",
+      "text": "#2F4F4F",
+      "white": "#FFFFFF",
+      "success": "#228B22",
+      "warning": "#FF8C00",
+      "error": "#DC143C"
+    },
+    "fonts": {
+      "default": "Arial",
+      "title_size": 24,
+      "heading_size": 16,
+      "body_size": 11
+    },
+    "animations": {
+      "enabled": true,
+      "duration_ms": 200
+    }
+  },
+  
+  "session": {
+    "auto_save_interval_seconds": 60,
+    "idle_timeout_minutes": 15,
+    "max_session_duration_minutes": 120,
+    "log_retention_days": 90,
+    "export_format": "json",
+    "compression": false
+  },
+  
+  "hardware_optimization": {
+    "auto_detect": true,
+    "cpu_thread_multiplier": 0.75,
+    "gpu_acceleration": "auto",
+    "memory_limit_percentage": 50,
+    "performance_profiles": {
+      "battery_saver": {
+        "cpu_threads": 2,
+        "gpu_layers": 0,
+        "context_reduction": 0.5
+      },
+      "balanced": {
+        "cpu_threads": "auto",
+        "gpu_layers": "auto",
+        "context_reduction": 1.0
+      },
+      "performance": {
+        "cpu_threads": "max",
+        "gpu_layers": "max",
+        "context_reduction": 1.0
+      }
+    }
+  },
+  
+  "updates": {
+    "check_for_updates": false,
+    "auto_update": false,
+    "update_channel": "stable",
+    "last_check": null
+  },
+  
+  "telemetry": {
+    "enabled": false,
+    "anonymous_usage": false,
+    "crash_reporting": false,
+    "share_hardware_info": false
+  },
+  
+  "developer": {
+    "show_advanced_options": false,
+    "enable_console": false,
+    "save_raw_responses": false,
+    "model_testing_mode": false
+  },
+  
+  "paths": {
+    "models_dir": "models",
+    "sessions_dir": "sessions",
+    "profiles_dir": "profiles",
+    "logs_dir": "logs",
+    "exports_dir": "exports",
+    "temp_dir": "temp"
+  }
+}
