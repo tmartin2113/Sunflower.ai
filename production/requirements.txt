@@ -1,0 +1,46 @@
+# Production Scripts Requirements
+# Additional dependencies for manufacturing tools
+
+# Core requirements (from main requirements.txt)
+-r ../requirements.txt
+
+# ISO creation tools
+pycdlib==1.13.0  # Pure Python ISO 9660 library
+
+# Disk imaging
+# Note: Some tools require system packages:
+# - Windows: diskpart (built-in)
+# - macOS: hdiutil (built-in)  
+# - Linux: mkisofs/genisoimage, mount
+
+# Production tracking
+openpyxl==3.1.2  # Excel report generation
+reportlab==4.0.4  # PDF generation
+qrcode==7.4.2  # QR code generation for labels
+Pillow==10.1.0  # Image processing for labels
+
+# Quality control
+pytest==7.4.3  # Testing framework
+pytest-timeout==2.2.0  # Timeout handling
+pytest-html==4.1.1  # HTML test reports
+
+# Batch processing
+tqdm==4.66.1  # Progress bars
+click==8.1.7  # CLI interface
+rich==13.7.0  # Rich terminal output
+
+# Security and validation
+pycryptodome==3.19.0  # Cryptographic functions
+
+# Documentation generation
+markdown==3.5.1  # Markdown processing
+weasyprint==60.1  # HTML to PDF conversion
+
+# Platform-specific
+pywin32==306; sys_platform == 'win32'  # Windows automation
+pyobjc-framework-DiskArbitration==10.1; sys_platform == 'darwin'  # macOS disk handling
+
+# Development tools (optional)
+black==23.12.1  # Code formatting
+isort==5.13.2  # Import sorting
+mypy==1.7.1  # Type checking
