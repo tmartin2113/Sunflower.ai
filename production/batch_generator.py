@@ -560,7 +560,12 @@ if __name__ == "__main__":
         # Manufacturing guide
         mfg_guide = self.docs_dir / "manufacturing_guide.pdf"
         # Would generate actual PDF in production
-        mfg_guide.write_text("Manufacturing Guide PDF Placeholder")
+        mfg_guide.write_text(f"""# Manufacturing Guide
+        Version: {self.version}
+        Batch: {self.batch_id}
+        Date: {datetime.now().isoformat()}
+        [Full guide content here]
+""")
         
         # Troubleshooting guide
         troubleshooting = self.docs_dir / "troubleshooting.md"
