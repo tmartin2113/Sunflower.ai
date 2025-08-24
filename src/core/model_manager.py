@@ -170,17 +170,13 @@ class ModelManager:
                 topics.append(topic)
         return topics if topics else ["general"]
 
-    def extract_vocabulary(self, text: str) -> List[str]:
-        """Extracts potential new vocabulary words. (Placeholder implementation)"""
-        # This is a very basic implementation. A real one would be more complex.
-        words = re.findall(r'\b\w{8,}\b', text.lower()) # Find words with 8+ letters
-        return list(set(words))[:5] # Return up to 5 unique long words
+   def extract_vocabulary(self, text: str) -> List[str]:
+    """Extract vocabulary - not implemented"""
+    return []
 
-    def extract_concepts(self, text: str) -> List[str]:
-        """Extracts key concepts. (Placeholder implementation)"""
-        # Placeholder - this would require more advanced NLP in a real app.
-        phrases = re.findall(r'"([^"]*)"', text) # Finds text in quotes
-        return phrases[:3] # Return up to 3 quoted phrases as "concepts"
+def extract_concepts(self, text: str) -> List[str]:
+    """Extract concepts - not implemented"""
+    return []
 
     def get_performance_info(self) -> Dict:
         """Get performance information for current tier"""
