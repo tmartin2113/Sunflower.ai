@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sunflower AI - Parent Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header .subtitle {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .card-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .card-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5em;
+        }
+        
+        .icon-blue { background: #e3f2fd; color: #2196f3; }
+        .icon-green { background: #e8f5e9; color: #4caf50; }
+        .icon-orange { background: #fff3e0; color: #ff9800; }
+        .icon-purple { background: #f3e5f5; color: #9c27b0; }
+        .icon-red { background: #ffebee; color: #f44336; }
+        
+        .profile-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .profile-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: rgba(255,255,255,0.05);
+            transform: rotate(45deg);
+        }
+        
+        .profile-info {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .profile-name {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .profile-details {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 15px 0;
+        }
+        
+        .profile-detail {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+        
+        .stat-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #5e72e4;
+        }
+        
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        
+        .session-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .session-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .session-time {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .session-duration {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .session-topics {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+        }
+        
+        .topic-tag {
+            background: #e3f2fd;
+            color: #2196f3;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+        }
+        
+        .safety-alert {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+        
+        .safety-alert.high {
+            background: #ffebee;
+            border-left-color: #f44336;
+        }
+        
+        .alert-time {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .alert-message {
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: #5e72e4;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #4c63d2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(94,114,228,0.3);
+        }
+        
+        .btn-secondary {
+            background: #f4f5f7;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #e9ecef;
+        }
+        
+        .btn-success {
+            background: #2dce89;
+            color: white;
+        }
+        
+        .btn-danger {
+            background: #f5365c;
+            color: white;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        
+        .chart-container {
+            height: 200px;
+            margin-top: 20px;
+            position: relative;
+        }
+        
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            margin-bottom: 20px;
+        }
+        
+        .modal-title {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: #5e72e4;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🌻 Sunflower AI Parent Dashboard</h1>
+            <div class="subtitle">Monitor and manage your children's AI-powered learning</div>
+        </div>
+        
+        <!-- Dashboard Grid -->
+        <div class="dashboard-grid">
+            <!-- Active Profiles Card -->
+            <div class="card" id="profilesCard">
+                <div class="card-header">
+                    <span class="card-title">Child Profiles</span>
+                    <div class="card-icon icon-blue">👥</div>
+                </div>
+                <div id="profilesList">
+                    <!-- Profiles will be loaded here -->
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-primary" onclick="showAddProfileModal()">
+                        Add Child Profile
+                    </button>
+                    <button class="btn btn-secondary" onclick="manageProfiles()">
+                        Manage
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Today's Activity -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Today's Activity</span>
+                    <div class="card-icon icon-green">📊</div>
+                </div>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="todaySessions">0</div>
+                        <div class="stat-label">Sessions</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="todayMinutes">0</div>
+                        <div class="stat-label">Minutes</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="todayQuestions">0</div>
+                        <div class="stat-label">Questions</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="todayTopics">0</div>
+                        <div class="stat-label">Topics</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Recent Sessions -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Recent Sessions</span>
+                    <div class="card-icon icon-purple">🕐</div>
+                </div>
+                <div class="session-list" id="recentSessions">
+                    <!-- Sessions will be loaded here -->
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" onclick="viewAllSessions()">
+                        View All Sessions
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Safety Monitoring -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Safety Monitoring</span>
+                    <div class="card-icon icon-orange">🛡️</div>
+                </div>
+                <div id="safetyAlerts">
+                    <div class="no-data">No safety incidents to report</div>
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" onclick="viewSafetyReport()">
+                        View Full Report
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Learning Progress -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Learning Progress</span>
+                    <div class="card-icon icon-green">📈</div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="progressChart"></canvas>
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" onclick="viewDetailedProgress()">
+                        Detailed Report
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Quick Actions -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Quick Actions</span>
+                    <div class="card-icon icon-blue">⚡</div>
+                </div>
+                <div class="action-buttons" style="flex-direction: column; gap: 15px;">
+                    <button class="btn btn-primary" onclick="openWebUI()">
+                        Open Learning Interface
+                    </button>
+                    <button class="btn btn-success" onclick="exportData()">
+                        Export Activity Data
+                    </button>
+                    <button class="btn btn-secondary" onclick="viewSettings()">
+                        Parental Controls
+                    </button>
+                    <button class="btn btn-secondary" onclick="viewHelp()">
+                        Help & Support
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Add Profile Modal -->
+    <div class="modal" id="addProfileModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Add Child Profile</h2>
+            </div>
+            <form id="addProfileForm">
+                <div class="form-group">
+                    <label class="form-label">Child's Name</label>
+                    <input type="text" class="form-input" id="childName" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Age</label>
+                    <input type="number" class="form-input" id="childAge" min="5" max="18" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Grade Level</label>
+                    <select class="form-input" id="childGrade" required>
+                        <option value="">Select Grade</option>
+                        <option value="K">Kindergarten</option>
+                        <option value="1">1st Grade</option>
+                        <option value="2">2nd Grade</option>
+                        <option value="3">3rd Grade</option>
+                        <option value="4">4th Grade</option>
+                        <option value="5">5th Grade</option>
+                        <option value="6">6th Grade</option>
+                        <option value="7">7th Grade</option>
+                        <option value="8">8th Grade</option>
+                        <option value="9">9th Grade</option>
+                        <option value="10">10th Grade</option>
+                        <option value="11">11th Grade</option>
+                        <option value="12">12th Grade</option>
+                    </select>
+                </div>
+                <div class="action-buttons">
+                    <button type="submit" class="btn btn-primary">Create Profile</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // Dashboard functionality
+        class SunflowerDashboard {
+            constructor() {
+                this.profiles = [];
+                this.sessions = [];
+                this.todayStats = {
+                    sessions: 0,
+                    minutes: 0,
+                    questions: 0,
+                    topics: new Set()
+                };
+                this.init();
+            }
+            
+            async init() {
+                await this.loadProfiles();
+                await this.loadSessions();
+                await this.loadSafetyAlerts();
+                this.updateDashboard();
+                this.startAutoRefresh();
+            }
+            
+            async loadProfiles() {
+                // In production, this would fetch from the backend
+                // For now, using mock data
+                this.profiles = [
+                    {
+                        id: '1',
+                        name: 'Emma',
+                        age: 8,
+                        grade: '3rd',
+                        safetyLevel: 'high',
+                        lastActive: '2 hours ago',
+                        totalSessions: 47,
+                        totalHours: 12.5
+                    },
+                    {
+                        id: '2',
+                        name: 'Liam',
+                        age: 11,
+                        grade: '6th',
+                        safetyLevel: 'moderate',
+                        lastActive: 'Yesterday',
+                        totalSessions: 89,
+                        totalHours: 28.3
+                    }
+                ];
+                
+                this.renderProfiles();
+            }
+            
+            renderProfiles() {
+                const container = document.getElementById('profilesList');
+                if (this.profiles.length === 0) {
+                    container.innerHTML = '<div class="no-data">No profiles yet. Add a child profile to get started.</div>';
+                    return;
+                }
+                
+                container.innerHTML = this.profiles.map(profile => `
+                    <div class="session-item" style="cursor: pointer;" onclick="viewProfile('${profile.id}')">
+                        <div>
+                            <div class="session-time">${profile.name}</div>
+                            <div class="session-duration">Age ${profile.age} • ${profile.grade} Grade</div>
+                            <div class="session-topics">
+                                <span class="topic-tag">${profile.safetyLevel} safety</span>
+                                <span class="topic-tag">${profile.totalSessions} sessions</span>
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #666; font-size: 0.9em;">Last active</div>
+                            <div style="font-weight: 600;">${profile.lastActive}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            async loadSessions() {
+                // Mock session data
+                this.sessions = [
+                    {
+                        childName: 'Emma',
+                        time: '10:30 AM',
+                        duration: 25,
+                        topics: ['Math', 'Science'],
+                        questions: 8
+                    },
+                    {
+                        childName: 'Liam',
+                        time: '2:15 PM',
+                        duration: 35,
+                        topics: ['Programming', 'Robotics'],
+                        questions: 12
+                    }
+                ];
+                
+                this.renderRecentSessions();
+                this.updateTodayStats();
+            }
+            
+            renderRecentSessions() {
+                const container = document.getElementById('recentSessions');
+                if (this.sessions.length === 0) {
+                    container.innerHTML = '<div class="no-data">No sessions today</div>';
+                    return;
+                }
+                
+                container.innerHTML = this.sessions.map(session => `
+                    <div class="session-item">
+                        <div>
+                            <div class="session-time">${session.childName} - ${session.time}</div>
+                            <div class="session-duration">${session.duration} minutes • ${session.questions} questions</div>
+                            <div class="session-topics">
+                                ${session.topics.map(topic => 
+                                    `<span class="topic-tag">${topic}</span>`
+                                ).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            updateTodayStats() {
+                this.todayStats.sessions = this.sessions.length;
+                this.todayStats.minutes = this.sessions.reduce((sum, s) => sum + s.duration, 0);
+                this.todayStats.questions = this.sessions.reduce((sum, s) => sum + s.questions, 0);
+                
+                this.sessions.forEach(session => {
+                    session.topics.forEach(topic => this.todayStats.topics.add(topic));
+                });
+                
+                document.getElementById('todaySessions').textContent = this.todayStats.sessions;
+                document.getElementById('todayMinutes').textContent = this.todayStats.minutes;
+                document.getElementById('todayQuestions').textContent = this.todayStats.questions;
+                document.getElementById('todayTopics').textContent = this.todayStats.topics.size;
+            }
+            
+            async loadSafetyAlerts() {
+                // Check for any safety incidents
+                // In production, this would fetch from the backend
+                const alerts = [];
+                
+                const container = document.getElementById('safetyAlerts');
+                if (alerts.length === 0) {
+                    container.innerHTML = '<div class="no-data">✅ No safety incidents to report</div>';
+                } else {
+                    container.innerHTML = alerts.map(alert => `
+                        <div class="safety-alert ${alert.severity}">
+                            <div class="alert-time">${alert.time}</div>
+                            <div class="alert-message">${alert.message}</div>
+                        </div>
+                    `).join('');
+                }
+            }
+            
+            updateDashboard() {
+                // Update all dashboard components
+                this.renderProfiles();
+                this.renderRecentSessions();
+                this.updateTodayStats();
+            }
+            
+            startAutoRefresh() {
+                // Refresh dashboard every 30 seconds
+                setInterval(() => {
+                    this.loadSessions();
+                    this.loadSafetyAlerts();
+                }, 30000);
+            }
+        }
+        
+        // Initialize dashboard
+        const dashboard = new SunflowerDashboard();
+        
+        // Modal functions
+        function showAddProfileModal() {
+            document.getElementById('addProfileModal').classList.add('active');
+        }
+        
+        function closeModal() {
+            document.getElementById('addProfileModal').classList.remove('active');
+        }
+        
+        // Form submission
+        document.getElementById('addProfileForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const profile = {
+                name: document.getElementById('childName').value,
+                age: document.getElementById('childAge').value,
+                grade: document.getElementById('childGrade').value
+            };
+            
+            // In production, send to backend
+            console.log('Creating profile:', profile);
+            
+            // Close modal and refresh
+            closeModal();
+            dashboard.loadProfiles();
+            
+            // Reset form
+            e.target.reset();
+        });
+        
+        // Navigation functions
+        function viewProfile(profileId) {
+            console.log('View profile:', profileId);
+            // Navigate to profile details
+        }
+        
+        function manageProfiles() {
+            console.log('Manage profiles');
+        }
+        
+        function viewAllSessions() {
+            console.log('View all sessions');
+        }
+        
+        function viewSafetyReport() {
+            console.log('View safety report');
+        }
+        
+        function viewDetailedProgress() {
+            console.log('View detailed progress');
+        }
+        
+        function openWebUI() {
+            window.open('http://localhost:8080', '_blank');
+        }
+        
+        function exportData() {
+            console.log('Export data');
+        }
+        
+        function viewSettings() {
+            console.log('View settings');
+        }
+        
+        function viewHelp() {
+            console.log('View help');
+        }
+    </script>
+</body>
+</html>
