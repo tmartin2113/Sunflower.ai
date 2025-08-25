@@ -1,8 +1,0 @@
-[autorun]
-icon=SunflowerAI.exe,0
-label=Sunflower AI Education System
-action=Start Sunflower AI
-open=SunflowerAI.exe
-shell\open\command=SunflowerAI.exe
-shell\readme\command=notepad.exe ..\README.txt
-shell\readme=View Instructions
