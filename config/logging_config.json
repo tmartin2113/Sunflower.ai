@@ -1,0 +1,436 @@
+{
+  "version": "1.0.0",
+  "description": "Comprehensive logging configuration for Sunflower AI system",
+  
+  "global": {
+    "enabled": true,
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "date_format": "%Y-%m-%d %H:%M:%S",
+    "encoding": "utf-8",
+    "max_message_length": 10000,
+    "include_traceback": true,
+    "async_logging": true,
+    "buffer_size": 1000
+  },
+  
+  "handlers": {
+    "console": {
+      "enabled": true,
+      "class": "logging.StreamHandler",
+      "level": "INFO",
+      "format": "%(levelname)s: %(message)s",
+      "stream": "stdout",
+      "color_output": true,
+      "filters": ["user_friendly"]
+    },
+    
+    "file_system": {
+      "enabled": true,
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "DEBUG",
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s",
+      "filename": "logs/system/sunflower_{date}.log",
+      "max_bytes": 10485760,
+      "backup_count": 5,
+      "encoding": "utf-8",
+      "delay": false
+    },
+    
+    "file_safety": {
+      "enabled": true,
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "WARNING",
+      "format": "%(asctime)s - SAFETY - %(levelname)s - %(message)s",
+      "filename": "logs/safety/safety_{date}.log",
+      "max_bytes": 5242880,
+      "backup_count": 10,
+      "encoding": "utf-8",
+      "encrypted": true,
+      "tamper_proof": true
+    },
+    
+    "file_conversation": {
+      "enabled": true,
+      "class": "logging.handlers.TimedRotatingFileHandler",
+      "level": "INFO",
+      "format": "%(asctime)s - %(message)s",
+      "filename": "logs/conversations/conversation_{profile_id}_{date}.log",
+      "when": "D",
+      "interval": 1,
+      "backup_count": 90,
+      "encoding": "utf-8",
+      "encrypted": true
+    },
+    
+    "file_performance": {
+      "enabled": true,
+      "class": "logging.handlers.TimedRotatingFileHandler",
+      "level": "INFO",
+      "format": "%(asctime)s - PERF - %(message)s",
+      "filename": "logs/performance/performance_{date}.log",
+      "when": "H",
+      "interval": 1,
+      "backup_count": 168,
+      "encoding": "utf-8",
+      "structured": true
+    },
+    
+    "file_audit": {
+      "enabled": true,
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "INFO",
+      "format": "%(asctime)s - AUDIT - %(user)s - %(action)s - %(result)s - %(details)s",
+      "filename": "logs/audit/audit_{year}.log",
+      "max_bytes": 52428800,
+      "backup_count": 3,
+      "encoding": "utf-8",
+      "encrypted": true,
+      "immutable": true
+    },
+    
+    "file_error": {
+      "enabled": true,
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "ERROR",
+      "format": "%(asctime)s - ERROR - %(name)s - %(funcName)s:%(lineno)d\\n%(message)s\\n%(exc_info)s",
+      "filename": "logs/errors/error_{date}.log",
+      "max_bytes": 10485760,
+      "backup_count": 10,
+      "encoding": "utf-8",
+      "include_stack_trace": true
+    },
+    
+    "memory_buffer": {
+      "enabled": true,
+      "class": "logging.handlers.MemoryHandler",
+      "level": "DEBUG",
+      "capacity": 1000,
+      "flush_level": "ERROR",
+      "target": "file_system",
+      "flush_on_close": true
+    },
+    
+    "parent_dashboard": {
+      "enabled": true,
+      "class": "custom.ParentDashboardHandler",
+      "level": "INFO",
+      "format": "%(asctime)s - %(category)s - %(message)s",
+      "categories": ["safety", "learning", "session", "achievement"],
+      "real_time": true,
+      "buffer_size": 100
+    }
+  },
+  
+  "loggers": {
+    "root": {
+      "level": "INFO",
+      "handlers": ["console", "file_system", "file_error"],
+      "propagate": false
+    },
+    
+    "sunflower": {
+      "level": "DEBUG",
+      "handlers": ["console", "file_system"],
+      "propagate": false
+    },
+    
+    "sunflower.safety": {
+      "level": "INFO",
+      "handlers": ["file_safety", "parent_dashboard"],
+      "propagate": false,
+      "filters": ["safety_filter"]
+    },
+    
+    "sunflower.conversation": {
+      "level": "INFO",
+      "handlers": ["file_conversation"],
+      "propagate": false,
+      "filters": ["privacy_filter"]
+    },
+    
+    "sunflower.auth": {
+      "level": "INFO",
+      "handlers": ["file_audit", "file_system"],
+      "propagate": false
+    },
+    
+    "sunflower.profiles": {
+      "level": "INFO",
+      "handlers": ["file_audit", "file_system"],
+      "propagate": false
+    },
+    
+    "sunflower.models": {
+      "level": "INFO",
+      "handlers": ["file_system", "file_performance"],
+      "propagate": false
+    },
+    
+    "sunflower.hardware": {
+      "level": "INFO",
+      "handlers": ["file_system"],
+      "propagate": false
+    },
+    
+    "sunflower.partition": {
+      "level": "INFO",
+      "handlers": ["file_system", "file_audit"],
+      "propagate": false
+    },
+    
+    "ollama": {
+      "level": "INFO",
+      "handlers": ["file_system"],
+      "propagate": false
+    },
+    
+    "openwebui": {
+      "level": "INFO",
+      "handlers": ["file_system"],
+      "propagate": false
+    },
+    
+    "performance": {
+      "level": "INFO",
+      "handlers": ["file_performance"],
+      "propagate": false
+    }
+  },
+  
+  "filters": {
+    "user_friendly": {
+      "class": "custom.UserFriendlyFilter",
+      "replace_technical_terms": true,
+      "simplify_errors": true,
+      "remove_stack_traces": true
+    },
+    
+    "safety_filter": {
+      "class": "custom.SafetyLogFilter",
+      "log_violations": true,
+      "log_redirects": true,
+      "anonymize_content": false,
+      "include_context": true
+    },
+    
+    "privacy_filter": {
+      "class": "custom.PrivacyFilter",
+      "remove_personal_info": true,
+      "hash_identifiers": false,
+      "mask_conversations": false
+    },
+    
+    "performance_filter": {
+      "class": "custom.PerformanceFilter",
+      "include_metrics": true,
+      "sample_rate": 1.0
+    }
+  },
+  
+  "formatters": {
+    "simple": {
+      "format": "%(message)s"
+    },
+    
+    "standard": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S"
+    },
+    
+    "detailed": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S.%f"
+    },
+    
+    "json": {
+      "class": "custom.JSONFormatter",
+      "fields": ["timestamp", "level", "logger", "message", "extra"],
+      "indent": null
+    },
+    
+    "audit": {
+      "format": "%(asctime)s | %(user)s | %(action)s | %(target)s | %(result)s | %(ip)s | %(session)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S"
+    }
+  },
+  
+  "log_levels": {
+    "CRITICAL": 50,
+    "ERROR": 40,
+    "WARNING": 30,
+    "INFO": 20,
+    "DEBUG": 10,
+    "NOTSET": 0
+  },
+  
+  "categories": {
+    "system": {
+      "description": "System operations and lifecycle",
+      "level": "INFO",
+      "retention_days": 30
+    },
+    
+    "safety": {
+      "description": "Safety filter and content moderation",
+      "level": "INFO",
+      "retention_days": -1,
+      "immutable": true,
+      "encrypted": true
+    },
+    
+    "conversation": {
+      "description": "AI conversations and interactions",
+      "level": "INFO",
+      "retention_days": 90,
+      "encrypted": true
+    },
+    
+    "authentication": {
+      "description": "Login attempts and session management",
+      "level": "INFO",
+      "retention_days": 365,
+      "audit_trail": true
+    },
+    
+    "profile": {
+      "description": "Profile creation and management",
+      "level": "INFO",
+      "retention_days": 365,
+      "audit_trail": true
+    },
+    
+    "performance": {
+      "description": "Performance metrics and optimization",
+      "level": "INFO",
+      "retention_days": 7,
+      "structured": true
+    },
+    
+    "error": {
+      "description": "Errors and exceptions",
+      "level": "ERROR",
+      "retention_days": 90,
+      "alert_on_critical": true
+    },
+    
+    "audit": {
+      "description": "Security and compliance audit trail",
+      "level": "INFO",
+      "retention_days": 2555,
+      "immutable": true,
+      "encrypted": true
+    }
+  },
+  
+  "retention_policy": {
+    "enabled": true,
+    "check_frequency_days": 1,
+    "default_retention_days": 30,
+    
+    "policies": {
+      "safety_logs": {
+        "retention_days": -1,
+        "compress_after_days": 30,
+        "archive": true
+      },
+      "conversation_logs": {
+        "retention_days": 90,
+        "compress_after_days": 7,
+        "archive": false
+      },
+      "system_logs": {
+        "retention_days": 30,
+        "compress_after_days": 7,
+        "archive": false
+      },
+      "performance_logs": {
+        "retention_days": 7,
+        "compress_after_days": 1,
+        "archive": false
+      },
+      "audit_logs": {
+        "retention_days": 2555,
+        "compress_after_days": 30,
+        "archive": true
+      }
+    },
+    
+    "compression": {
+      "algorithm": "gzip",
+      "level": 6,
+      "remove_original": true
+    },
+    
+    "archival": {
+      "enabled": true,
+      "location": "backups/logs/",
+      "format": "tar.gz",
+      "encryption": true
+    }
+  },
+  
+  "performance": {
+    "async_logging": true,
+    "batch_size": 100,
+    "flush_interval_seconds": 1,
+    "queue_size": 10000,
+    "drop_on_overflow": false,
+    
+    "metrics_logging": {
+      "enabled": true,
+      "interval_seconds": 60,
+      "metrics": [
+        "response_time",
+        "tokens_per_second",
+        "memory_usage",
+        "cpu_usage",
+        "cache_hit_rate",
+        "error_rate"
+      ]
+    }
+  },
+  
+  "monitoring": {
+    "health_check": {
+      "enabled": true,
+      "interval_seconds": 300,
+      "log_health_status": true
+    },
+    
+    "alerts": {
+      "enabled": true,
+      "channels": ["parent_dashboard"],
+      "conditions": {
+        "error_threshold": 10,
+        "safety_incidents": 3,
+        "performance_degradation": 0.5,
+        "disk_space_mb": 100
+      }
+    },
+    
+    "statistics": {
+      "enabled": true,
+      "collect_interval_seconds": 3600,
+      "report_interval_days": 7
+    }
+  },
+  
+  "troubleshooting": {
+    "debug_mode": false,
+    "verbose_errors": false,
+    "log_all_requests": false,
+    "log_all_responses": false,
+    "save_crash_dumps": true,
+    "max_traceback_frames": 50
+  },
+  
+  "compliance": {
+    "coppa_compliant": true,
+    "ferpa_compliant": true,
+    "audit_logging": true,
+    "immutable_logs": true,
+    "log_anonymization": false,
+    "pii_redaction": true
+  }
+}
