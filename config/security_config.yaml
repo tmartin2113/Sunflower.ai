@@ -1,0 +1,472 @@
+# Sunflower AI Professional System - Security Configuration
+# Comprehensive security settings for family data protection
+# Version: 1.0.0
+
+# ============================================================================
+# AUTHENTICATION CONFIGURATION
+# ============================================================================
+
+authentication:
+  # Parent/Administrator authentication
+  parent_auth:
+    enabled: true
+    required_for_setup: true
+    
+    # Password requirements
+    password:
+      minimum_length: 8
+      maximum_length: 128
+      require_uppercase: true
+      require_lowercase: true
+      require_numbers: true
+      require_special_chars: false  # Family-friendly
+      forbidden_patterns:
+        - "password"
+        - "12345678"
+        - "qwerty"
+        - "admin"
+        - "sunflower"
+      password_history: 3
+      expiration_days: 0  # No expiration for family use
+      
+    # PIN authentication (quick access)
+    pin:
+      enabled: true
+      length: 6
+      type: "numeric"  # numeric, alphanumeric
+      max_attempts: 5
+      lockout_duration_minutes: 30
+      require_change_days: 0
+      
+    # Security questions (password recovery)
+    security_questions:
+      enabled: true
+      required_count: 3
+      questions:
+        - "What was the name of your first pet?"
+        - "What is your mother's maiden name?"
+        - "What was the name of your elementary school?"
+        - "What is your favorite book?"
+        - "What city were you born in?"
+        - "What is your favorite color?"
+        - "What was your childhood nickname?"
+        - "What is your oldest sibling's name?"
+      custom_questions_allowed: true
+      answers_encrypted: true
+      
+    # Session management
+    session:
+      timeout_minutes: 120
+      idle_timeout_minutes: 30
+      max_concurrent_sessions: 1
+      remember_device_days: 30
+      secure_cookie: true
+      
+  # Child authentication
+  child_auth:
+    type: "profile_selection"  # No passwords for children
+    require_parent_approval: true
+    visual_identification:
+      enabled: true
+      use_avatars: true
+      use_colors: true
+    quick_switch: true
+    auto_logout_minutes: 15
+    
+  # Device authentication
+  device_auth:
+    enabled: true
+    device_binding: true
+    hardware_fingerprint: true
+    
+    # Device token
+    token:
+      algorithm: "HMAC-SHA256"
+      length: 32
+      storage: "usb_partition"
+      regenerate_on_reset: false
+      
+    # Partition verification
+    partition_verification:
+      check_markers: true
+      verify_checksums: true
+      cdrom_integrity: true
+      
+  # Multi-factor authentication (future)
+  mfa:
+    enabled: false
+    methods: []  # email, sms, authenticator
+    backup_codes: false
+
+# ============================================================================
+# ENCRYPTION CONFIGURATION
+# ============================================================================
+
+encryption:
+  # Master encryption settings
+  enabled: true
+  algorithm: "AES-256-GCM"
+  mode: "GCM"  # Galois/Counter Mode for authenticated encryption
+  key_size: 256
+  iv_size: 128
+  tag_size: 128
+  
+  # Key derivation
+  key_derivation:
+    algorithm: "PBKDF2-SHA256"
+    iterations: 100000
+    salt_size: 32
+    master_key_storage: "memory"  # Never written to disk
+    
+  # Data encryption scopes
+  encryption_scopes:
+    profiles:
+      enabled: true
+      fields:
+        - "personal_info"
+        - "conversation_history"
+        - "learning_progress"
+      exclude:
+        - "profile_id"
+        - "display_name"
+        - "avatar"
+        
+    conversations:
+      enabled: true
+      compress_before_encrypt: true
+      chunk_size_kb: 64
+      
+    logs:
+      safety_logs: true
+      system_logs: false
+      performance_logs: false
+      
+    backups:
+      enabled: true
+      separate_key: true
+      key_escrow: false
+      
+    cache:
+      enabled: false  # Performance optimization
+      
+  # File encryption
+  file_encryption:
+    enabled: true
+    extensions:
+      - ".profile"
+      - ".conversation"
+      - ".safety"
+      - ".backup"
+    transparent: true  # Automatic encrypt/decrypt
+    
+  # Database encryption
+  database_encryption:
+    enabled: true
+    type: "sqlite_cipher"
+    page_size: 4096
+    kdf_iterations: 64000
+    
+  # Communication encryption (local only)
+  communication:
+    internal_api: false  # All local
+    ipc_encryption: false  # Not needed for local
+
+# ============================================================================
+# ACCESS CONTROL
+# ============================================================================
+
+access_control:
+  # Role-based access control
+  rbac:
+    enabled: true
+    roles:
+      parent:
+        permissions:
+          - "create_profile"
+          - "delete_profile"
+          - "view_all_conversations"
+          - "view_safety_logs"
+          - "modify_settings"
+          - "export_data"
+          - "manage_backups"
+          - "view_analytics"
+        restrictions: []
+        
+      child:
+        permissions:
+          - "use_ai"
+          - "view_own_history"
+          - "earn_achievements"
+        restrictions:
+          - "no_settings_access"
+          - "no_profile_management"
+          - "no_safety_log_access"
+          - "no_other_profiles"
+          
+      educator:
+        permissions:
+          - "use_educator_model"
+          - "view_learning_analytics"
+          - "create_lessons"
+          - "track_progress"
+        restrictions:
+          - "no_safety_override"
+          - "no_profile_deletion"
+          
+  # Data access policies
+  data_access:
+    profile_isolation: true
+    conversation_isolation: true
+    cross_profile_analytics: false
+    
+    # Audit trail
+    audit:
+      enabled: true
+      log_access_attempts: true
+      log_modifications: true
+      log_exports: true
+      retention_days: 365
+      
+  # Privacy controls
+  privacy:
+    data_minimization: true
+    purpose_limitation: true
+    consent_required: false  # Parent manages
+    right_to_deletion: true
+    right_to_export: true
+
+# ============================================================================
+# CONTENT SECURITY
+# ============================================================================
+
+content_security:
+  # Input validation
+  input_validation:
+    enabled: true
+    max_input_length: 1000
+    sanitize_html: true
+    strip_scripts: true
+    validate_unicode: true
+    
+    # Injection prevention
+    sql_injection_prevention: true
+    command_injection_prevention: true
+    path_traversal_prevention: true
+    
+  # Output sanitization
+  output_sanitization:
+    enabled: true
+    escape_html: true
+    filter_urls: true
+    remove_external_references: true
+    
+  # File upload security (disabled by default)
+  file_upload:
+    enabled: false
+    max_size_mb: 0
+    allowed_extensions: []
+    scan_for_malware: false
+    
+  # Content filtering (see safety_patterns.json)
+  content_filtering:
+    enabled: true
+    filter_input: true
+    filter_output: true
+    log_violations: true
+    
+  # Model security
+  model_security:
+    sandbox_inference: true
+    memory_limits: true
+    cpu_limits: true
+    timeout_seconds: 30
+    prevent_jailbreak: true
+
+# ============================================================================
+# NETWORK SECURITY
+# ============================================================================
+
+network_security:
+  # Local-only operation
+  local_only: true
+  bind_address: "127.0.0.1"
+  allowed_hosts:
+    - "localhost"
+    - "127.0.0.1"
+  
+  # Port configuration
+  ports:
+    webui: 8080
+    ollama: 11434
+    
+  # Firewall rules (informational)
+  firewall:
+    block_incoming: true
+    block_outgoing: false  # Allow model downloads
+    
+  # HTTPS/TLS (for future online features)
+  tls:
+    enabled: false
+    min_version: "TLS1.2"
+    ciphers: []
+    
+  # API security
+  api_security:
+    rate_limiting: true
+    max_requests_per_minute: 60
+    authentication_required: true
+    cors_enabled: false
+
+# ============================================================================
+# SYSTEM SECURITY
+# ============================================================================
+
+system_security:
+  # Process isolation
+  process_isolation:
+    sandbox_mode: false  # Performance vs security tradeoff
+    restricted_permissions: true
+    drop_privileges: true
+    
+  # Memory protection
+  memory_protection:
+    clear_sensitive_data: true
+    prevent_core_dumps: true
+    secure_delete: true
+    wipe_on_shutdown: true
+    
+  # Integrity verification
+  integrity:
+    verify_on_startup: true
+    verify_periodically: false
+    checksum_algorithm: "SHA256"
+    signature_verification: true
+    
+  # Anti-tampering
+  anti_tampering:
+    detect_debugger: false  # User-friendly
+    detect_modification: true
+    protect_config_files: true
+    readonly_system_partition: true
+    
+  # Logging and monitoring
+  security_logging:
+    enabled: true
+    log_authentication: true
+    log_authorization: true
+    log_safety_incidents: true
+    log_system_errors: true
+    
+    # Log protection
+    tamper_proof_logs: true
+    encrypt_logs: true
+    sign_logs: false
+    
+  # Update security (disabled for zero-maintenance)
+  update_security:
+    auto_updates: false
+    verify_updates: false
+    signed_updates: false
+
+# ============================================================================
+# INCIDENT RESPONSE
+# ============================================================================
+
+incident_response:
+  # Safety incidents
+  safety_incidents:
+    immediate_action: "block_and_redirect"
+    notify_parent: true
+    log_incident: true
+    escalation_threshold: 3
+    cooldown_period_minutes: 30
+    
+  # Security incidents
+  security_incidents:
+    authentication_failure:
+      max_attempts: 5
+      lockout_duration: 30
+      notify_parent: true
+      
+    unauthorized_access:
+      action: "terminate_session"
+      log_incident: true
+      notify_parent: true
+      
+    data_breach:
+      action: "lock_system"
+      require_reset: true
+      notify_all: true
+      
+  # Recovery procedures
+  recovery:
+    backup_restore: true
+    factory_reset: true
+    parent_override: true
+    emergency_access: false
+    
+  # Reporting
+  reporting:
+    generate_reports: true
+    report_frequency: "weekly"
+    include_recommendations: true
+    parent_accessible: true
+
+# ============================================================================
+# COMPLIANCE AND STANDARDS
+# ============================================================================
+
+compliance:
+  # Privacy regulations
+  regulations:
+    coppa_compliant: true  # Children's Online Privacy Protection Act
+    gdpr_compliant: false  # Not applicable (offline, US-focused)
+    ccpa_compliant: false  # Not applicable (no data selling)
+    ferpa_compliant: true  # Educational records privacy
+    
+  # Security standards
+  standards:
+    iso_27001: false  # Not certified
+    nist_framework: true  # Following guidelines
+    owasp_top_10: true  # Web security best practices
+    
+  # Industry best practices
+  best_practices:
+    principle_of_least_privilege: true
+    defense_in_depth: true
+    zero_trust_architecture: false
+    security_by_design: true
+    privacy_by_design: true
+    
+  # Audit and certification
+  audit:
+    internal_audit: true
+    external_audit: false
+    audit_frequency: "annual"
+    certification_required: false
+
+# ============================================================================
+# SECURITY DEFAULTS
+# ============================================================================
+
+defaults:
+  # Default security level for new installations
+  security_level: "high"  # low, medium, high, maximum
+  
+  # Feature defaults
+  encrypt_by_default: true
+  require_authentication: true
+  enable_safety_filters: true
+  log_security_events: true
+  
+  # Behavior defaults
+  fail_secure: true  # Deny access on error
+  paranoid_mode: false  # Extra security checks
+  developer_mode: false  # Disable all security for development
+  
+  # Recovery defaults
+  allow_password_reset: true
+  require_security_questions: true
+  backup_encryption: true
+
+# End of security configuration
