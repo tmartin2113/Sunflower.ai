@@ -1,0 +1,234 @@
+{
+  "application": {
+    "name": "Sunflower AI Professional System",
+    "version": "6.2.0",
+    "codename": "Family Shield",
+    "build": "20250115-001",
+    "release_date": "2025-01-15",
+    "release_type": "production",
+    "architecture": "partitioned_device"
+  },
+  
+  "compatibility": {
+    "minimum_version": "6.0.0",
+    "maximum_version": "7.0.0",
+    "config_version": "1.0.0",
+    "schema_version": 2,
+    "api_version": "1.0",
+    "protocol_version": "2.0"
+  },
+  
+  "requirements": {
+    "python": {
+      "minimum": "3.9.0",
+      "recommended": "3.11.0",
+      "maximum": "3.12.999"
+    },
+    "ollama": {
+      "minimum": "0.1.0",
+      "recommended": "0.1.29",
+      "api_version": "0.1"
+    },
+    "open_webui": {
+      "minimum": "0.1.0",
+      "recommended": "latest",
+      "compatible": true
+    },
+    "operating_systems": {
+      "windows": {
+        "minimum": "10",
+        "recommended": "11",
+        "architectures": ["x86_64", "arm64"]
+      },
+      "macos": {
+        "minimum": "10.14",
+        "recommended": "14.0",
+        "architectures": ["x86_64", "arm64"]
+      },
+      "linux": {
+        "minimum": "Ubuntu 20.04",
+        "recommended": "Ubuntu 22.04",
+        "architectures": ["x86_64", "arm64"]
+      }
+    },
+    "hardware": {
+      "ram": {
+        "minimum_gb": 2,
+        "recommended_gb": 8,
+        "optimal_gb": 16
+      },
+      "storage": {
+        "minimum_gb": 5,
+        "recommended_gb": 10,
+        "models_cache_gb": 5
+      },
+      "cpu": {
+        "minimum_cores": 2,
+        "recommended_cores": 4,
+        "minimum_speed_ghz": 2.0
+      }
+    }
+  },
+  
+  "features": {
+    "core": {
+      "family_profiles": true,
+      "age_adaptation": true,
+      "safety_filtering": true,
+      "session_monitoring": true,
+      "parent_dashboard": true,
+      "offline_operation": true,
+      "partitioned_device": true
+    },
+    "ai_models": {
+      "multi_model_support": true,
+      "hardware_optimization": true,
+      "automatic_selection": true,
+      "quantization_support": true,
+      "streaming_responses": true
+    },
+    "safety": {
+      "content_filtering": true,
+      "topic_restrictions": true,
+      "personal_info_protection": true,
+      "parent_notifications": true,
+      "safety_logging": true,
+      "age_verification": true
+    },
+    "experimental": {
+      "voice_interaction": false,
+      "multi_language": false,
+      "cloud_sync": false,
+      "collaborative_learning": false,
+      "custom_models": false
+    }
+  },
+  
+  "models": {
+    "included": [
+      {
+        "id": "llama3.2:7b",
+        "status": "production",
+        "tier": "high_end"
+      },
+      {
+        "id": "llama3.2:3b",
+        "status": "production",
+        "tier": "mid_range"
+      },
+      {
+        "id": "llama3.2:1b",
+        "status": "production",
+        "tier": "low_end"
+      },
+      {
+        "id": "llama3.2:1b-q4_0",
+        "status": "production",
+        "tier": "minimum"
+      },
+      {
+        "id": "sunflower-kids",
+        "status": "production",
+        "tier": "adaptive"
+      },
+      {
+        "id": "sunflower-educator",
+        "status": "production",
+        "tier": "adaptive"
+      }
+    ]
+  },
+  
+  "partitions": {
+    "cdrom": {
+      "version": "1.0.0",
+      "size_gb": 4,
+      "filesystem": "ISO9660",
+      "read_only": true,
+      "marker_file": "sunflower_cd.id",
+      "contents": [
+        "application",
+        "models",
+        "documentation",
+        "resources"
+      ]
+    },
+    "usb": {
+      "version": "1.0.0",
+      "min_size_mb": 500,
+      "filesystem": "FAT32",
+      "read_write": true,
+      "marker_file": "sunflower_data.id",
+      "encrypted": true,
+      "contents": [
+        "profiles",
+        "conversations",
+        "logs",
+        "cache",
+        "backups"
+      ]
+    }
+  },
+  
+  "changelog": {
+    "6.2.0": {
+      "date": "2025-01-15",
+      "changes": [
+        "Implemented partitioned device architecture",
+        "Added Open WebUI integration",
+        "Enhanced safety filtering system",
+        "Improved hardware detection",
+        "Added comprehensive parent dashboard"
+      ]
+    },
+    "6.1.0": {
+      "date": "2024-12-01",
+      "changes": [
+        "Initial family profile system",
+        "Basic safety filtering",
+        "Ollama integration",
+        "Multi-model support"
+      ]
+    },
+    "6.0.0": {
+      "date": "2024-10-15",
+      "changes": [
+        "Complete rewrite for production",
+        "Zero-maintenance architecture",
+        "Offline-first design"
+      ]
+    }
+  },
+  
+  "support": {
+    "documentation": "docs/",
+    "website": "https://sunflowerai.com",
+    "email": "no-support@sunflowerai.com",
+    "model": "zero_maintenance",
+    "updates": "new_device_purchase_only"
+  },
+  
+  "licensing": {
+    "type": "proprietary",
+    "owner": "Sunflower AI",
+    "copyright": "2025 Sunflower AI. All rights reserved.",
+    "patents_pending": true,
+    "third_party_licenses": "docs/licenses/"
+  },
+  
+  "manufacturing": {
+    "batch_tracking": true,
+    "serial_number_format": "SAI-XXXXXXXX-YYYY",
+    "quality_control_version": "1.0",
+    "production_date": "2025-01-15",
+    "warranty_months": 12
+  },
+  
+  "telemetry": {
+    "enabled": false,
+    "anonymous_stats": false,
+    "crash_reporting": false,
+    "usage_analytics": false,
+    "update_checking": false
+  }
+}
