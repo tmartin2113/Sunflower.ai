@@ -1,0 +1,432 @@
+{
+  "version": "1.0.0",
+  "description": "Manufacturing and quality control configuration for Sunflower AI USB production",
+  "last_updated": "2025-01-15",
+  
+  "production_settings": {
+    "factory_mode": false,
+    "production_environment": "standard",
+    "batch_tracking": true,
+    "serial_number_generation": "automatic",
+    "quality_control_required": true,
+    "certification_required": false
+  },
+  
+  "device_specifications": {
+    "usb_device": {
+      "minimum_capacity_gb": 16,
+      "recommended_capacity_gb": 32,
+      "maximum_capacity_gb": 128,
+      "usb_version": "3.0",
+      "form_factor": "standard_a",
+      
+      "approved_manufacturers": [
+        "SanDisk",
+        "Kingston",
+        "PNY",
+        "Lexar",
+        "Samsung",
+        "Transcend"
+      ],
+      
+      "approved_models": [
+        {
+          "manufacturer": "SanDisk",
+          "model": "Ultra Fit",
+          "capacities": [16, 32, 64],
+          "tested": true,
+          "approved": true
+        },
+        {
+          "manufacturer": "Kingston",
+          "model": "DataTraveler G4",
+          "capacities": [16, 32],
+          "tested": true,
+          "approved": true
+        },
+        {
+          "manufacturer": "PNY",
+          "model": "Turbo Attache 3",
+          "capacities": [16, 32],
+          "tested": true,
+          "approved": true
+        }
+      ],
+      
+      "controller_requirements": {
+        "dual_partition_support": true,
+        "cdrom_emulation": true,
+        "write_protection": true,
+        "wear_leveling": true
+      }
+    }
+  },
+  
+  "batch_configuration": {
+    "batch_id_format": "BATCH-{DATE}-{SEQUENCE:03d}",
+    "serial_format": "SAI-{BATCH:8}-{UNIT:04d}",
+    "minimum_batch_size": 10,
+    "standard_batch_size": 100,
+    "maximum_batch_size": 1000,
+    
+    "batch_metadata": {
+      "track_production_date": true,
+      "track_operator": true,
+      "track_facility": true,
+      "track_qc_results": true,
+      "generate_certificate": true
+    },
+    
+    "labeling": {
+      "serial_label_required": true,
+      "batch_label_required": true,
+      "qc_sticker_required": true,
+      "warranty_sticker": true,
+      
+      "label_specifications": {
+        "material": "waterproof_vinyl",
+        "adhesive": "permanent",
+        "size_mm": [25, 10],
+        "barcode": "code128",
+        "qr_code": true
+      }
+    }
+  },
+  
+  "partition_creation": {
+    "tools": {
+      "windows": {
+        "primary": "diskpart",
+        "alternatives": ["rufus", "balenaEtcher"],
+        "automation_script": "scripts/create_partitions_win.bat"
+      },
+      "linux": {
+        "primary": "parted",
+        "alternatives": ["fdisk", "gparted"],
+        "automation_script": "scripts/create_partitions_linux.sh"
+      },
+      "macos": {
+        "primary": "diskutil",
+        "alternatives": ["dd"],
+        "automation_script": "scripts/create_partitions_mac.sh"
+      }
+    },
+    
+    "partition_1_cdrom": {
+      "size_gb": 4,
+      "filesystem": "ISO9660",
+      "type_code": "0x96",
+      "label": "SUNFLOWER_CD",
+      "bootable": true,
+      "read_only": true,
+      
+      "write_process": {
+        "method": "dd_image",
+        "verify_after_write": true,
+        "block_size": 4096,
+        "sync_after_write": true
+      }
+    },
+    
+    "partition_2_data": {
+      "size": "remaining",
+      "filesystem": "FAT32",
+      "type_code": "0x0C",
+      "label": "SUNFLOWER_DATA",
+      "bootable": false,
+      "read_write": true,
+      
+      "initialization": {
+        "create_directory_structure": true,
+        "write_marker_files": true,
+        "generate_device_token": true,
+        "encrypt_token": true
+      }
+    },
+    
+    "verification": {
+      "verify_partition_table": true,
+      "verify_filesystems": true,
+      "verify_markers": true,
+      "verify_checksums": true,
+      "test_mount": true,
+      "test_read_write": true
+    }
+  },
+  
+  "quality_control": {
+    "enabled": true,
+    "sample_rate": 1.0,
+    "automated_testing": true,
+    "manual_inspection": true,
+    
+    "test_suite": {
+      "physical_inspection": {
+        "check_casing": true,
+        "check_connector": true,
+        "check_led": true,
+        "check_labels": true,
+        "weight_tolerance_grams": 2
+      },
+      
+      "partition_tests": {
+        "detect_both_partitions": true,
+        "verify_cdrom_readonly": true,
+        "verify_data_writable": true,
+        "check_partition_sizes": true,
+        "check_filesystems": true
+      },
+      
+      "functional_tests": {
+        "test_windows_detection": true,
+        "test_macos_detection": true,
+        "test_linux_detection": false,
+        "test_autorun": true,
+        "test_launcher": true,
+        "test_model_loading": true,
+        "test_profile_creation": true
+      },
+      
+      "performance_tests": {
+        "min_read_speed_mbps": 80,
+        "min_write_speed_mbps": 40,
+        "max_response_time_ms": 50,
+        "sequential_read": true,
+        "random_read": true,
+        "sequential_write": true,
+        "random_write": true
+      },
+      
+      "stress_tests": {
+        "enabled": false,
+        "duration_minutes": 60,
+        "continuous_read_write": true,
+        "thermal_monitoring": true,
+        "error_rate_threshold": 0.001
+      },
+      
+      "security_tests": {
+        "verify_signatures": true,
+        "check_encryption": true,
+        "validate_tokens": true,
+        "test_authentication": true,
+        "scan_malware": false
+      }
+    },
+    
+    "acceptance_criteria": {
+      "physical_pass_rate": 1.0,
+      "partition_pass_rate": 1.0,
+      "functional_pass_rate": 1.0,
+      "performance_pass_rate": 0.95,
+      "security_pass_rate": 1.0,
+      "overall_pass_rate": 0.98
+    },
+    
+    "failure_handling": {
+      "immediate_rejection": ["physical_damage", "partition_failure", "security_failure"],
+      "rework_allowed": ["performance_marginal", "label_misaligned"],
+      "max_rework_attempts": 2,
+      "quarantine_failures": true,
+      "failure_analysis": true
+    },
+    
+    "reporting": {
+      "generate_qc_report": true,
+      "report_format": ["json", "pdf"],
+      "include_test_details": true,
+      "include_performance_graphs": true,
+      "sign_report": true,
+      "archive_reports": true
+    }
+  },
+  
+  "master_files": {
+    "iso_image": {
+      "filename": "sunflower_ai_master.iso",
+      "size_gb": 4,
+      "checksum_algorithm": "SHA256",
+      "signature_algorithm": "RSA-4096",
+      "compression": "none",
+      "encryption": false
+    },
+    
+    "usb_image": {
+      "filename": "sunflower_data_template.img",
+      "size_mb": 100,
+      "checksum_algorithm": "SHA256",
+      "compression": "gzip",
+      "encryption": false
+    },
+    
+    "validation": {
+      "verify_before_production": true,
+      "checksum_verification": true,
+      "signature_verification": true,
+      "version_check": true
+    },
+    
+    "storage": {
+      "location": "manufacturing/master_files/",
+      "backup_location": "manufacturing/master_backup/",
+      "retention_count": 5,
+      "version_control": true
+    }
+  },
+  
+  "automation": {
+    "enabled": true,
+    "platform": "multi_platform",
+    
+    "scripts": {
+      "create_batch": "scripts/create_batch.py",
+      "burn_image": "scripts/burn_image.py",
+      "run_qc": "scripts/run_qc.py",
+      "generate_report": "scripts/generate_report.py",
+      "package_device": "scripts/package_device.py"
+    },
+    
+    "workflow": [
+      {
+        "step": 1,
+        "name": "Initialize Batch",
+        "script": "create_batch",
+        "required": true
+      },
+      {
+        "step": 2,
+        "name": "Prepare USB Device",
+        "script": "burn_image",
+        "required": true
+      },
+      {
+        "step": 3,
+        "name": "Quality Control",
+        "script": "run_qc",
+        "required": true
+      },
+      {
+        "step": 4,
+        "name": "Generate Documentation",
+        "script": "generate_report",
+        "required": true
+      },
+      {
+        "step": 5,
+        "name": "Package for Shipping",
+        "script": "package_device",
+        "required": true
+      }
+    ],
+    
+    "error_handling": {
+      "retry_on_failure": true,
+      "max_retries": 3,
+      "alert_on_failure": true,
+      "halt_batch_on_critical": true
+    }
+  },
+  
+  "packaging": {
+    "materials": {
+      "usb_case": "anti_static_plastic",
+      "outer_box": "retail_cardboard",
+      "insert": "foam_cushion",
+      "documentation": ["quick_start_guide", "warranty_card"],
+      "promotional": ["sticker_sheet"]
+    },
+    
+    "assembly": {
+      "seal_type": "tamper_evident",
+      "shrink_wrap": false,
+      "include_lanyard": false,
+      "custom_branding": true
+    },
+    
+    "labeling": {
+      "box_label": true,
+      "shipping_label": true,
+      "contents_list": true,
+      "regulatory_marks": ["CE", "FCC", "RoHS"]
+    }
+  },
+  
+  "tracking": {
+    "database": {
+      "enabled": true,
+      "type": "sqlite",
+      "location": "manufacturing/production.db",
+      "schema_version": 1
+    },
+    
+    "metrics": {
+      "track_production_rate": true,
+      "track_failure_rate": true,
+      "track_rework_rate": true,
+      "track_operator_performance": true,
+      "track_batch_yield": true
+    },
+    
+    "reporting": {
+      "daily_summary": true,
+      "weekly_report": true,
+      "monthly_analysis": true,
+      "quality_trends": true,
+      "cost_analysis": false
+    }
+  },
+  
+  "compliance": {
+    "standards": {
+      "iso_9001": false,
+      "ce_marking": true,
+      "fcc_part_15": true,
+      "rohs": true,
+      "reach": true
+    },
+    
+    "testing": {
+      "emc_testing": false,
+      "safety_testing": false,
+      "environmental_testing": false
+    },
+    
+    "documentation": {
+      "declaration_of_conformity": true,
+      "test_reports": true,
+      "technical_file": true,
+      "user_manual": true
+    }
+  },
+  
+  "vendor_management": {
+    "approved_vendors": [
+      {
+        "name": "USB Supplier Inc",
+        "type": "usb_devices",
+        "quality_rating": 4.5,
+        "lead_time_days": 14
+      },
+      {
+        "name": "Label Printers LLC",
+        "type": "labeling",
+        "quality_rating": 4.8,
+        "lead_time_days": 3
+      }
+    ],
+    
+    "quality_requirements": {
+      "minimum_rating": 4.0,
+      "audit_frequency": "annual",
+      "defect_rate_max": 0.02
+    }
+  },
+  
+  "cost_tracking": {
+    "enabled": false,
+    "track_materials": true,
+    "track_labor": true,
+    "track_overhead": false,
+    "currency": "USD"
+  }
+}
