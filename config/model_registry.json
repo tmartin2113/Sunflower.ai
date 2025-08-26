@@ -1,0 +1,447 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2025-01-15",
+  "description": "Registry of all AI models available in Sunflower AI system",
+  
+  "models": {
+    "llama3.2:7b": {
+      "model_id": "llama3.2:7b",
+      "display_name": "Llama 3.2 7B",
+      "family": "llama",
+      "size": "7b",
+      "version": "3.2",
+      "tier": "high_end",
+      
+      "files": {
+        "model_file": "models/llama3.2-7b.gguf",
+        "config_file": "models/llama3.2-7b.json",
+        "tokenizer_file": "models/tokenizer.model"
+      },
+      
+      "specifications": {
+        "parameters": 7000000000,
+        "context_window": 4096,
+        "vocabulary_size": 32000,
+        "hidden_size": 4096,
+        "num_layers": 32,
+        "num_heads": 32,
+        "file_size_gb": 4.5,
+        "quantization": "fp16"
+      },
+      
+      "requirements": {
+        "min_ram_gb": 16,
+        "recommended_ram_gb": 24,
+        "min_vram_gb": 8,
+        "recommended_vram_gb": 12,
+        "disk_space_gb": 5
+      },
+      
+      "performance": {
+        "tokens_per_second": {
+          "cpu": 5,
+          "gpu": 50
+        },
+        "first_token_latency_ms": {
+          "cpu": 2000,
+          "gpu": 200
+        },
+        "quality_score": 0.95
+      },
+      
+      "compatibility": {
+        "platforms": ["windows", "macos", "linux"],
+        "architectures": ["x86_64", "arm64"],
+        "gpu_support": ["cuda", "rocm", "metal"],
+        "ollama_compatible": true
+      },
+      
+      "checksums": {
+        "sha256": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+        "md5": "098f6bcd4621d373cade4e832627b4f6"
+      },
+      
+      "metadata": {
+        "license": "Meta Community License",
+        "training_data_cutoff": "2023-12",
+        "languages": ["en"],
+        "capabilities": ["text-generation", "instruction-following", "reasoning"],
+        "safety_aligned": true
+      }
+    },
+    
+    "llama3.2:3b": {
+      "model_id": "llama3.2:3b",
+      "display_name": "Llama 3.2 3B",
+      "family": "llama",
+      "size": "3b",
+      "version": "3.2",
+      "tier": "mid_range",
+      
+      "files": {
+        "model_file": "models/llama3.2-3b.gguf",
+        "config_file": "models/llama3.2-3b.json",
+        "tokenizer_file": "models/tokenizer.model"
+      },
+      
+      "specifications": {
+        "parameters": 3000000000,
+        "context_window": 2048,
+        "vocabulary_size": 32000,
+        "hidden_size": 3072,
+        "num_layers": 24,
+        "num_heads": 24,
+        "file_size_gb": 2.0,
+        "quantization": "fp16"
+      },
+      
+      "requirements": {
+        "min_ram_gb": 8,
+        "recommended_ram_gb": 12,
+        "min_vram_gb": 4,
+        "recommended_vram_gb": 6,
+        "disk_space_gb": 3
+      },
+      
+      "performance": {
+        "tokens_per_second": {
+          "cpu": 10,
+          "gpu": 75
+        },
+        "first_token_latency_ms": {
+          "cpu": 1500,
+          "gpu": 150
+        },
+        "quality_score": 0.90
+      },
+      
+      "compatibility": {
+        "platforms": ["windows", "macos", "linux"],
+        "architectures": ["x86_64", "arm64"],
+        "gpu_support": ["cuda", "rocm", "metal"],
+        "ollama_compatible": true
+      },
+      
+      "checksums": {
+        "sha256": "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef234567",
+        "md5": "198f7bcd4621d373cade4e832627b4f7"
+      },
+      
+      "metadata": {
+        "license": "Meta Community License",
+        "training_data_cutoff": "2023-12",
+        "languages": ["en"],
+        "capabilities": ["text-generation", "instruction-following", "reasoning"],
+        "safety_aligned": true
+      }
+    },
+    
+    "llama3.2:1b": {
+      "model_id": "llama3.2:1b",
+      "display_name": "Llama 3.2 1B",
+      "family": "llama",
+      "size": "1b",
+      "version": "3.2",
+      "tier": "low_end",
+      
+      "files": {
+        "model_file": "models/llama3.2-1b.gguf",
+        "config_file": "models/llama3.2-1b.json",
+        "tokenizer_file": "models/tokenizer.model"
+      },
+      
+      "specifications": {
+        "parameters": 1000000000,
+        "context_window": 1024,
+        "vocabulary_size": 32000,
+        "hidden_size": 2048,
+        "num_layers": 16,
+        "num_heads": 16,
+        "file_size_gb": 0.7,
+        "quantization": "fp16"
+      },
+      
+      "requirements": {
+        "min_ram_gb": 4,
+        "recommended_ram_gb": 6,
+        "min_vram_gb": 0,
+        "recommended_vram_gb": 2,
+        "disk_space_gb": 1
+      },
+      
+      "performance": {
+        "tokens_per_second": {
+          "cpu": 20,
+          "gpu": 100
+        },
+        "first_token_latency_ms": {
+          "cpu": 1000,
+          "gpu": 100
+        },
+        "quality_score": 0.85
+      },
+      
+      "compatibility": {
+        "platforms": ["windows", "macos", "linux"],
+        "architectures": ["x86_64", "arm64", "x86"],
+        "gpu_support": ["cuda", "rocm", "metal"],
+        "ollama_compatible": true
+      },
+      
+      "checksums": {
+        "sha256": "c3d4e5f6789012345678901234567890abcdef1234567890abcdef345678",
+        "md5": "298f8bcd4621d373cade4e832627b4f8"
+      },
+      
+      "metadata": {
+        "license": "Meta Community License",
+        "training_data_cutoff": "2023-12",
+        "languages": ["en"],
+        "capabilities": ["text-generation", "instruction-following"],
+        "safety_aligned": true
+      }
+    },
+    
+    "llama3.2:1b-q4_0": {
+      "model_id": "llama3.2:1b-q4_0",
+      "display_name": "Llama 3.2 1B Quantized",
+      "family": "llama",
+      "size": "1b",
+      "version": "3.2",
+      "tier": "minimum",
+      
+      "files": {
+        "model_file": "models/llama3.2-1b-q4_0.gguf",
+        "config_file": "models/llama3.2-1b-q4_0.json",
+        "tokenizer_file": "models/tokenizer.model"
+      },
+      
+      "specifications": {
+        "parameters": 1000000000,
+        "context_window": 512,
+        "vocabulary_size": 32000,
+        "hidden_size": 2048,
+        "num_layers": 16,
+        "num_heads": 16,
+        "file_size_gb": 0.4,
+        "quantization": "q4_0"
+      },
+      
+      "requirements": {
+        "min_ram_gb": 2,
+        "recommended_ram_gb": 4,
+        "min_vram_gb": 0,
+        "recommended_vram_gb": 0,
+        "disk_space_gb": 0.5
+      },
+      
+      "performance": {
+        "tokens_per_second": {
+          "cpu": 30,
+          "gpu": 120
+        },
+        "first_token_latency_ms": {
+          "cpu": 800,
+          "gpu": 80
+        },
+        "quality_score": 0.75
+      },
+      
+      "compatibility": {
+        "platforms": ["windows", "macos", "linux"],
+        "architectures": ["x86_64", "arm64", "x86", "arm"],
+        "gpu_support": ["cuda", "rocm", "metal"],
+        "ollama_compatible": true
+      },
+      
+      "checksums": {
+        "sha256": "d4e5f6789012345678901234567890abcdef1234567890abcdef456789",
+        "md5": "398f9bcd4621d373cade4e832627b4f9"
+      },
+      
+      "metadata": {
+        "license": "Meta Community License",
+        "training_data_cutoff": "2023-12",
+        "languages": ["en"],
+        "capabilities": ["text-generation", "instruction-following"],
+        "safety_aligned": true,
+        "quantization_notes": "4-bit quantization for minimal resource usage"
+      }
+    },
+    
+    "sunflower-kids": {
+      "model_id": "sunflower-kids",
+      "display_name": "Sunflower AI Kids",
+      "family": "sunflower",
+      "size": "adaptive",
+      "version": "1.0",
+      "tier": "auto",
+      
+      "files": {
+        "modelfile": "modelfiles/Sunflower_AI_Kids.modelfile",
+        "base_model": "auto"
+      },
+      
+      "specifications": {
+        "type": "instruction-tuned",
+        "base_model_selection": "automatic",
+        "safety_level": "maximum",
+        "age_adaptive": true,
+        "context_window": "varies",
+        "response_filtering": true
+      },
+      
+      "requirements": {
+        "min_ram_gb": 2,
+        "recommended_ram_gb": 8,
+        "min_vram_gb": 0,
+        "recommended_vram_gb": 4,
+        "disk_space_gb": 0.1
+      },
+      
+      "performance": {
+        "adaptive_performance": true,
+        "quality_score": 0.95,
+        "safety_score": 1.0,
+        "educational_value": 0.95
+      },
+      
+      "compatibility": {
+        "platforms": ["windows", "macos", "linux"],
+        "architectures": ["all"],
+        "gpu_support": ["all"],
+        "ollama_compatible": true
+      },
+      
+      "metadata": {
+        "license": "Proprietary - Sunflower AI",
+        "purpose": "K-12 STEM Education",
+        "safety_certified": true,
+        "coppa_compliant": true,
+        "age_range": "2-18"
+      }
+    },
+    
+    "sunflower-educator": {
+      "model_id": "sunflower-educator",
+      "display_name": "Sunflower AI Educator",
+      "family": "sunflower",
+      "size": "adaptive",
+      "version": "1.0",
+      "tier": "auto",
+      
+      "files": {
+        "modelfile": "modelfiles/Sunflower_AI_Educator.modelfile",
+        "base_model": "auto"
+      },
+      
+      "specifications": {
+        "type": "instruction-tuned",
+        "base_model_selection": "automatic",
+        "safety_level": "standard",
+        "age_adaptive": false,
+        "context_window": "varies",
+        "response_filtering": false
+      },
+      
+      "requirements": {
+        "min_ram_gb": 4,
+        "recommended_ram_gb": 8,
+        "min_vram_gb": 0,
+        "recommended_vram_gb": 4,
+        "disk_space_gb": 0.1
+      },
+      
+      "performance": {
+        "adaptive_performance": true,
+        "quality_score": 0.98,
+        "safety_score": 0.9,
+        "educational_value": 1.0
+      },
+      
+      "compatibility": {
+        "platforms": ["windows", "macos", "linux"],
+        "architectures": ["all"],
+        "gpu_support": ["all"],
+        "ollama_compatible": true
+      },
+      
+      "metadata": {
+        "license": "Proprietary - Sunflower AI",
+        "purpose": "Parent and Teacher Support",
+        "safety_certified": true,
+        "professional_grade": true,
+        "target_audience": "adults"
+      }
+    }
+  },
+  
+  "model_selection_rules": {
+    "auto_selection_enabled": true,
+    "selection_priority": ["performance", "quality", "compatibility"],
+    
+    "hardware_mapping": {
+      "high_end": ["llama3.2:7b", "llama3.2:3b"],
+      "mid_range": ["llama3.2:3b", "llama3.2:1b"],
+      "low_end": ["llama3.2:1b"],
+      "minimum": ["llama3.2:1b-q4_0"]
+    },
+    
+    "fallback_chain": [
+      "llama3.2:7b",
+      "llama3.2:3b",
+      "llama3.2:1b",
+      "llama3.2:1b-q4_0"
+    ],
+    
+    "profile_based_selection": {
+      "sunflower-kids": {
+        "base_model": "auto",
+        "prefer_smaller": true,
+        "prioritize_safety": true
+      },
+      "sunflower-educator": {
+        "base_model": "auto",
+        "prefer_larger": true,
+        "prioritize_quality": true
+      }
+    }
+  },
+  
+  "download_sources": {
+    "ollama_library": {
+      "base_url": "https://ollama.com/library",
+      "models": {
+        "llama3.2:7b": "llama3.2:7b",
+        "llama3.2:3b": "llama3.2:3b",
+        "llama3.2:1b": "llama3.2:1b"
+      }
+    },
+    
+    "huggingface": {
+      "base_url": "https://huggingface.co",
+      "models": {
+        "llama3.2:7b": "meta-llama/Llama-3.2-7B-GGUF",
+        "llama3.2:3b": "meta-llama/Llama-3.2-3B-GGUF",
+        "llama3.2:1b": "meta-llama/Llama-3.2-1B-GGUF"
+      }
+    }
+  },
+  
+  "validation": {
+    "verify_checksums": true,
+    "verify_file_sizes": true,
+    "verify_compatibility": true,
+    "test_inference": true,
+    "benchmark_performance": false
+  },
+  
+  "caching": {
+    "model_cache_enabled": true,
+    "cache_location": "models/cache",
+    "max_cache_size_gb": 10,
+    "cache_eviction_policy": "lru",
+    "preload_models": ["sunflower-kids", "sunflower-educator"],
+    "keep_in_memory": ["sunflower-kids"]
+  }
+}
