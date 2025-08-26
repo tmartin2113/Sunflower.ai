@@ -1,0 +1,444 @@
+{
+  "version": "1.0.0",
+  "device_type": "dual_partition_usb",
+  "total_capacity_gb": 16,
+  "partition_table_type": "MBR",
+  
+  "partitions": [
+    {
+      "partition_id": 1,
+      "name": "SUNFLOWER_CD",
+      "type": "cdrom",
+      "purpose": "System files and AI models (read-only)",
+      
+      "specifications": {
+        "start_sector": 0,
+        "size_gb": 4,
+        "filesystem": "ISO9660/UDF",
+        "partition_type": "0x96",
+        "bootable": true,
+        "read_only": true,
+        "emulation_type": "cdrom"
+      },
+      
+      "structure": {
+        "/": {
+          "sunflower_cd.id": {
+            "type": "marker",
+            "size": "1KB",
+            "content": "SUNFLOWER_AI_CDROM_v6.2.0"
+          },
+          "autorun.inf": {
+            "type": "config",
+            "purpose": "Windows autorun configuration"
+          },
+          "UNIVERSAL_LAUNCHER.py": {
+            "type": "executable",
+            "size": "50KB",
+            "signed": true
+          }
+        },
+        
+        "/Windows/": {
+          "SunflowerAI.exe": {
+            "type": "executable",
+            "size": "25MB",
+            "signed": true,
+            "certificate": "Sunflower AI Code Signing"
+          },
+          "_internal/": {
+            "type": "directory",
+            "contents": "Python runtime and dependencies",
+            "size": "150MB"
+          },
+          "ollama/": {
+            "ollama.exe": {
+              "type": "executable",
+              "size": "50MB"
+            }
+          }
+        },
+        
+        "/macOS/": {
+          "SunflowerAI.app/": {
+            "type": "bundle",
+            "size": "200MB",
+            "signed": true,
+            "notarized": true
+          },
+          "ollama-darwin": {
+            "type": "executable",
+            "size": "45MB",
+            "architecture": "universal"
+          }
+        },
+        
+        "/models/": {
+          "llama3.2-7b.gguf": {
+            "type": "model",
+            "size": "4.5GB",
+            "optional": true,
+            "tier": "high_end"
+          },
+          "llama3.2-3b.gguf": {
+            "type": "model",
+            "size": "2.0GB",
+            "optional": true,
+            "tier": "mid_range"
+          },
+          "llama3.2-1b.gguf": {
+            "type": "model",
+            "size": "700MB",
+            "required": true,
+            "tier": "low_end"
+          },
+          "llama3.2-1b-q4_0.gguf": {
+            "type": "model",
+            "size": "400MB",
+            "required": true,
+            "tier": "minimum"
+          },
+          "checksums.sha256": {
+            "type": "manifest",
+            "size": "4KB"
+          }
+        },
+        
+        "/modelfiles/": {
+          "Sunflower_AI_Kids.modelfile": {
+            "type": "config",
+            "size": "50KB",
+            "encrypted": false
+          },
+          "Sunflower_AI_Educator.modelfile": {
+            "type": "config",
+            "size": "40KB",
+            "encrypted": false
+          }
+        },
+        
+        "/config/": {
+          "type": "directory",
+          "contents": "All configuration files",
+          "read_only": true,
+          "size": "500KB"
+        },
+        
+        "/resources/": {
+          "icons/": {
+            "type": "directory",
+            "size": "5MB"
+          },
+          "fonts/": {
+            "type": "directory",
+            "size": "10MB"
+          },
+          "images/": {
+            "type": "directory",
+            "size": "20MB"
+          }
+        },
+        
+        "/docs/": {
+          "user_manual.pdf": {
+            "type": "document",
+            "size": "5MB"
+          },
+          "parent_guide.pdf": {
+            "type": "document",
+            "size": "3MB"
+          },
+          "safety_guide.pdf": {
+            "type": "document",
+            "size": "2MB"
+          },
+          "quick_start.pdf": {
+            "type": "document",
+            "size": "1MB"
+          }
+        },
+        
+        "/.security/": {
+          "manifest.sig": {
+            "type": "signature",
+            "algorithm": "SHA256-RSA",
+            "size": "4KB"
+          },
+          "device_auth.key": {
+            "type": "key",
+            "encrypted": true,
+            "size": "1KB"
+          },
+          "integrity.json": {
+            "type": "manifest",
+            "size": "10KB"
+          }
+        }
+      },
+      
+      "integrity": {
+        "checksum_algorithm": "SHA256",
+        "signature_algorithm": "RSA-4096",
+        "tamper_detection": true,
+        "verify_on_mount": true
+      }
+    },
+    
+    {
+      "partition_id": 2,
+      "name": "SUNFLOWER_DATA",
+      "type": "storage",
+      "purpose": "User data and profiles (read-write)",
+      
+      "specifications": {
+        "start_sector": "after_partition_1",
+        "size_gb": 12,
+        "filesystem": "FAT32",
+        "partition_type": "0x0C",
+        "bootable": false,
+        "read_only": false,
+        "encryption": "optional"
+      },
+      
+      "structure": {
+        "/": {
+          "sunflower_data.id": {
+            "type": "marker",
+            "size": "1KB",
+            "content": "SUNFLOWER_AI_DATA_v6.2.0"
+          },
+          ".initialized": {
+            "type": "marker",
+            "created_on": "first_run"
+          }
+        },
+        
+        "/sunflower_data/": {
+          "profiles/": {
+            "family_settings.yaml": {
+              "type": "config",
+              "encrypted": true,
+              "max_size": "100KB"
+            },
+            ".encrypted/": {
+              "type": "directory",
+              "purpose": "Encrypted profile data",
+              "encryption": "AES-256-GCM"
+            }
+          },
+          
+          "conversations/": {
+            "type": "directory",
+            "purpose": "Conversation history per child",
+            "structure": "{profile_id}/{date}/session_{timestamp}.json",
+            "compression": "gzip",
+            "encryption": true,
+            "retention_days": 90
+          },
+          
+          "sessions/": {
+            "type": "directory",
+            "purpose": "Session logs and analytics",
+            "structure": "{year}/{month}/{day}/",
+            "retention_days": 365
+          },
+          
+          "logs/": {
+            "safety/": {
+              "type": "directory",
+              "purpose": "Safety incident logs",
+              "retention": "permanent",
+              "encryption": true
+            },
+            "system/": {
+              "type": "directory",
+              "purpose": "System operation logs",
+              "retention_days": 30,
+              "rotation": "daily"
+            },
+            "performance/": {
+              "type": "directory",
+              "purpose": "Performance metrics",
+              "retention_days": 7
+            }
+          },
+          
+          "cache/": {
+            "models/": {
+              "type": "directory",
+              "purpose": "Model cache",
+              "max_size_mb": 500,
+              "eviction": "LRU"
+            },
+            "responses/": {
+              "type": "directory",
+              "purpose": "Response cache",
+              "max_size_mb": 100,
+              "ttl_hours": 24
+            },
+            "temp/": {
+              "type": "directory",
+              "purpose": "Temporary files",
+              "auto_cleanup": true,
+              "max_age_hours": 6
+            }
+          },
+          
+          "backups/": {
+            "auto/": {
+              "type": "directory",
+              "purpose": "Automatic backups",
+              "frequency": "daily",
+              "retention_count": 7
+            },
+            "manual/": {
+              "type": "directory",
+              "purpose": "Manual backups",
+              "max_count": 5
+            }
+          },
+          
+          ".security/": {
+            "device_token.json": {
+              "type": "auth",
+              "regenerate": "never",
+              "size": "4KB"
+            },
+            "keystore.json": {
+              "type": "keys",
+              "encrypted": true,
+              "algorithm": "PBKDF2"
+            },
+            "audit.log": {
+              "type": "log",
+              "purpose": "Security audit trail",
+              "tamper_proof": true
+            }
+          }
+        }
+      },
+      
+      "quotas": {
+        "max_profiles": 10,
+        "max_conversation_size_mb": 10,
+        "max_log_size_mb": 100,
+        "max_cache_size_mb": 500,
+        "max_backup_size_mb": 1000
+      },
+      
+      "maintenance": {
+        "auto_cleanup": true,
+        "cleanup_frequency": "weekly",
+        "defragmentation": false,
+        "compression": true,
+        "integrity_check": "monthly"
+      }
+    }
+  ],
+  
+  "manufacturing": {
+    "partition_tools": {
+      "windows": ["diskpart", "rufus"],
+      "linux": ["fdisk", "parted", "dd"],
+      "macos": ["diskutil", "dd"]
+    },
+    
+    "creation_sequence": [
+      {
+        "step": 1,
+        "action": "Create partition table (MBR)",
+        "critical": true
+      },
+      {
+        "step": 2,
+        "action": "Create CD-ROM partition (4GB)",
+        "critical": true
+      },
+      {
+        "step": 3,
+        "action": "Write ISO to CD-ROM partition",
+        "critical": true
+      },
+      {
+        "step": 4,
+        "action": "Set CD-ROM partition as read-only",
+        "critical": true
+      },
+      {
+        "step": 5,
+        "action": "Create data partition (remaining space)",
+        "critical": true
+      },
+      {
+        "step": 6,
+        "action": "Format data partition as FAT32",
+        "critical": true
+      },
+      {
+        "step": 7,
+        "action": "Write initial data structure",
+        "critical": true
+      },
+      {
+        "step": 8,
+        "action": "Verify both partitions",
+        "critical": true
+      },
+      {
+        "step": 9,
+        "action": "Write device authentication token",
+        "critical": true
+      },
+      {
+        "step": 10,
+        "action": "Final integrity check",
+        "critical": true
+      }
+    ],
+    
+    "quality_checks": {
+      "partition_detection": {
+        "both_visible": true,
+        "cdrom_readonly": true,
+        "data_writable": true
+      },
+      "file_verification": {
+        "marker_files_present": true,
+        "checksums_valid": true,
+        "executables_signed": true
+      },
+      "performance": {
+        "read_speed_mbps": 80,
+        "write_speed_mbps": 40,
+        "response_time_ms": 20
+      }
+    }
+  },
+  
+  "compatibility": {
+    "usb_standards": ["USB 2.0", "USB 3.0", "USB 3.1", "USB 3.2", "USB-C"],
+    "minimum_speed": "USB 2.0",
+    "recommended_speed": "USB 3.0",
+    "controller_chips": [
+      "Phison PS2251-07",
+      "SMI SM3267",
+      "Alcor AU6989SN",
+      "Realtek RTS5176"
+    ],
+    "tested_devices": [
+      "SanDisk Ultra Fit 16GB",
+      "Kingston DataTraveler G4 32GB",
+      "PNY Turbo 16GB",
+      "Lexar JumpDrive S75 16GB"
+    ]
+  },
+  
+  "security": {
+    "partition_isolation": true,
+    "secure_boot": false,
+    "encryption_available": true,
+    "tamper_detection": true,
+    "device_binding": true,
+    "authentication_required": true
+  }
+}
