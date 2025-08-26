@@ -1,1 +1,471 @@
+# Sunflower AI Professional System - Family Settings Configuration
+# Default template for family profiles and safety settings
+# This file resides on CD-ROM (read-only), user data stored on USB partition
 
+# ============================================================================
+# FAMILY PROFILE SCHEMA
+# ============================================================================
+
+version: "1.0.0"
+schema_version: 2
+
+# Default family settings (applied to new families)
+default_family_settings:
+  # Unique family identifier (generated on first setup)
+  family_id: null
+  
+  # Family metadata
+  created: null
+  last_modified: null
+  timezone: "America/New_York"
+  country: "US"
+  language: "en-US"
+  
+  # Parent/Guardian account settings
+  parent_account:
+    # Authentication requirements
+    require_password: true
+    password_min_length: 8
+    require_pin: true
+    pin_length: 6
+    pin_type: "numeric"  # numeric, alphanumeric
+    
+    # Session management
+    session_timeout_minutes: 120
+    auto_lock_minutes: 15
+    require_reauthentication_hours: 24
+    
+    # Security settings
+    max_login_attempts: 5
+    lockout_duration_minutes: 30
+    security_questions_enabled: true
+    two_factor_enabled: false
+    
+    # Notification preferences
+    notifications:
+      safety_alerts: true
+      session_summaries: true
+      milestone_achievements: true
+      system_updates: false
+      email_notifications: false
+    
+  # Global safety settings (apply to all children unless overridden)
+  global_safety:
+    content_filtering_enabled: true
+    profanity_filter_enabled: true
+    topic_restrictions_enabled: true
+    personal_info_protection: true
+    
+    # Safety incident handling
+    safety_incident_action: "block_and_redirect"  # block_and_redirect, warn_and_log, notify_parent
+    max_safety_strikes: 3
+    safety_cooldown_minutes: 30
+    auto_end_session_on_violation: false
+    
+    # Content boundaries
+    blocked_topics:
+      - violence
+      - weapons
+      - drugs
+      - alcohol
+      - adult_content
+      - self_harm
+      - dangerous_activities
+      - personal_information
+      - scary_content
+      - inappropriate_relationships
+    
+    allowed_topics:
+      - science
+      - technology
+      - engineering
+      - mathematics
+      - nature
+      - space
+      - environment
+      - history
+      - geography
+      - art
+      - music
+      - literature
+      - homework
+      - school_projects
+    
+    # External content
+    block_external_links: true
+    block_file_uploads: true
+    block_code_execution: true
+    
+  # Session management defaults
+  session_defaults:
+    # Time limits by age group (in minutes)
+    time_limits:
+      ages_2_5: 20
+      ages_6_8: 30
+      ages_9_11: 45
+      ages_12_14: 60
+      ages_15_18: 90
+    
+    # Break reminders
+    break_reminder_enabled: true
+    break_reminder_interval_minutes: 30
+    break_duration_minutes: 10
+    
+    # Activity tracking
+    track_session_history: true
+    track_conversation_topics: true
+    track_learning_progress: true
+    track_safety_incidents: true
+    
+    # Session behavior
+    pause_on_inactivity_minutes: 10
+    warn_before_timeout_minutes: 5
+    save_on_exit: true
+    
+  # Learning configuration
+  learning_settings:
+    # Curriculum alignment
+    curriculum_standard: "Common Core"  # Common Core, NGSS, State Standards, Custom
+    grade_level_enforcement: true
+    allow_advanced_topics: false
+    
+    # Assessment and progress
+    enable_assessments: true
+    assessment_frequency: "weekly"
+    progress_reports_enabled: true
+    achievement_badges_enabled: true
+    
+    # Learning modes
+    homework_mode_available: true
+    exploration_mode_available: true
+    tutorial_mode_available: true
+    practice_mode_available: true
+    
+    # Subject emphasis (percentage of time)
+    subject_emphasis:
+      science: 30
+      technology: 25
+      engineering: 20
+      mathematics: 25
+    
+  # Privacy and data settings
+  privacy_settings:
+    # Data retention
+    conversation_retention_days: 90
+    session_log_retention_days: 365
+    safety_log_retention_forever: true
+    
+    # Data sharing
+    allow_anonymous_analytics: false
+    share_learning_insights: false
+    participate_in_research: false
+    
+    # Export capabilities
+    allow_data_export: true
+    allow_conversation_export: false
+    require_parent_approval_for_export: true
+
+# ============================================================================
+# CHILD PROFILE SCHEMA
+# ============================================================================
+
+child_profile_template:
+  # Profile identification
+  profile_id: null  # UUID generated on creation
+  name: null
+  nickname: null
+  avatar: "default"  # default, custom, or preset options
+  
+  # Demographics
+  age: null
+  birth_date: null  # Used for automatic age progression
+  grade_level: null
+  gender: null  # optional, for personalization
+  
+  # Account settings
+  account_type: "supervised"  # supervised, restricted
+  require_parent_approval: true
+  can_delete_history: false
+  can_modify_settings: false
+  
+  # Learning profile
+  learning_profile:
+    # Academic level
+    reading_level: "grade_appropriate"  # below_grade, grade_appropriate, above_grade
+    math_level: "grade_appropriate"
+    science_knowledge: "grade_appropriate"
+    
+    # Learning preferences
+    learning_style: "balanced"  # visual, auditory, kinesthetic, reading, balanced
+    preferred_explanation_depth: "standard"  # simple, standard, detailed
+    prefers_examples: true
+    prefers_step_by_step: true
+    
+    # Interests (for topic personalization)
+    interests:
+      - science
+      - nature
+      - space
+    
+    # Special accommodations
+    accommodations:
+      dyslexia_support: false
+      adhd_support: false
+      visual_impairment_support: false
+      hearing_impairment_support: false
+      language_support: false
+      simplified_language: false
+    
+  # Safety overrides (child-specific)
+  safety_overrides:
+    use_global_settings: true  # If false, use custom settings below
+    
+    # Custom safety settings (only if use_global_settings is false)
+    custom_safety:
+      content_filtering_level: "maximum"  # maximum, high, moderate, standard
+      additional_blocked_topics: []
+      additional_allowed_topics: []
+      stricter_personal_info_protection: false
+      require_parent_presence: false
+    
+  # Response configuration
+  response_settings:
+    # Length limits by age
+    max_response_words: null  # Auto-calculated from age if null
+    
+    # Complexity settings
+    vocabulary_level: "age_appropriate"  # simplified, age_appropriate, advanced
+    use_technical_terms: false
+    include_fun_facts: true
+    use_encouragement: true
+    
+    # Interaction style
+    personality_style: "friendly"  # friendly, professional, playful, serious
+    use_student_name: true
+    celebration_messages: true
+    
+  # Session configuration (child-specific)
+  session_settings:
+    # Time limits
+    daily_time_limit_minutes: null  # Uses age-based default if null
+    weekly_time_limit_minutes: null
+    
+    # Schedule restrictions
+    allowed_times:
+      weekdays:
+        start_time: "15:00"  # 3 PM
+        end_time: "20:00"    # 8 PM
+      weekends:
+        start_time: "09:00"  # 9 AM
+        end_time: "21:00"    # 9 PM
+      
+    # School mode
+    school_hours_blocked: true
+    school_schedule:
+      start_time: "08:00"
+      end_time: "15:00"
+      applies_to_days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    
+  # Progress tracking
+  progress_tracking:
+    # Metrics to track
+    track_topics_explored: true
+    track_questions_asked: true
+    track_concepts_mastered: true
+    track_time_spent: true
+    track_streak_days: true
+    
+    # Goals and milestones
+    daily_learning_goal_minutes: 30
+    weekly_topic_goal: 5
+    enable_achievement_notifications: true
+    
+    # Reporting
+    generate_weekly_summary: true
+    generate_monthly_report: true
+    include_in_family_digest: true
+  
+  # Model selection (hardware-dependent)
+  model_settings:
+    preferred_model: "auto"  # auto, specific model name
+    fallback_model: "llama3.2:1b-q4_0"
+    quality_preference: "balanced"  # speed, balanced, quality
+    
+  # Statistics (read-only, system-generated)
+  statistics:
+    total_sessions: 0
+    total_time_minutes: 0
+    topics_explored: []
+    last_active: null
+    current_streak_days: 0
+    longest_streak_days: 0
+    achievements_earned: []
+    safety_incidents: 0
+
+# ============================================================================
+# AGE GROUP CONFIGURATIONS
+# ============================================================================
+
+age_group_settings:
+  # Early Childhood (Ages 2-5)
+  early_childhood:
+    age_range: [2, 5]
+    response_length_words: 50
+    complexity_level: "very_simple"
+    safety_level: "maximum"
+    allowed_session_minutes: 20
+    topics_focus:
+      - colors
+      - shapes
+      - animals
+      - basic_counting
+      - nature
+      - simple_science
+    
+  # Elementary School (Ages 6-8)
+  elementary:
+    age_range: [6, 8]
+    response_length_words: 75
+    complexity_level: "simple"
+    safety_level: "high"
+    allowed_session_minutes: 30
+    topics_focus:
+      - basic_science
+      - simple_math
+      - reading_comprehension
+      - nature_exploration
+      - beginning_technology
+      - creative_projects
+    
+  # Upper Elementary (Ages 9-11)
+  upper_elementary:
+    age_range: [9, 11]
+    response_length_words: 100
+    complexity_level: "moderate"
+    safety_level: "high"
+    allowed_session_minutes: 45
+    topics_focus:
+      - scientific_method
+      - math_concepts
+      - engineering_basics
+      - environmental_science
+      - computer_basics
+      - research_skills
+    
+  # Middle School (Ages 12-14)
+  middle_school:
+    age_range: [12, 14]
+    response_length_words: 150
+    complexity_level: "intermediate"
+    safety_level: "moderate"
+    allowed_session_minutes: 60
+    topics_focus:
+      - advanced_science
+      - algebra
+      - engineering_design
+      - programming_basics
+      - research_projects
+      - critical_thinking
+    
+  # High School (Ages 15-18)
+  high_school:
+    age_range: [15, 18]
+    response_length_words: 200
+    complexity_level: "advanced"
+    safety_level: "standard"
+    allowed_session_minutes: 90
+    topics_focus:
+      - advanced_stem
+      - calculus
+      - physics
+      - computer_science
+      - engineering
+      - college_prep
+      - research_methods
+      - career_exploration
+
+# ============================================================================
+# ACHIEVEMENT SYSTEM
+# ============================================================================
+
+achievements:
+  # Milestone achievements
+  milestones:
+    first_session:
+      name: "Hello, World!"
+      description: "Complete your first learning session"
+      icon: "🌟"
+      
+    week_streak:
+      name: "Dedicated Learner"
+      description: "Learn for 7 days in a row"
+      icon: "🔥"
+      
+    month_streak:
+      name: "Knowledge Champion"
+      description: "Learn for 30 days in a row"
+      icon: "🏆"
+      
+    ten_topics:
+      name: "Explorer"
+      description: "Explore 10 different topics"
+      icon: "🗺️"
+      
+    hundred_questions:
+      name: "Curious Mind"
+      description: "Ask 100 questions"
+      icon: "❓"
+      
+  # Subject-specific achievements
+  subject_achievements:
+    science_novice:
+      name: "Science Novice"
+      description: "Complete 10 science sessions"
+      icon: "🧪"
+      
+    math_wizard:
+      name: "Math Wizard"
+      description: "Solve 50 math problems"
+      icon: "🧮"
+      
+    tech_explorer:
+      name: "Tech Explorer"
+      description: "Learn about 5 technology topics"
+      icon: "💻"
+      
+    engineering_builder:
+      name: "Engineering Builder"
+      description: "Complete 3 engineering projects"
+      icon: "🔧"
+
+# ============================================================================
+# SYSTEM CONFIGURATION
+# ============================================================================
+
+system_config:
+  # Version management
+  config_version: "1.0.0"
+  min_supported_version: "1.0.0"
+  auto_migrate_profiles: true
+  
+  # Backup settings
+  auto_backup_enabled: true
+  backup_frequency: "daily"
+  backup_retention_count: 7
+  backup_on_profile_change: true
+  
+  # Performance tuning
+  cache_profiles: true
+  profile_cache_ttl_seconds: 3600
+  lazy_load_statistics: true
+  
+  # Validation
+  validate_on_load: true
+  validate_on_save: true
+  strict_validation: true
+  
+  # Error handling
+  profile_corruption_action: "restore_from_backup"  # restore_from_backup, reset_to_default, notify_parent
+  missing_profile_action: "create_default"
+  
+# End of family settings configuration
