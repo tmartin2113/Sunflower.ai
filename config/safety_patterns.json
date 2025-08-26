@@ -1,0 +1,275 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2025-01-15",
+  "description": "Safety content patterns for Sunflower AI child protection system",
+  
+  "categories": {
+    "violence": {
+      "severity": "high",
+      "patterns": [
+        "\\b(kill|murder|suicide|suicidal|die|death|dead)\\b",
+        "\\b(hurt|harm|injure|injury|wound|blood|bleed)\\b",
+        "\\b(fight|fighting|beat|beating|punch|kick|hit|attack)\\b",
+        "\\b(weapon|gun|knife|sword|bomb|explosive|grenade)\\b",
+        "\\b(war|battle|combat|soldier|military|army)\\b",
+        "\\b(torture|torment|suffer|suffering|pain|painful)\\b",
+        "\\b(shoot|shooting|shot|stab|stabbing|slash)\\b",
+        "\\b(violence|violent|assault|abuse|abusive)\\b",
+        "\\b(destroy|destruction|annihilate|eliminate)\\b",
+        "\\b(revenge|vengeance|retaliate|payback)\\b"
+      ],
+      "redirect_message": "Let's explore something positive instead! How about learning about how engineers design safety equipment to protect people, or how scientists work to make the world safer?"
+    },
+    
+    "inappropriate_content": {
+      "severity": "high",
+      "patterns": [
+        "\\b(sex|sexual|sexy|nude|naked|porn)\\b",
+        "\\b(kiss|kissing|romance|romantic|love|boyfriend|girlfriend)\\b",
+        "\\b(date|dating|relationship|crush|attracted)\\b",
+        "\\b(body\\s*parts|private\\s*parts|genital|breast)\\b",
+        "\\b(pregnant|pregnancy|reproduction|mating)\\b",
+        "\\b(alcohol|beer|wine|liquor|drunk|drinking)\\b",
+        "\\b(drug|drugs|marijuana|cocaine|heroin|meth)\\b",
+        "\\b(smoke|smoking|cigarette|tobacco|vape|vaping)\\b",
+        "\\b(gamble|gambling|bet|betting|casino)\\b",
+        "\\b(adult|mature|inappropriate|explicit)\\b"
+      ],
+      "redirect_message": "That's not something I can discuss with you. Would you like to learn about biology from a scientific perspective, like how the human body works, or explore another fascinating science topic?"
+    },
+    
+    "personal_information": {
+      "severity": "critical",
+      "patterns": [
+        "\\b(address|where.*live|home.*address|street)\\b",
+        "\\b(phone.*number|cell.*number|telephone|contact.*number)\\b",
+        "\\b(email|e-mail|email.*address|gmail|outlook)\\b",
+        "\\b(password|passcode|pin|login|username)\\b",
+        "\\b(credit.*card|debit.*card|bank.*account|paypal)\\b",
+        "\\b(social.*security|ssn|driver.*license|passport)\\b",
+        "\\b(full.*name|last.*name|surname|family.*name)\\b",
+        "\\b(school.*name|which.*school|teacher.*name)\\b",
+        "\\b(parent.*name|mother.*name|father.*name|guardian)\\b",
+        "\\b(meet.*person|meet.*up|come.*over|visit)\\b"
+      ],
+      "redirect_message": "I can't help with personal information for your safety. Let's focus on learning instead! What would you like to explore in science, technology, engineering, or mathematics today?"
+    },
+    
+    "dangerous_activities": {
+      "severity": "high",
+      "patterns": [
+        "\\b(make.*bomb|build.*explosive|create.*weapon)\\b",
+        "\\b(poison|toxic|poisonous|toxin|venom)\\b",
+        "\\b(fire|burn|burning|flammable|ignite|pyro)\\b",
+        "\\b(electric.*shock|electrocute|high.*voltage)\\b",
+        "\\b(chemical.*reaction|acid|corrosive|reactive)\\b",
+        "\\b(dangerous|hazard|hazardous|unsafe|risky)\\b",
+        "\\b(experiment.*home|try.*this.*home|diy.*dangerous)\\b",
+        "\\b(hack|hacking|bypass|crack|exploit)\\b",
+        "\\b(vandal|vandalism|graffiti|damage.*property)\\b",
+        "\\b(steal|stealing|theft|shoplift|rob)\\b"
+      ],
+      "redirect_message": "Safety first! Instead of dangerous activities, let's learn about how scientists work safely in laboratories, or explore safe and exciting experiments you can do with adult supervision!"
+    },
+    
+    "self_harm": {
+      "severity": "critical",
+      "patterns": [
+        "\\b(self.*harm|hurt.*myself|cut.*myself|cutting)\\b",
+        "\\b(suicide|suicidal|kill.*myself|end.*life)\\b",
+        "\\b(worthless|hopeless|nobody.*cares|want.*die)\\b",
+        "\\b(depressed|depression|anxiety|anxious|panic)\\b",
+        "\\b(eating.*disorder|anorexia|bulimia|starve)\\b",
+        "\\b(hate.*myself|ugly|stupid|failure|loser)\\b",
+        "\\b(alone|lonely|no.*friends|nobody.*likes)\\b",
+        "\\b(run.*away|escape|leave.*home|disappear)\\b"
+      ],
+      "redirect_message": "I'm concerned about you and want you to know that you matter. Please talk to a trusted adult like a parent, teacher, or counselor about how you're feeling. They care about you and want to help. Would you like to explore some uplifting science topics instead, like how the brain creates happiness or how nature can improve our mood?"
+    },
+    
+    "scary_content": {
+      "severity": "medium",
+      "patterns": [
+        "\\b(ghost|ghosts|haunted|paranormal|supernatural)\\b",
+        "\\b(monster|creature|demon|devil|satan|hell)\\b",
+        "\\b(zombie|undead|vampire|werewolf|witch)\\b",
+        "\\b(horror|scary|terrifying|frightening|nightmare)\\b",
+        "\\b(curse|cursed|hex|voodoo|black.*magic)\\b",
+        "\\b(creepy|spooky|eerie|sinister|evil)\\b",
+        "\\b(blood|gore|gruesome|disturbing|graphic)\\b",
+        "\\b(dark.*web|deep.*web|hidden.*internet)\\b"
+      ],
+      "redirect_message": "Let's explore something fascinating and positive instead! Did you know there are glow-in-the-dark animals in the ocean? Or we could learn about how special effects in movies are created using science!"
+    },
+    
+    "inappropriate_requests": {
+      "severity": "high",
+      "patterns": [
+        "\\b(cheat|cheating|homework.*answers|test.*answers)\\b",
+        "\\b(lie|lying|deceive|trick|fool|prank)\\b",
+        "\\b(bully|bullying|mean|tease|harass)\\b",
+        "\\b(swear|curse|profanity|bad.*words|cuss)\\b",
+        "\\b(illegal|crime|criminal|arrest|jail)\\b",
+        "\\b(sneak|sneaking|hide.*from.*parent|secret.*from)\\b",
+        "\\b(skip.*school|ditch.*class|fake.*sick|truant)\\b",
+        "\\b(adult.*content|mature.*content|18\\+|nsfw)\\b"
+      ],
+      "redirect_message": "I can't help with that, but I'd love to help you learn! I can explain concepts, work through problems together, and make learning fun. What subject would you like to explore?"
+    },
+    
+    "medical_concerns": {
+      "severity": "medium",
+      "patterns": [
+        "\\b(symptom|symptoms|diagnose|diagnosis|disease)\\b",
+        "\\b(medicine|medication|prescription|pills|dose)\\b",
+        "\\b(surgery|operation|medical.*procedure|treatment)\\b",
+        "\\b(pain|ache|sore|hurt|injury|sick)\\b",
+        "\\b(doctor|hospital|emergency|ambulance|911)\\b",
+        "\\b(cancer|diabetes|heart.*attack|stroke)\\b",
+        "\\b(infection|virus|bacteria|contagious|pandemic)\\b",
+        "\\b(allergy|allergic|reaction|rash|swelling)\\b"
+      ],
+      "redirect_message": "For medical questions, it's important to talk to a doctor or your parents. I can teach you about how the human body works from a scientific perspective, or we could explore other interesting biology topics!"
+    },
+    
+    "commercial_content": {
+      "severity": "low",
+      "patterns": [
+        "\\b(buy|purchase|order|shop|store|amazon)\\b",
+        "\\b(money|dollar|pay|payment|cost|price)\\b",
+        "\\b(credit|debit|visa|mastercard|paypal)\\b",
+        "\\b(subscribe|subscription|premium|upgrade)\\b",
+        "\\b(download|app.*store|google.*play|install)\\b",
+        "\\b(website|link|url|click.*here|visit)\\b",
+        "\\b(social.*media|facebook|instagram|tiktok|snapchat)\\b",
+        "\\b(youtube|video|stream|channel|subscribe)\\b"
+      ],
+      "redirect_message": "I can't help with shopping or external websites, but I can teach you about economics, how money works, or even the mathematics behind saving and budgeting!"
+    },
+    
+    "profanity": {
+      "severity": "medium",
+      "patterns": [
+        "\\b(damn|dammit|hell|crap|sucks?)\\b",
+        "\\b(stupid|dumb|idiot|moron|loser)\\b",
+        "\\b(shut.*up|piss|freaking|frickin)\\b"
+      ],
+      "redirect_message": "Let's use respectful language! I'm here to help you learn amazing things about science, technology, engineering, and math. What would you like to explore?"
+    }
+  },
+  
+  "compound_patterns": {
+    "description": "Patterns that require multiple keywords to trigger",
+    "patterns": [
+      {
+        "name": "making_weapons",
+        "keywords": ["how", "make", "weapon"],
+        "severity": "critical",
+        "all_required": true
+      },
+      {
+        "name": "meeting_strangers",
+        "keywords": ["meet", "person", "online"],
+        "severity": "critical",
+        "all_required": false
+      },
+      {
+        "name": "bypassing_safety",
+        "keywords": ["disable", "safety", "filter"],
+        "severity": "high",
+        "all_required": false
+      }
+    ]
+  },
+  
+  "contextual_safety": {
+    "description": "Context-aware safety rules",
+    "rules": [
+      {
+        "context": "asking_age",
+        "pattern": "how.*old.*are.*you|what.*age|your.*age",
+        "safe_response": "I'm an AI assistant created to help children learn STEM subjects safely!"
+      },
+      {
+        "context": "asking_location",
+        "pattern": "where.*are.*you|what.*country|your.*location",
+        "safe_response": "I exist in the computer to help you learn! I don't have a physical location."
+      },
+      {
+        "context": "asking_personal",
+        "pattern": "what.*your.*name|who.*are.*you|tell.*about.*yourself",
+        "safe_response": "I'm Sunflower AI, your friendly STEM learning assistant! I'm here to help you explore science, technology, engineering, and mathematics."
+      }
+    ]
+  },
+  
+  "exemptions": {
+    "description": "Educational contexts where certain keywords are acceptable",
+    "contexts": [
+      {
+        "subject": "biology",
+        "allowed_terms": ["reproduction", "mating", "pregnancy"],
+        "condition": "age >= 12 AND educational_context = true"
+      },
+      {
+        "subject": "history",
+        "allowed_terms": ["war", "battle", "soldier", "military"],
+        "condition": "age >= 10 AND educational_context = true"
+      },
+      {
+        "subject": "chemistry",
+        "allowed_terms": ["acid", "reaction", "explosive"],
+        "condition": "age >= 14 AND supervised = true"
+      }
+    ]
+  },
+  
+  "escalation_thresholds": {
+    "immediate_block": {
+      "categories": ["self_harm", "personal_information"],
+      "action": "block_and_alert_parent"
+    },
+    "warning_first": {
+      "categories": ["inappropriate_requests", "profanity"],
+      "warnings_before_block": 2,
+      "action": "warn_then_block"
+    },
+    "redirect_only": {
+      "categories": ["commercial_content", "scary_content"],
+      "action": "redirect_to_educational"
+    }
+  },
+  
+  "age_adjustments": {
+    "description": "Age-specific safety adjustments",
+    "age_groups": {
+      "2-5": {
+        "additional_blocks": ["scary", "complex_topics", "abstract_concepts"],
+        "stricter_filtering": true,
+        "simplify_redirects": true
+      },
+      "6-8": {
+        "additional_blocks": ["scary", "complex_violence"],
+        "moderate_filtering": true
+      },
+      "9-12": {
+        "standard_filtering": true,
+        "educational_exemptions": true
+      },
+      "13-18": {
+        "relaxed_filtering": true,
+        "educational_exemptions": true,
+        "mature_educational_content": true
+      }
+    }
+  },
+  
+  "reporting": {
+    "log_all_incidents": true,
+    "parent_notification_threshold": "medium",
+    "aggregate_reports": true,
+    "report_frequency": "daily",
+    "include_context": true,
+    "anonymize_logs": false
+  }
+}
