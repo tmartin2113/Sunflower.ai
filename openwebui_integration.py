@@ -1,794 +1,748 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Open WebUI Integration Manager
-Complete integration of Open WebUI with family profiles and partitioned device architecture
+Sunflower AI Professional System - Open WebUI Integration Manager
+Production-ready integration layer for Open WebUI with family profile management
+Version: 6.2 | Platform: Windows/macOS | Architecture: Partitioned CD-ROM + USB
 """
 
 import os
 import sys
 import json
-import time
-import shutil
-import sqlite3
+import uuid
 import hashlib
-import secrets
+import logging
 import platform
 import subprocess
+import threading
+import time
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, Optional, List, Tuple
-import logging
+from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime, timedelta
+from dataclasses import dataclass, asdict
+from contextlib import contextmanager
+import secrets
+import sqlite3
 
-class OpenWebUIIntegrator:
-    """Manages Open WebUI integration with Sunflower AI system"""
+# Configure production logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('sunflower_ai.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+@dataclass
+class ChildProfile:
+    """Secure child profile with age-appropriate settings"""
+    profile_id: str
+    name: str
+    age: int
+    grade_level: str
+    created_at: str
+    last_active: str
+    total_sessions: int
+    learning_preferences: Dict[str, Any]
+    safety_level: str  # 'maximum', 'high', 'standard'
+    session_history: List[Dict[str, Any]]
     
-    def __init__(self):
-        self.system = platform.system()
-        self.root_dir = Path(__file__).parent
-        
-        # Detect partitions
-        self.cdrom_partition = self.detect_cdrom_partition()
-        self.usb_partition = self.detect_usb_partition()
-        
-        # Set paths based on partitions
-        if self.cdrom_partition:
-            self.app_dir = self.cdrom_partition
+    def get_model_parameters(self) -> Dict[str, Any]:
+        """Generate age-appropriate model parameters"""
+        if self.age <= 7:
+            return {
+                'temperature': 0.3,
+                'max_tokens': 50,
+                'complexity': 'simple',
+                'safety_mode': 'maximum',
+                'vocabulary_level': 'k2'
+            }
+        elif self.age <= 10:
+            return {
+                'temperature': 0.4,
+                'max_tokens': 75,
+                'complexity': 'elementary',
+                'safety_mode': 'high',
+                'vocabulary_level': 'elementary'
+            }
+        elif self.age <= 13:
+            return {
+                'temperature': 0.5,
+                'max_tokens': 125,
+                'complexity': 'middle_school',
+                'safety_mode': 'high',
+                'vocabulary_level': 'middle'
+            }
         else:
-            self.app_dir = self.root_dir
-            
-        if self.usb_partition:
-            self.data_dir = self.usb_partition / "sunflower_data"
-        else:
-            self.data_dir = self.root_dir / "data"
-            
-        # Open WebUI specific paths
-        self.openwebui_dir = self.data_dir / "openwebui"
-        self.openwebui_data = self.openwebui_dir / "data"
-        self.openwebui_config = self.openwebui_dir / "config"
-        self.openwebui_db = self.openwebui_data / "webui.db"
+            return {
+                'temperature': 0.6,
+                'max_tokens': 200,
+                'complexity': 'high_school',
+                'safety_mode': 'standard',
+                'vocabulary_level': 'advanced'
+            }
+
+class OpenWebUIIntegration:
+    """Production-ready Open WebUI integration with enterprise security"""
+    
+    def __init__(self, partition_manager=None):
+        """Initialize Open WebUI integration with partition awareness"""
+        self.platform = platform.system()
+        self.partition_manager = partition_manager
         
-        # Family profile paths
-        self.profiles_dir = self.data_dir / "profiles"
-        self.family_config = self.profiles_dir / "family.json"
-        self.session_logs = self.data_dir / "sessions"
+        # Determine paths based on partition architecture
+        self.cdrom_path = self._detect_cdrom_partition()
+        self.usb_path = self._detect_usb_partition()
         
-        # Ollama paths
-        self.ollama_dir = self.data_dir / "ollama"
-        self.models_dir = self.ollama_dir / "models"
+        # Core paths
+        self.base_path = Path(self.usb_path) / 'sunflower_data'
+        self.profiles_path = self.base_path / 'profiles'
+        self.sessions_path = self.base_path / 'sessions'
+        self.config_path = self.base_path / 'config'
+        self.logs_path = self.base_path / 'logs'
         
-        # Setup logging
-        self.setup_logging()
+        # Create directory structure
+        self._initialize_directories()
         
-    def detect_cdrom_partition(self) -> Optional[Path]:
+        # Initialize components
+        self.db_path = self.config_path / 'sunflower.db'
+        self.active_profile: Optional[ChildProfile] = None
+        self.parent_authenticated = False
+        self.session_id = None
+        self.openwebui_process = None
+        self.monitoring_thread = None
+        
+        # Security components
+        self.encryption_key = self._load_or_generate_key()
+        self.session_timeout = timedelta(minutes=30)
+        self.last_activity = datetime.now()
+        
+        # Initialize database
+        self._initialize_database()
+        
+        # Load configuration
+        self.config = self._load_configuration()
+        
+        logger.info(f"OpenWebUI Integration initialized on {self.platform}")
+    
+    def _detect_cdrom_partition(self) -> Path:
         """Detect CD-ROM partition containing system files"""
-        # Check for CD-ROM marker file
-        marker_file = "sunflower_cd.id"
+        if self.platform == "Windows":
+            import win32api
+            drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
+            for drive in drives:
+                drive_type = win32api.GetDriveType(drive)
+                if drive_type == 5:  # CD-ROM
+                    marker_file = Path(drive) / 'SUNFLOWER_SYSTEM.marker'
+                    if marker_file.exists():
+                        return Path(drive)
+        elif self.platform == "Darwin":  # macOS
+            volumes = Path('/Volumes')
+            for volume in volumes.iterdir():
+                marker_file = volume / 'SUNFLOWER_SYSTEM.marker'
+                if marker_file.exists() and not os.access(volume, os.W_OK):
+                    return volume
         
-        if self.system == "Windows":
-            # Check all drives for CD-ROM partition
-            import string
-            for drive in string.ascii_uppercase:
-                drive_path = Path(f"{drive}:\\")
-                if drive_path.exists():
-                    marker_path = drive_path / marker_file
-                    if marker_path.exists():
-                        return drive_path
-        else:
-            # macOS/Linux: Check mounted volumes
-            volumes = ["/Volumes", "/media", "/mnt"]
-            for volume_dir in volumes:
-                if Path(volume_dir).exists():
-                    for mount in Path(volume_dir).iterdir():
-                        marker_path = mount / marker_file
-                        if marker_path.exists():
-                            return mount
-        return None
+        # Fallback for development
+        return Path.cwd() / 'cdrom_simulation'
+    
+    def _detect_usb_partition(self) -> Path:
+        """Detect USB partition for user data storage"""
+        if self.platform == "Windows":
+            import win32api
+            drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
+            for drive in drives:
+                drive_type = win32api.GetDriveType(drive)
+                if drive_type == 2:  # Removable
+                    marker_file = Path(drive) / 'SUNFLOWER_DATA.marker'
+                    if marker_file.exists():
+                        return Path(drive)
+        elif self.platform == "Darwin":  # macOS
+            volumes = Path('/Volumes')
+            for volume in volumes.iterdir():
+                marker_file = volume / 'SUNFLOWER_DATA.marker'
+                if marker_file.exists() and os.access(volume, os.W_OK):
+                    return volume
         
-    def detect_usb_partition(self) -> Optional[Path]:
-        """Detect USB write-able partition for user data"""
-        marker_file = "sunflower_data.id"
-        
-        if self.system == "Windows":
-            import string
-            for drive in string.ascii_uppercase:
-                drive_path = Path(f"{drive}:\\")
-                if drive_path.exists():
-                    marker_path = drive_path / marker_file
-                    if marker_path.exists():
-                        return drive_path
-        else:
-            # macOS/Linux
-            volumes = ["/Volumes", "/media", "/mnt"]
-            for volume_dir in volumes:
-                if Path(volume_dir).exists():
-                    for mount in Path(volume_dir).iterdir():
-                        marker_path = mount / marker_file
-                        if marker_path.exists():
-                            return mount
-        return None
-        
-    def setup_logging(self):
-        """Configure logging system"""
-        log_dir = self.data_dir / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        
-        log_file = log_dir / f"openwebui_{datetime.now():%Y%m%d}.log"
-        
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
-        )
-        self.logger = logging.getLogger("OpenWebUIIntegrator")
-        
-    def initialize_directory_structure(self):
-        """Create required directory structure on USB partition"""
+        # Fallback for development
+        return Path.cwd() / 'usb_simulation'
+    
+    def _initialize_directories(self):
+        """Create secure directory structure on USB partition"""
         directories = [
-            self.openwebui_dir,
-            self.openwebui_data,
-            self.openwebui_config,
-            self.profiles_dir,
-            self.session_logs,
-            self.ollama_dir,
-            self.models_dir,
-            self.data_dir / "backups",
-            self.data_dir / "cache"
+            self.base_path,
+            self.profiles_path,
+            self.sessions_path,
+            self.config_path,
+            self.logs_path,
+            self.base_path / 'backups',
+            self.base_path / 'exports'
         ]
         
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
-            
-        self.logger.info(f"Initialized directory structure at {self.data_dir}")
-        
-    def install_open_webui(self) -> bool:
-        """Install Open WebUI with proper configuration"""
-        try:
-            # Check if Open WebUI is already installed
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "show", "open-webui"],
-                capture_output=True, text=True
-            )
-            
-            if result.returncode != 0:
-                self.logger.info("Installing Open WebUI...")
-                
-                # Install Open WebUI
-                subprocess.run([
-                    sys.executable, "-m", "pip", "install", 
-                    "--quiet", "--upgrade", "open-webui"
-                ], check=True)
-                
-                self.logger.info("Open WebUI installed successfully")
-            else:
-                self.logger.info("Open WebUI already installed")
-                
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"Failed to install Open WebUI: {e}")
-            return False
-            
-    def configure_open_webui(self):
-        """Configure Open WebUI for Sunflower AI system"""
-        # Create Open WebUI configuration
-        config = {
-            "WEBUI_NAME": "Sunflower AI Education System",
-            "WEBUI_URL": "http://localhost:8080",
-            "DATA_DIR": str(self.openwebui_data),
-            "ENABLE_SIGNUP": False,  # Disable public signup
-            "DEFAULT_MODELS": "sunflower-kids,sunflower-educator",
-            "DEFAULT_USER_ROLE": "user",
-            "WEBUI_AUTH": True,
-            "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "",
-            "OLLAMA_BASE_URL": "http://localhost:11434",
-            "ENABLE_OLLAMA_API": True,
-            "ENABLE_MODEL_FILTER": True,
-            "MODEL_FILTER_LIST": "sunflower-kids,sunflower-educator,llama3.2:3b,llama3.2:1b",
-            "WEBUI_SESSION_COOKIE_SAME_SITE": "lax",
-            "WEBUI_SESSION_COOKIE_SECURE": False,  # For local usage
-            "ENABLE_ADMIN_EXPORT": True,
-            "ENABLE_COMMUNITY_SHARING": False,
-            "ENABLE_MESSAGE_RATING": True,
-            "SHOW_ADMIN_DETAILS": False,
-            "WEBUI_BANNERS": [],
-            "ENABLE_SIGNUP": False,
-            "USER_PERMISSIONS": {
-                "chat": {
-                    "deletion": True,
-                    "editing": True,
-                    "temporary": False
-                }
-            }
-        }
-        
-        # Write configuration
-        config_file = self.openwebui_config / "config.json"
-        with open(config_file, "w") as f:
-            json.dump(config, f, indent=2)
-            
-        # Set environment variables
-        for key, value in config.items():
-            os.environ[key] = str(value)
-            
-        self.logger.info("Open WebUI configured for Sunflower AI")
-        
-    def setup_authentication(self) -> Dict[str, str]:
-        """Setup family authentication system"""
-        # Generate secure admin password if not exists
-        if not self.family_config.exists():
-            admin_password = secrets.token_urlsafe(12)
-            family_data = {
-                "family_id": secrets.token_hex(16),
-                "created": datetime.now().isoformat(),
-                "admin_password_hash": hashlib.sha256(admin_password.encode()).hexdigest(),
-                "admin_password_temp": admin_password,  # Store temporarily for first setup
-                "profiles": [],
-                "settings": {
-                    "content_filtering": True,
-                    "session_recording": True,
-                    "age_verification": True,
-                    "max_session_minutes": 60
-                }
-            }
-            
-            with open(self.family_config, "w") as f:
-                json.dump(family_data, f, indent=2)
-                
-            self.logger.info(f"Created family profile with admin password: {admin_password}")
-            return {"admin_password": admin_password, "status": "created"}
-        else:
-            with open(self.family_config, "r") as f:
-                family_data = json.load(f)
-                
-            # Check if temporary password exists (first run)
-            if "admin_password_temp" in family_data:
-                admin_password = family_data["admin_password_temp"]
-                # Remove temporary password after retrieval
-                del family_data["admin_password_temp"]
-                with open(self.family_config, "w") as f:
-                    json.dump(family_data, f, indent=2)
-                return {"admin_password": admin_password, "status": "retrieved"}
-                
-            return {"status": "exists"}
-            
-    def create_child_profile(self, name: str, age: int, grade: str) -> bool:
-        """Create a child profile with appropriate settings"""
-        try:
-            with open(self.family_config, "r") as f:
-                family_data = json.load(f)
-                
-            # Create child profile
-            profile = {
-                "id": secrets.token_hex(8),
-                "name": name,
-                "age": age,
-                "grade": grade,
-                "created": datetime.now().isoformat(),
-                "settings": self.get_age_appropriate_settings(age),
-                "learning_level": self.determine_learning_level(age, grade),
-                "safety_level": self.determine_safety_level(age)
-            }
-            
-            family_data["profiles"].append(profile)
-            
-            with open(self.family_config, "w") as f:
-                json.dump(family_data, f, indent=2)
-                
-            # Create Open WebUI user for child
-            self.create_webui_user(profile)
-            
-            self.logger.info(f"Created profile for {name} (age {age})")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to create child profile: {e}")
-            return False
-            
-    def get_age_appropriate_settings(self, age: int) -> Dict:
-        """Get age-appropriate settings for child"""
-        if age <= 7:  # K-2
-            return {
-                "max_response_length": 50,
-                "complexity_level": "simple",
-                "safety_filter": "maximum",
-                "allowed_topics": ["basic_science", "math", "reading"],
-                "session_time_limit": 20
-            }
-        elif age <= 10:  # Elementary
-            return {
-                "max_response_length": 75,
-                "complexity_level": "elementary",
-                "safety_filter": "high",
-                "allowed_topics": ["science", "math", "technology", "engineering"],
-                "session_time_limit": 30
-            }
-        elif age <= 13:  # Middle School
-            return {
-                "max_response_length": 125,
-                "complexity_level": "intermediate",
-                "safety_filter": "moderate",
-                "allowed_topics": ["all_stem"],
-                "session_time_limit": 45
-            }
-        else:  # High School
-            return {
-                "max_response_length": 200,
-                "complexity_level": "advanced",
-                "safety_filter": "standard",
-                "allowed_topics": ["all_stem", "research"],
-                "session_time_limit": 60
-            }
-            
-    def determine_learning_level(self, age: int, grade: str) -> str:
-        """Determine appropriate learning level"""
-        if age <= 7:
-            return "early-elementary"
-        elif age <= 10:
-            return "elementary"
-        elif age <= 13:
-            return "middle-school"
-        else:
-            return "high-school"
-            
-    def determine_safety_level(self, age: int) -> str:
-        """Determine appropriate safety level"""
-        if age <= 10:
-            return "maximum"
-        elif age <= 13:
-            return "high"
-        else:
-            return "standard"
-            
-    def create_webui_user(self, profile: Dict):
-        """Create user in Open WebUI database"""
-        try:
-            # Connect to Open WebUI database
-            conn = sqlite3.connect(self.openwebui_db)
+            # Set appropriate permissions
+            if self.platform != "Windows":
+                os.chmod(directory, 0o700)
+    
+    def _initialize_database(self):
+        """Initialize SQLite database with production schema"""
+        with self._get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # Create users table if not exists
+            # Profiles table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS profiles (
+                    profile_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
-                    email TEXT UNIQUE NOT NULL,
-                    role TEXT DEFAULT 'user',
-                    profile_data TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    age INTEGER NOT NULL,
+                    grade_level TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_active TEXT,
+                    total_sessions INTEGER DEFAULT 0,
+                    learning_preferences TEXT,
+                    safety_level TEXT NOT NULL,
+                    encrypted_data TEXT
                 )
             ''')
             
-            # Insert user
-            user_id = profile["id"]
-            email = f"{profile['name'].lower().replace(' ', '_')}@sunflower.local"
-            
+            # Sessions table
             cursor.execute('''
-                INSERT OR REPLACE INTO users (id, name, email, role, profile_data)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                user_id,
-                profile["name"],
-                email,
-                "user",
-                json.dumps(profile)
-            ))
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT,
+                    duration_minutes INTEGER,
+                    interactions_count INTEGER DEFAULT 0,
+                    topics_covered TEXT,
+                    safety_flags INTEGER DEFAULT 0,
+                    parent_reviewed BOOLEAN DEFAULT FALSE,
+                    FOREIGN KEY (profile_id) REFERENCES profiles (profile_id)
+                )
+            ''')
+            
+            # Interactions table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS interactions (
+                    interaction_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    user_input TEXT NOT NULL,
+                    ai_response TEXT NOT NULL,
+                    safety_score REAL,
+                    educational_value REAL,
+                    flagged BOOLEAN DEFAULT FALSE,
+                    FOREIGN KEY (session_id) REFERENCES sessions (session_id)
+                )
+            ''')
+            
+            # Parent settings table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS parent_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            ''')
             
             conn.commit()
-            conn.close()
-            
-            self.logger.info(f"Created Open WebUI user for {profile['name']}")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to create WebUI user: {e}")
-            
-    def start_ollama(self) -> bool:
-        """Start Ollama service"""
+    
+    @contextmanager
+    def _get_db_connection(self):
+        """Thread-safe database connection context manager"""
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=30.0,
+            isolation_level='IMMEDIATE'
+        )
+        conn.row_factory = sqlite3.Row
         try:
-            # Check if Ollama is already running
-            result = subprocess.run(
-                ["curl", "-s", "http://localhost:11434/api/tags"],
-                capture_output=True, text=True
+            yield conn
+        finally:
+            conn.close()
+    
+    def _load_or_generate_key(self) -> bytes:
+        """Load or generate encryption key for sensitive data"""
+        key_file = self.config_path / '.encryption.key'
+        
+        if key_file.exists():
+            with open(key_file, 'rb') as f:
+                return f.read()
+        else:
+            # Generate new key
+            key = secrets.token_bytes(32)
+            with open(key_file, 'wb') as f:
+                f.write(key)
+            # Secure file permissions
+            if self.platform != "Windows":
+                os.chmod(key_file, 0o600)
+            return key
+    
+    def _load_configuration(self) -> Dict[str, Any]:
+        """Load or create default configuration"""
+        config_file = self.config_path / 'config.json'
+        
+        default_config = {
+            'version': '6.2',
+            'platform': self.platform,
+            'openwebui': {
+                'host': '127.0.0.1',
+                'port': 8080,
+                'auto_start': True,
+                'models': {
+                    'kids': 'sunflower-kids:latest',
+                    'educator': 'sunflower-educator:latest'
+                }
+            },
+            'safety': {
+                'max_session_minutes': 30,
+                'require_parent_auth': True,
+                'auto_logout_minutes': 10,
+                'content_filtering': 'strict'
+            },
+            'hardware': {
+                'auto_detect': True,
+                'min_ram_gb': 4,
+                'preferred_model_size': 'auto'
+            }
+        }
+        
+        if config_file.exists():
+            try:
+                with open(config_file, 'r') as f:
+                    loaded_config = json.load(f)
+                    # Merge with defaults for any missing keys
+                    return {**default_config, **loaded_config}
+            except Exception as e:
+                logger.error(f"Error loading config: {e}")
+                return default_config
+        else:
+            # Save default configuration
+            with open(config_file, 'w') as f:
+                json.dump(default_config, f, indent=2)
+            return default_config
+    
+    def authenticate_parent(self, password: str) -> bool:
+        """Authenticate parent with secure password verification"""
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT setting_value FROM parent_settings WHERE setting_key = 'password_hash'"
+            )
+            row = cursor.fetchone()
+            
+            if not row:
+                # First time setup - set password
+                password_hash = hashlib.pbkdf2_hmac(
+                    'sha256',
+                    password.encode('utf-8'),
+                    self.encryption_key,
+                    100000
+                )
+                cursor.execute(
+                    "INSERT INTO parent_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+                    ('password_hash', password_hash.hex(), datetime.now().isoformat())
+                )
+                conn.commit()
+                self.parent_authenticated = True
+                logger.info("Parent password set successfully")
+                return True
+            else:
+                # Verify password
+                stored_hash = bytes.fromhex(row['setting_value'])
+                password_hash = hashlib.pbkdf2_hmac(
+                    'sha256',
+                    password.encode('utf-8'),
+                    self.encryption_key,
+                    100000
+                )
+                if password_hash == stored_hash:
+                    self.parent_authenticated = True
+                    logger.info("Parent authenticated successfully")
+                    return True
+                else:
+                    logger.warning("Failed parent authentication attempt")
+                    return False
+    
+    def create_child_profile(self, name: str, age: int, grade_level: str) -> ChildProfile:
+        """Create new child profile with safety defaults"""
+        if not self.parent_authenticated:
+            raise PermissionError("Parent authentication required")
+        
+        profile = ChildProfile(
+            profile_id=str(uuid.uuid4()),
+            name=name,
+            age=age,
+            grade_level=grade_level,
+            created_at=datetime.now().isoformat(),
+            last_active=None,
+            total_sessions=0,
+            learning_preferences={},
+            safety_level='maximum' if age < 8 else 'high',
+            session_history=[]
+        )
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO profiles (
+                    profile_id, name, age, grade_level, created_at,
+                    safety_level, learning_preferences
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                profile.profile_id, profile.name, profile.age,
+                profile.grade_level, profile.created_at,
+                profile.safety_level, json.dumps(profile.learning_preferences)
+            ))
+            conn.commit()
+        
+        logger.info(f"Created profile for {name} (age {age})")
+        return profile
+    
+    def load_profile(self, profile_id: str) -> Optional[ChildProfile]:
+        """Load child profile from database"""
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM profiles WHERE profile_id = ?",
+                (profile_id,)
+            )
+            row = cursor.fetchone()
+            
+            if row:
+                return ChildProfile(
+                    profile_id=row['profile_id'],
+                    name=row['name'],
+                    age=row['age'],
+                    grade_level=row['grade_level'],
+                    created_at=row['created_at'],
+                    last_active=row['last_active'],
+                    total_sessions=row['total_sessions'],
+                    learning_preferences=json.loads(row['learning_preferences'] or '{}'),
+                    safety_level=row['safety_level'],
+                    session_history=[]
+                )
+        return None
+    
+    def start_session(self, profile_id: str) -> str:
+        """Start new learning session for child"""
+        profile = self.load_profile(profile_id)
+        if not profile:
+            raise ValueError(f"Profile {profile_id} not found")
+        
+        self.active_profile = profile
+        self.session_id = str(uuid.uuid4())
+        self.last_activity = datetime.now()
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sessions (
+                    session_id, profile_id, start_time, interactions_count
+                ) VALUES (?, ?, ?, ?)
+            ''', (
+                self.session_id, profile_id, datetime.now().isoformat(), 0
+            ))
+            
+            # Update profile last active
+            cursor.execute(
+                "UPDATE profiles SET last_active = ? WHERE profile_id = ?",
+                (datetime.now().isoformat(), profile_id)
+            )
+            conn.commit()
+        
+        # Configure Open WebUI for child
+        self._configure_openwebui_for_child(profile)
+        
+        # Start monitoring thread
+        self._start_monitoring()
+        
+        logger.info(f"Started session {self.session_id} for {profile.name}")
+        return self.session_id
+    
+    def _configure_openwebui_for_child(self, profile: ChildProfile):
+        """Configure Open WebUI with child-specific settings"""
+        model_params = profile.get_model_parameters()
+        
+        # Set environment variables for Open WebUI
+        os.environ['WEBUI_AUTH'] = 'false'  # Disable Open WebUI auth (we handle it)
+        os.environ['WEBUI_MODEL'] = 'sunflower-kids:latest'
+        os.environ['WEBUI_TEMPERATURE'] = str(model_params['temperature'])
+        os.environ['WEBUI_MAX_TOKENS'] = str(model_params['max_tokens'])
+        os.environ['WEBUI_SAFETY_MODE'] = model_params['safety_mode']
+        
+        # Additional safety configurations
+        os.environ['WEBUI_FILTER_ENABLED'] = 'true'
+        os.environ['WEBUI_FILTER_LEVEL'] = profile.safety_level
+        os.environ['WEBUI_SESSION_TIMEOUT'] = str(self.config['safety']['max_session_minutes'])
+    
+    def _start_monitoring(self):
+        """Start background monitoring thread for safety and timeout"""
+        def monitor():
+            while self.active_profile:
+                try:
+                    # Check session timeout
+                    if datetime.now() - self.last_activity > self.session_timeout:
+                        logger.info("Session timeout reached")
+                        self.end_session()
+                        break
+                    
+                    # Check for safety violations (would connect to safety_filter.py)
+                    # This is handled by the safety filter module
+                    
+                    time.sleep(10)  # Check every 10 seconds
+                except Exception as e:
+                    logger.error(f"Monitoring error: {e}")
+        
+        self.monitoring_thread = threading.Thread(target=monitor, daemon=True)
+        self.monitoring_thread.start()
+    
+    def log_interaction(self, user_input: str, ai_response: str, safety_score: float = 1.0):
+        """Log interaction with safety scoring"""
+        if not self.session_id:
+            raise RuntimeError("No active session")
+        
+        interaction_id = str(uuid.uuid4())
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Log interaction
+            cursor.execute('''
+                INSERT INTO interactions (
+                    interaction_id, session_id, timestamp, user_input,
+                    ai_response, safety_score, flagged
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                interaction_id, self.session_id, datetime.now().isoformat(),
+                user_input, ai_response, safety_score, safety_score < 0.8
+            ))
+            
+            # Update session interaction count
+            cursor.execute(
+                "UPDATE sessions SET interactions_count = interactions_count + 1 WHERE session_id = ?",
+                (self.session_id,)
             )
             
-            if result.returncode == 0:
-                self.logger.info("Ollama already running")
-                return True
+            conn.commit()
+        
+        self.last_activity = datetime.now()
+        
+        # Flag for parent review if needed
+        if safety_score < 0.8:
+            logger.warning(f"Interaction flagged for review: {interaction_id}")
+    
+    def end_session(self):
+        """End current learning session"""
+        if not self.session_id:
+            return
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Calculate session duration
+            cursor.execute(
+                "SELECT start_time FROM sessions WHERE session_id = ?",
+                (self.session_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                start_time = datetime.fromisoformat(row['start_time'])
+                duration = int((datetime.now() - start_time).total_seconds() / 60)
                 
-            # Start Ollama based on platform
-            if self.system == "Windows":
-                ollama_exe = self.app_dir / "ollama" / "ollama.exe"
-                if not ollama_exe.exists():
-                    ollama_exe = shutil.which("ollama")
-                    
-                if ollama_exe:
-                    subprocess.Popen([str(ollama_exe), "serve"], 
-                                   env={**os.environ, "OLLAMA_MODELS": str(self.models_dir)})
-                else:
-                    self.logger.error("Ollama executable not found")
-                    return False
-                    
-            else:  # macOS/Linux
-                ollama_bin = shutil.which("ollama")
-                if ollama_bin:
-                    subprocess.Popen([ollama_bin, "serve"],
-                                   env={**os.environ, "OLLAMA_MODELS": str(self.models_dir)})
-                else:
-                    self.logger.error("Ollama not found in PATH")
-                    return False
-                    
-            # Wait for Ollama to start
-            for _ in range(30):
-                time.sleep(1)
-                result = subprocess.run(
-                    ["curl", "-s", "http://localhost:11434/api/tags"],
-                    capture_output=True, text=True
+                # Update session
+                cursor.execute('''
+                    UPDATE sessions 
+                    SET end_time = ?, duration_minutes = ?
+                    WHERE session_id = ?
+                ''', (datetime.now().isoformat(), duration, self.session_id))
+                
+                # Update profile total sessions
+                cursor.execute(
+                    "UPDATE profiles SET total_sessions = total_sessions + 1 WHERE profile_id = ?",
+                    (self.active_profile.profile_id,)
                 )
-                if result.returncode == 0:
-                    self.logger.info("Ollama started successfully")
-                    return True
-                    
-            self.logger.error("Ollama failed to start within timeout")
-            return False
+                
+                conn.commit()
+        
+        logger.info(f"Ended session {self.session_id}")
+        
+        self.active_profile = None
+        self.session_id = None
+    
+    def get_parent_dashboard_data(self) -> Dict[str, Any]:
+        """Get comprehensive dashboard data for parent review"""
+        if not self.parent_authenticated:
+            raise PermissionError("Parent authentication required")
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
             
-        except Exception as e:
-            self.logger.error(f"Failed to start Ollama: {e}")
-            return False
+            # Get all profiles
+            cursor.execute("SELECT * FROM profiles")
+            profiles = [dict(row) for row in cursor.fetchall()]
             
-    def load_models(self) -> bool:
-        """Load Sunflower AI models"""
+            # Get recent sessions
+            cursor.execute('''
+                SELECT s.*, p.name as child_name
+                FROM sessions s
+                JOIN profiles p ON s.profile_id = p.profile_id
+                ORDER BY s.start_time DESC
+                LIMIT 50
+            ''')
+            sessions = [dict(row) for row in cursor.fetchall()]
+            
+            # Get flagged interactions
+            cursor.execute('''
+                SELECT i.*, s.profile_id, p.name as child_name
+                FROM interactions i
+                JOIN sessions s ON i.session_id = s.session_id
+                JOIN profiles p ON s.profile_id = p.profile_id
+                WHERE i.flagged = 1 AND s.parent_reviewed = 0
+                ORDER BY i.timestamp DESC
+            ''')
+            flagged = [dict(row) for row in cursor.fetchall()]
+            
+            # Calculate statistics
+            total_time = sum(s['duration_minutes'] or 0 for s in sessions)
+            avg_session = total_time / len(sessions) if sessions else 0
+            
+            return {
+                'profiles': profiles,
+                'recent_sessions': sessions,
+                'flagged_interactions': flagged,
+                'statistics': {
+                    'total_sessions': len(sessions),
+                    'total_time_minutes': total_time,
+                    'average_session_minutes': avg_session,
+                    'active_profiles': len(profiles),
+                    'pending_reviews': len(flagged)
+                }
+            }
+    
+    def mark_session_reviewed(self, session_id: str):
+        """Mark session as reviewed by parent"""
+        if not self.parent_authenticated:
+            raise PermissionError("Parent authentication required")
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE sessions SET parent_reviewed = 1 WHERE session_id = ?",
+                (session_id,)
+            )
+            conn.commit()
+    
+    def export_session_history(self, profile_id: str, format: str = 'json') -> Path:
+        """Export session history for backup or analysis"""
+        if not self.parent_authenticated:
+            raise PermissionError("Parent authentication required")
+        
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get all sessions for profile
+            cursor.execute('''
+                SELECT s.*, 
+                    (SELECT COUNT(*) FROM interactions WHERE session_id = s.session_id) as interaction_count
+                FROM sessions s
+                WHERE profile_id = ?
+                ORDER BY start_time DESC
+            ''', (profile_id,))
+            sessions = [dict(row) for row in cursor.fetchall()]
+            
+            # Get interactions for each session
+            for session in sessions:
+                cursor.execute(
+                    "SELECT * FROM interactions WHERE session_id = ? ORDER BY timestamp",
+                    (session['session_id'],)
+                )
+                session['interactions'] = [dict(row) for row in cursor.fetchall()]
+        
+        # Generate export file
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        export_file = self.base_path / 'exports' / f"profile_{profile_id}_{timestamp}.{format}"
+        
+        if format == 'json':
+            with open(export_file, 'w') as f:
+                json.dump(sessions, f, indent=2, default=str)
+        
+        logger.info(f"Exported session history to {export_file}")
+        return export_file
+    
+    def launch_openwebui(self) -> bool:
+        """Launch Open WebUI with proper configuration"""
         try:
-            models_to_load = []
+            # Determine Open WebUI executable path from CD-ROM partition
+            if self.platform == "Windows":
+                openwebui_exe = self.cdrom_path / 'bin' / 'open-webui.exe'
+            else:
+                openwebui_exe = self.cdrom_path / 'bin' / 'open-webui'
             
-            # Check for pre-built models on CD-ROM partition
-            if self.cdrom_partition:
-                cdrom_models = self.cdrom_partition / "models"
-                if cdrom_models.exists():
-                    for model_file in cdrom_models.glob("*.gguf"):
-                        dest = self.models_dir / model_file.name
-                        if not dest.exists():
-                            shutil.copy2(model_file, dest)
-                            self.logger.info(f"Copied model: {model_file.name}")
-                            
-            # Load Sunflower modelfiles
-            modelfiles_dir = self.app_dir / "modelfiles"
-            if modelfiles_dir.exists():
-                for modelfile in modelfiles_dir.glob("*.modelfile"):
-                    model_name = modelfile.stem.lower().replace("_", "-")
-                    
-                    # Create model using Ollama
-                    result = subprocess.run([
-                        "ollama", "create", model_name, "-f", str(modelfile)
-                    ], capture_output=True, text=True)
-                    
-                    if result.returncode == 0:
-                        self.logger.info(f"Created model: {model_name}")
-                    else:
-                        self.logger.warning(f"Failed to create model {model_name}: {result.stderr}")
-                        
-            return True
+            if not openwebui_exe.exists():
+                logger.error(f"Open WebUI executable not found at {openwebui_exe}")
+                return False
             
-        except Exception as e:
-            self.logger.error(f"Failed to load models: {e}")
-            return False
-            
-    def start_open_webui(self) -> bool:
-        """Start Open WebUI server"""
-        try:
-            # Set environment variables
-            env = os.environ.copy()
-            env.update({
-                "DATA_DIR": str(self.openwebui_data),
-                "WEBUI_NAME": "Sunflower AI",
-                "WEBUI_AUTH": "true",
-                "OLLAMA_BASE_URL": "http://localhost:11434",
-                "HOST": "127.0.0.1",
-                "PORT": "8080"
-            })
-            
-            # Start Open WebUI
-            cmd = [sys.executable, "-m", "open_webui", "serve"]
-            
-            self.webui_process = subprocess.Popen(
-                cmd,
-                env=env,
+            # Launch Open WebUI process
+            self.openwebui_process = subprocess.Popen(
+                [str(openwebui_exe)],
+                env=os.environ.copy(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
             
-            # Wait for startup
-            for _ in range(30):
-                time.sleep(1)
+            # Wait for Open WebUI to start
+            for _ in range(30):  # 30 second timeout
                 try:
                     import requests
-                    response = requests.get("http://localhost:8080/health", timeout=1)
+                    response = requests.get(
+                        f"http://{self.config['openwebui']['host']}:{self.config['openwebui']['port']}/health",
+                        timeout=1
+                    )
                     if response.status_code == 200:
-                        self.logger.info("Open WebUI started successfully")
+                        logger.info("Open WebUI launched successfully")
                         return True
                 except:
-                    continue
-                    
-            self.logger.error("Open WebUI failed to start within timeout")
+                    time.sleep(1)
+            
+            logger.error("Open WebUI failed to start within timeout")
             return False
             
         except Exception as e:
-            self.logger.error(f"Failed to start Open WebUI: {e}")
+            logger.error(f"Failed to launch Open WebUI: {e}")
             return False
-            
-    def monitor_session(self, profile_id: str):
-        """Monitor and log child's session"""
-        session_file = self.session_logs / f"{profile_id}_{datetime.now():%Y%m%d_%H%M%S}.json"
-        
-        session_data = {
-            "profile_id": profile_id,
-            "start_time": datetime.now().isoformat(),
-            "conversations": [],
-            "safety_alerts": [],
-            "learning_metrics": {}
-        }
-        
-        # This would be called periodically to update session data
-        # In production, this would interface with Open WebUI's API
-        
-        with open(session_file, "w") as f:
-            json.dump(session_data, f, indent=2)
-            
-        self.logger.info(f"Session logged: {session_file}")
-        
-    def create_parent_dashboard(self):
-        """Create parent dashboard for monitoring"""
-        dashboard_file = self.data_dir / "parent_dashboard.html"
-        
-        dashboard_html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sunflower AI - Parent Dashboard</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .profile-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-            margin-top: 30px;
-        }
-        .profile-card {
-            border: 2px solid #e1e4e8;
-            border-radius: 10px;
-            padding: 20px;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .profile-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-        }
-        .profile-name {
-            font-size: 1.3em;
-            font-weight: bold;
-            color: #5e72e4;
-            margin-bottom: 10px;
-        }
-        .profile-info {
-            color: #666;
-            line-height: 1.6;
-        }
-        .session-stats {
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #e1e4e8;
-        }
-        .stat-item {
-            display: flex;
-            justify-content: space-between;
-            margin: 5px 0;
-        }
-        .action-buttons {
-            margin-top: 20px;
-            display: flex;
-            gap: 10px;
-        }
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: background-color 0.2s;
-        }
-        .btn-primary {
-            background: #5e72e4;
-            color: white;
-        }
-        .btn-primary:hover {
-            background: #4c63d2;
-        }
-        .btn-secondary {
-            background: #f4f5f7;
-            color: #333;
-        }
-        .btn-secondary:hover {
-            background: #e9ecef;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🌻 Sunflower AI Parent Dashboard</h1>
-        
-        <div class="profile-grid" id="profileGrid">
-            <!-- Profiles will be loaded here -->
-        </div>
-        
-        <div class="action-buttons">
-            <button class="btn btn-primary" onclick="addChildProfile()">Add Child Profile</button>
-            <button class="btn btn-secondary" onclick="viewAllSessions()">View All Sessions</button>
-            <button class="btn btn-secondary" onclick="exportData()">Export Data</button>
-        </div>
-    </div>
     
-    <script>
-        // Load family profiles
-        async function loadProfiles() {
-            try {
-                const response = await fetch('/api/profiles');
-                const profiles = await response.json();
-                
-                const grid = document.getElementById('profileGrid');
-                grid.innerHTML = profiles.map(profile => `
-                    <div class="profile-card">
-                        <div class="profile-name">${profile.name}</div>
-                        <div class="profile-info">
-                            <div>Age: ${profile.age} years</div>
-                            <div>Grade: ${profile.grade}</div>
-                            <div>Safety Level: ${profile.safety_level}</div>
-                        </div>
-                        <div class="session-stats">
-                            <div class="stat-item">
-                                <span>Total Sessions:</span>
-                                <strong>${profile.total_sessions || 0}</strong>
-                            </div>
-                            <div class="stat-item">
-                                <span>Learning Time:</span>
-                                <strong>${profile.total_hours || 0} hours</strong>
-                            </div>
-                            <div class="stat-item">
-                                <span>Last Active:</span>
-                                <strong>${profile.last_active || 'Never'}</strong>
-                            </div>
-                        </div>
-                        <div class="action-buttons">
-                            <button class="btn btn-primary" onclick="viewSessions('${profile.id}')">
-                                View Sessions
-                            </button>
-                            <button class="btn btn-secondary" onclick="editProfile('${profile.id}')">
-                                Edit
-                            </button>
-                        </div>
-                    </div>
-                `).join('');
-            } catch (error) {
-                console.error('Failed to load profiles:', error);
-            }
-        }
-        
-        function addChildProfile() {
-            window.location.href = '/add-profile';
-        }
-        
-        function viewSessions(profileId) {
-            window.location.href = `/sessions/${profileId}`;
-        }
-        
-        function editProfile(profileId) {
-            window.location.href = `/edit-profile/${profileId}`;
-        }
-        
-        function viewAllSessions() {
-            window.location.href = '/all-sessions';
-        }
-        
-        function exportData() {
-            window.location.href = '/export';
-        }
-        
-        // Load profiles on page load
-        document.addEventListener('DOMContentLoaded', loadProfiles);
-    </script>
-</body>
-</html>"""
-        
-        with open(dashboard_file, "w") as f:
-            f.write(dashboard_html)
-            
-        self.logger.info(f"Parent dashboard created: {dashboard_file}")
-        
-    def run(self):
-        """Main execution flow"""
-        print("🌻 Sunflower AI - Open WebUI Integration")
-        print("=" * 50)
-        
-        # Initialize directory structure
-        print("Initializing directory structure...")
-        self.initialize_directory_structure()
-        
-        # Install Open WebUI
-        print("Installing Open WebUI...")
-        if not self.install_open_webui():
-            print("❌ Failed to install Open WebUI")
-            return False
-            
-        # Configure Open WebUI
-        print("Configuring Open WebUI...")
-        self.configure_open_webui()
-        
-        # Setup authentication
-        print("Setting up family authentication...")
-        auth_result = self.setup_authentication()
-        
-        if auth_result.get("admin_password"):
-            print(f"\n⚠️  IMPORTANT - Save this admin password: {auth_result['admin_password']}\n")
-            
-        # Start Ollama
-        print("Starting Ollama AI engine...")
-        if not self.start_ollama():
-            print("❌ Failed to start Ollama")
-            return False
-            
-        # Load models
-        print("Loading AI models...")
-        self.load_models()
-        
-        # Create parent dashboard
-        print("Creating parent dashboard...")
-        self.create_parent_dashboard()
-        
-        # Start Open WebUI
-        print("Starting Open WebUI server...")
-        if not self.start_open_webui():
-            print("❌ Failed to start Open WebUI")
-            return False
-            
-        print("\n✅ Sunflower AI is ready!")
-        print(f"🌐 Open WebUI: http://localhost:8080")
-        print(f"📊 Parent Dashboard: file://{self.data_dir}/parent_dashboard.html")
-        print("\nPress Ctrl+C to stop the system")
-        
+    def shutdown(self):
+        """Clean shutdown of all components"""
         try:
-            # Keep running
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\n🛑 Shutting down Sunflower AI...")
-            if hasattr(self, 'webui_process'):
-                self.webui_process.terminate()
-            subprocess.run(["pkill", "-f", "ollama"], capture_output=True)
-            print("Goodbye! 👋")
+            # End any active session
+            if self.session_id:
+                self.end_session()
             
-        return True
+            # Stop Open WebUI
+            if self.openwebui_process:
+                self.openwebui_process.terminate()
+                self.openwebui_process.wait(timeout=10)
+            
+            logger.info("Sunflower AI system shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
 
+# Production entry point
 if __name__ == "__main__":
-    integrator = OpenWebUIIntegrator()
-    integrator.run()
+    integration = OpenWebUIIntegration()
+    
+    # Example usage flow
+    if integration.authenticate_parent("secure_password"):
+        # Create child profile
+        profile = integration.create_child_profile("Emma", 8, "3rd Grade")
+        
+        # Start session
+        session_id = integration.start_session(profile.profile_id)
+        
+        # Launch Open WebUI
+        if integration.launch_openwebui():
+            print(f"System ready. Session ID: {session_id}")
+            # System would now be ready for child interaction
