@@ -1,1 +1,474 @@
+# Sunflower AI Professional System - Git Ignore Patterns
+# Version: 6.2
+# Comprehensive ignore patterns for production repository
 
+###########################################
+# Python
+###########################################
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-wheel-metadata/
+
+# PyInstaller build artifacts
+*.manifest
+*.spec
+build/
+dist/
+*.exe
+*.dll
+*.dylib
+*.app
+*.dmg
+*.pkg
+*.msi
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+python-env/
+.conda/
+conda-env/
+virtualenv/
+
+# Testing
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+cover/
+htmlcov/
+.hypothesis/
+*.cover
+*.log
+.benchmarks/
+test-results/
+test-reports/
+junit.xml
+coverage.xml
+*.coveragerc
+
+# Documentation
+docs/_build/
+docs/_static/
+docs/_templates/
+site/
+.sphinx/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+###########################################
+# Sunflower AI Specific
+###########################################
+# User data (should stay on USB partition only)
+sunflower_data/
+profiles/
+sessions/
+conversation_logs/
+parent_reports/
+exports/
+backups/
+
+# Model files (large binaries)
+*.gguf
+*.bin
+*.pth
+*.pt
+*.onnx
+*.safetensors
+models/
+model_cache/
+ollama_models/
+
+# Configuration with secrets
+config/secrets.yaml
+config/production.yaml
+.encryption.key
+*.key
+*.pem
+*.crt
+*.pfx
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+webui.db
+sunflower.db
+
+# Open WebUI specific
+openwebui_data/
+.webui/
+webui_cache/
+webui_uploads/
+static/generated/
+templates/compiled/
+
+# Logs
+*.log
+*.log.*
+logs/
+log/
+*.out
+*.err
+error.log
+access.log
+debug.log
+sunflower_ai.log
+
+# Session data
+sessions/
+session_recordings/
+interaction_logs/
+safety_reports/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+.classpath
+*.code-workspace
+.vs/
+.history/
+.vim/
+*.vim
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.development
+.env.test
+.env.production
+.env.*.local
+env.sh
+secrets.sh
+config.local.yaml
+
+###########################################
+# Platform Specific
+###########################################
+# Windows
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.idb
+*.res
+*.rc
+*.manifest
+*.lastbuildstate
+*.tlog
+Debug/
+Release/
+x64/
+x86/
+Autorun.inf
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+.AppleDouble
+.LSOverride
+.DocumentRevisions-V100
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+*.dmg
+*.app
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+###########################################
+# Build and Packaging
+###########################################
+# Partition images
+*.iso
+*.img
+*.vhd
+*.vmdk
+partition_cdrom/
+partition_usb/
+device_image/
+
+# Installer files
+installer/
+setup/
+*.nsi
+*.iss
+Output/
+InnoSetup/
+
+# Distribution packages
+packages/
+release/
+releases/
+artifacts/
+
+# Signing certificates
+codesign/
+certificates/
+*.p12
+*.cer
+
+###########################################
+# CI/CD
+###########################################
+.github/workflows/local/
+.gitlab-ci-local/
+.jenkins/
+.circleci/local/
+.travis/
+azure-pipelines/
+
+# Build artifacts
+target/
+out/
+bin/
+obj/
+
+###########################################
+# Security
+###########################################
+# Private keys and certificates
+*.key
+*.pem
+*.crt
+*.cer
+*.pfx
+*.p12
+private/
+certificates/
+ssl/
+
+# Auth tokens and secrets
+tokens.json
+secrets.json
+credentials.json
+auth.json
+api_keys.txt
+.secrets/
+
+# Encrypted files
+*.gpg
+*.pgp
+*.asc
+*.enc
+
+###########################################
+# Development Tools
+###########################################
+# Docker
+.docker/
+docker-compose.override.yml
+.dockerignore.local
+
+# Kubernetes
+*.kubeconfig
+kubeconfig
+.kube/
+
+# Vagrant
+.vagrant/
+Vagrantfile.local
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+
+###########################################
+# Backup and Recovery
+###########################################
+backup/
+backups/
+*.backup
+*.old
+*.orig
+recovery/
+restore/
+
+###########################################
+# Performance and Profiling
+###########################################
+*.prof
+*.lprof
+*.calltree
+profiles/
+profiling/
+benchmarks/
+performance/
+
+###########################################
+# Cache
+###########################################
+.cache/
+cache/
+__pycache__/
+*.pyc
+.sass-cache/
+node_modules/
+bower_components/
+
+###########################################
+# Miscellaneous
+###########################################
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Media files (for size considerations)
+*.mp4
+*.avi
+*.mov
+*.mp3
+*.wav
+*.flac
+
+# Large data files
+*.csv
+*.xlsx
+*.xls
+data/
+datasets/
+raw_data/
+
+# Scratch work
+scratch/
+tmp/
+temp/
+playground/
+experiments/
+sandbox/
+
+# Personal notes
+notes.txt
+notes.md
+TODO.txt
+TODO.md
+personal/
+private/
+
+# Lock files (controversial, but for this project)
+Pipfile.lock
+poetry.lock
+package-lock.json
+yarn.lock
+
+###########################################
+# DO NOT IGNORE - Critical for Production
+###########################################
+# !requirements.txt
+# !requirements-dev.txt
+# !Modelfiles/
+# !Documentation/
+# !quickstart_guide.md
+# !safety_filters/default/
+# !cdrom_simulation/SUNFLOWER_SYSTEM.marker
+# !usb_simulation/SUNFLOWER_DATA.marker
