@@ -1,1 +1,377 @@
-
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Application Identification -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sunflower AI Professional</string>
+	<key>CFBundleExecutable</key>
+	<string>SunflowerAI</string>
+	<key>CFBundleIconFile</key>
+	<string>sunflower.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.sunflowerai.professional</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SunflowerAI</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>6.2.0</string>
+	<key>CFBundleSignature</key>
+	<string>SNFL</string>
+	<key>CFBundleVersion</key>
+	<string>6.2.0</string>
+	
+	<!-- Application Category -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.education</string>
+	
+	<!-- System Requirements -->
+	<key>LSMinimumSystemVersion</key>
+	<string>10.14.0</string>
+	<key>LSRequiresCarbon</key>
+	<false/>
+	<key>LSArchitecturePriority</key>
+	<array>
+		<string>arm64</string>
+		<string>x86_64</string>
+	</array>
+	
+	<!-- UI Configuration -->
+	<key>LSBackgroundOnly</key>
+	<false/>
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSRequiresAquaSystemAppearance</key>
+	<false/>
+	
+	<!-- Copyright and Credits -->
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2025 Sunflower AI Systems. All rights reserved.</string>
+	<key>NSMainNibFile</key>
+	<string>MainMenu</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	
+	<!-- Privacy and Permissions -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sunflower AI Professional uses the microphone for voice-based learning interactions and to provide audio feedback for educational content.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Sunflower AI Professional uses the camera for visual learning features, including science experiments and interactive demonstrations.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Sunflower AI Professional needs to interact with other applications to provide comprehensive educational experiences.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Sunflower AI Professional does not access your contacts.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Sunflower AI Professional may access calendars to help schedule study sessions and track learning milestones.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Sunflower AI Professional may create reminders for homework and study sessions with parental permission.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Sunflower AI Professional may save educational content and project screenshots to your photo library.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Sunflower AI Professional may save educational achievements and certificates to your photo library.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Sunflower AI Professional needs access to the Documents folder to save learning materials and progress reports.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Sunflower AI Professional may save educational resources to your Downloads folder.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Sunflower AI Professional may save quick access shortcuts and learning materials to your Desktop.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Sunflower AI Professional needs access to network volumes to read and write educational content on shared drives.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Sunflower AI Professional requires access to removable volumes to access the USB partition for profile data.</string>
+	<key>NSFileProviderDomainUsageDescription</key>
+	<string>Sunflower AI Professional may access cloud storage to sync learning progress across devices.</string>
+	
+	<!-- File Type Associations -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Sunflower AI Profile</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>sfprofile</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>profile-icon.icns</string>
+			<key>CFBundleTypeMIMETypes</key>
+			<array>
+				<string>application/x-sunflowerai-profile</string>
+			</array>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.sunflowerai.profile</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Sunflower AI Conversation</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>sfconv</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>conversation-icon.icns</string>
+			<key>CFBundleTypeMIMETypes</key>
+			<array>
+				<string>application/x-sunflowerai-conversation</string>
+			</array>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.sunflowerai.conversation</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Sunflower AI Lesson</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>sflesson</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>lesson-icon.icns</string>
+			<key>CFBundleTypeMIMETypes</key>
+			<array>
+				<string>application/x-sunflowerai-lesson</string>
+			</array>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.sunflowerai.lesson</string>
+			</array>
+		</dict>
+	</array>
+	
+	<!-- URL Schemes -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Sunflower AI URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sunflowerai</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Sunflower AI Profile URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sunflowerai-profile</string>
+			</array>
+		</dict>
+	</array>
+	
+	<!-- Exported Type Definitions -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.sunflowerai.profile</string>
+			<key>UTTypeDescription</key>
+			<string>Sunflower AI User Profile</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>sfprofile</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/x-sunflowerai-profile</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.sunflowerai.conversation</string>
+			<key>UTTypeDescription</key>
+			<string>Sunflower AI Conversation Log</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>sfconv</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/x-sunflowerai-conversation</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.sunflowerai.lesson</string>
+			<key>UTTypeDescription</key>
+			<string>Sunflower AI Lesson Package</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>sflesson</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/x-sunflowerai-lesson</string>
+			</dict>
+		</dict>
+	</array>
+	
+	<!-- Application Support -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>http</string>
+		<string>https</string>
+		<string>file</string>
+	</array>
+	
+	<!-- Custom Application Properties -->
+	<key>SunflowerAI</key>
+	<dict>
+		<key>Version</key>
+		<string>6.2.0</string>
+		<key>BuildNumber</key>
+		<string>20250101</string>
+		<key>ModelVersion</key>
+		<string>6.2</string>
+		<key>SafetyLevel</key>
+		<string>Maximum</string>
+		<key>OfflineCapable</key>
+		<true/>
+		<key>FamilyFriendly</key>
+		<true/>
+		<key>AgeRange</key>
+		<string>5-17</string>
+		<key>SubjectAreas</key>
+		<array>
+			<string>Science</string>
+			<string>Technology</string>
+			<string>Engineering</string>
+			<string>Mathematics</string>
+		</array>
+		<key>SupportedLanguages</key>
+		<array>
+			<string>en</string>
+		</array>
+		<key>PartitionSupport</key>
+		<dict>
+			<key>CDROMPartition</key>
+			<string>SUNFLOWER_AI</string>
+			<key>USBPartition</key>
+			<string>SUNFLOWER_DATA</string>
+		</dict>
+	</dict>
+	
+	<!-- Development and Build Information -->
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>14E222b</string>
+	<key>DTPlatformName</key>
+	<string>macosx</string>
+	<key>DTPlatformVersion</key>
+	<string>13.3</string>
+	<key>DTSDKBuild</key>
+	<string>22E245</string>
+	<key>DTSDKName</key>
+	<string>macosx13.3</string>
+	<key>DTXcode</key>
+	<string>1430</string>
+	<key>DTXcodeBuild</key>
+	<string>14E222b</string>
+	<key>BuildMachineOSBuild</key>
+	<string>22G91</string>
+	
+	<!-- Launch Services -->
+	<key>LSFileQuarantineEnabled</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<false/>
+	<key>LSRequiresNativeExecution</key>
+	<true/>
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
+	
+	<!-- Accessibility -->
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Sunflower AI Professional uses accessibility features to provide an inclusive learning experience for all students.</string>
+	
+	<!-- App Transport Security -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	
+	<!-- Services -->
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Ask Sunflower AI</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>askSunflowerAI</string>
+			<key>NSPortName</key>
+			<string>SunflowerAI</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+			</array>
+		</dict>
+	</array>
+	
+	<!-- Spotlight -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.sunflowerai.professional.conversation</string>
+		<string>com.sunflowerai.professional.lesson</string>
+		<string>com.sunflowerai.professional.profile</string>
+	</array>
+</dict>
+</plist>
