@@ -1,0 +1,232 @@
+# Sunflower AI Professional System - Build Configuration
+# Version: 6.2
+# This file controls all build parameters and options
+
+application:
+  name: "Sunflower AI Professional"
+  version: "6.2.0"
+  build_number: "20250101"
+  bundle_id: "com.sunflowerai.professional"
+  copyright: "Copyright © 2025 Sunflower AI Systems. All rights reserved."
+  company: "Sunflower AI Systems"
+  description: "Family-Focused K-12 STEM Education System"
+
+platforms:
+  windows:
+    enabled: true
+    min_version: "10.0"
+    architectures: ["x64"]
+    installer_type: "msi"
+    code_signing:
+      enabled: false  # Set to true with valid certificate
+      certificate_path: null
+      password_env_var: "WINDOWS_CERT_PASSWORD"
+    features:
+      - autorun
+      - registry_integration
+      - firewall_exception
+      - shortcuts
+    
+  macos:
+    enabled: true
+    min_version: "10.14"
+    architectures: ["universal2"]  # Intel + Apple Silicon
+    installer_type: "dmg"
+    code_signing:
+      enabled: false  # Set to true with valid certificate
+      identity: null
+      notarization:
+        enabled: false
+        apple_id: null
+        password_env_var: "APPLE_ID_PASSWORD"
+    features:
+      - app_bundle
+      - launch_services
+      - url_schemes
+      - file_associations
+
+partitions:
+  cdrom:
+    label: "SUNFLOWER_AI"
+    filesystem: "ISO9660"
+    size_mb: 4096
+    read_only: true
+    contents:
+      - applications
+      - models
+      - documentation
+      - prerequisites
+      - licenses
+    
+  usb:
+    label: "SUNFLOWER_DATA"
+    filesystem: "FAT32"
+    size_mb: 1024
+    read_only: false
+    encryption: true
+    contents:
+      - profiles
+      - conversations
+      - logs
+      - progress
+      - config
+
+models:
+  variants:
+    high_end:
+      base_model: "llama3.2:7b"
+      min_ram_gb: 16
+      optimal_ram_gb: 32
+      priority: 1
+      
+    mid_range:
+      base_model: "llama3.2:3b"
+      min_ram_gb: 8
+      optimal_ram_gb: 16
+      priority: 2
+      
+    low_end:
+      base_model: "llama3.2:1b"
+      min_ram_gb: 4
+      optimal_ram_gb: 8
+      priority: 3
+      
+    minimum:
+      base_model: "llama3.2:1b-q4_0"
+      min_ram_gb: 4
+      optimal_ram_gb: 4
+      priority: 4
+  
+  profiles:
+    - kids
+    - educator
+  
+  auto_selection:
+    enabled: true
+    fallback_enabled: true
+    performance_testing: true
+
+security:
+  encryption:
+    algorithm: "AES-256-GCM"
+    key_derivation: "PBKDF2"
+    iterations: 100000
+    salt_length: 32
+  
+  code_obfuscation:
+    enabled: true
+    level: "high"
+    exclude_modules: []
+  
+  integrity_checks:
+    enabled: true
+    checksum_algorithm: "SHA256"
+    verify_on_launch: true
+
+build_options:
+  optimization:
+    level: 2  # 0=none, 1=basic, 2=full
+    strip_debug: true
+    compress: true
+    exclude_tests: true
+    exclude_docs: false
+  
+  bundling:
+    include_ollama: false  # User must install separately
+    include_python: true
+    include_ssl_certs: true
+    include_fonts: true
+  
+  logging:
+    build_log: true
+    verbose: false
+    log_file: "build_master.log"
+  
+  parallel_builds:
+    enabled: true
+    max_workers: 2
+  
+  verification:
+    run_tests: true
+    check_imports: true
+    verify_checksums: true
+    test_launch: true
+
+deployment:
+  distribution:
+    create_iso: true
+    create_device_image: true
+    create_checksums: true
+    create_manifest: true
+  
+  documentation:
+    generate_pdf: true
+    include_videos: false
+    languages: ["en"]
+  
+  licensing:
+    type: "family"
+    max_profiles: 10
+    transferable: false
+    offline_activation: true
+
+quality_assurance:
+  pre_build_checks:
+    - python_version
+    - disk_space
+    - dependencies
+    - model_files
+    
+  post_build_checks:
+    - file_integrity
+    - executable_launch
+    - partition_structure
+    - model_loading
+    
+  testing:
+    unit_tests: true
+    integration_tests: true
+    ui_tests: false
+    performance_tests: true
+    
+  metrics:
+    track_build_time: true
+    track_artifact_sizes: true
+    track_error_rates: true
+    generate_report: true
+
+environment:
+  python:
+    min_version: "3.8"
+    max_version: "3.11"
+    virtual_env: true
+    
+  build_tools:
+    pyinstaller_version: "6.3.0"
+    required_packages:
+      - PyInstaller
+      - cryptography
+      - psutil
+      - Pillow
+      - certifi
+      - requests
+    
+  system_requirements:
+    min_disk_space_gb: 10
+    min_ram_gb: 8
+    supported_os:
+      - "Windows 10"
+      - "Windows 11"
+      - "macOS 10.14+"
+      - "macOS 11+"
+      - "macOS 12+"
+      - "macOS 13+"
+      - "macOS 14+"
+
+metadata:
+  created_date: "2025-01-01"
+  last_modified: "2025-01-01"
+  maintainer: "Sunflower AI Systems"
+  support_email: "support@sunflowerai.com"
+  website: "https://sunflowerai.com"
+  documentation: "https://docs.sunflowerai.com"
