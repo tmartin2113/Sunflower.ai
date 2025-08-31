@@ -1,0 +1,292 @@
+{
+  "version": "6.2",
+  "last_updated": "2025-01-15",
+  "description": "Hardware-specific model variant configuration for Sunflower AI Professional System",
+  
+  "hardware_detection": {
+    "windows": {
+      "ram_detection": "wmic OS get TotalVisibleMemorySize /value",
+      "gpu_detection": "wmic path win32_VideoController get name,AdapterRAM /value",
+      "cpu_detection": "wmic cpu get NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed /value",
+      "architecture": "wmic os get OSArchitecture /value"
+    },
+    "macos": {
+      "ram_detection": "sysctl hw.memsize",
+      "gpu_detection": "system_profiler SPDisplaysDataType",
+      "cpu_detection": "sysctl -n machdep.cpu.brand_string",
+      "architecture": "uname -m"
+    }
+  },
+  
+  "model_variants": [
+    {
+      "id": "premium",
+      "model_name": "llama3.2:7b",
+      "display_name": "Premium Performance",
+      "description": "Highest quality responses with fastest generation",
+      "requirements": {
+        "min_ram_gb": 16,
+        "recommended_ram_gb": 32,
+        "min_vram_gb": 8,
+        "min_cpu_cores": 8,
+        "gpu_required": true
+      },
+      "parameters": {
+        "num_ctx": 8192,
+        "num_batch": 512,
+        "num_gpu": -1,
+        "main_gpu": 0,
+        "num_thread": 8,
+        "f16_kv": true,
+        "use_mmap": true,
+        "use_mlock": false
+      },
+      "performance": {
+        "load_time_seconds": 8,
+        "tokens_per_second": 50,
+        "first_token_latency_ms": 500,
+        "context_window": 8192
+      },
+      "file_location": "/cdrom/models/llama3.2-7b.gguf"
+    },
+    
+    {
+      "id": "balanced",
+      "model_name": "llama3.2:3b",
+      "display_name": "Balanced Performance",
+      "description": "Excellent quality with moderate resource usage",
+      "requirements": {
+        "min_ram_gb": 8,
+        "recommended_ram_gb": 16,
+        "min_vram_gb": 4,
+        "min_cpu_cores": 4,
+        "gpu_required": false
+      },
+      "parameters": {
+        "num_ctx": 4096,
+        "num_batch": 256,
+        "num_gpu": -1,
+        "main_gpu": 0,
+        "num_thread": 6,
+        "f16_kv": true,
+        "use_mmap": true,
+        "use_mlock": false
+      },
+      "performance": {
+        "load_time_seconds": 6,
+        "tokens_per_second": 35,
+        "first_token_latency_ms": 700,
+        "context_window": 4096
+      },
+      "file_location": "/cdrom/models/llama3.2-3b.gguf"
+    },
+    
+    {
+      "id": "efficient",
+      "model_name": "llama3.2:1b",
+      "display_name": "Efficient Performance",
+      "description": "Good quality optimized for lower-end systems",
+      "requirements": {
+        "min_ram_gb": 6,
+        "recommended_ram_gb": 8,
+        "min_vram_gb": 2,
+        "min_cpu_cores": 2,
+        "gpu_required": false
+      },
+      "parameters": {
+        "num_ctx": 2048,
+        "num_batch": 128,
+        "num_gpu": 0,
+        "main_gpu": 0,
+        "num_thread": 4,
+        "f16_kv": false,
+        "use_mmap": true,
+        "use_mlock": false
+      },
+      "performance": {
+        "load_time_seconds": 4,
+        "tokens_per_second": 25,
+        "first_token_latency_ms": 900,
+        "context_window": 2048
+      },
+      "file_location": "/cdrom/models/llama3.2-1b.gguf"
+    },
+    
+    {
+      "id": "minimal",
+      "model_name": "llama3.2:1b-q4_0",
+      "display_name": "Minimal Performance",
+      "description": "Basic functionality for minimum specification systems",
+      "requirements": {
+        "min_ram_gb": 4,
+        "recommended_ram_gb": 6,
+        "min_vram_gb": 0,
+        "min_cpu_cores": 2,
+        "gpu_required": false
+      },
+      "parameters": {
+        "num_ctx": 1024,
+        "num_batch": 64,
+        "num_gpu": 0,
+        "main_gpu": 0,
+        "num_thread": 2,
+        "f16_kv": false,
+        "use_mmap": true,
+        "use_mlock": false,
+        "low_vram": true
+      },
+      "performance": {
+        "load_time_seconds": 3,
+        "tokens_per_second": 15,
+        "first_token_latency_ms": 1200,
+        "context_window": 1024
+      },
+      "file_location": "/cdrom/models/llama3.2-1b-q4_0.gguf"
+    }
+  ],
+  
+  "selection_logic": {
+    "priority_order": ["premium", "balanced", "efficient", "minimal"],
+    "fallback_enabled": true,
+    "auto_downgrade": true,
+    "selection_rules": [
+      {
+        "condition": "ram_gb >= 16 && gpu_vram_gb >= 8 && cpu_cores >= 8",
+        "select": "premium"
+      },
+      {
+        "condition": "ram_gb >= 8 && cpu_cores >= 4",
+        "select": "balanced"
+      },
+      {
+        "condition": "ram_gb >= 6 && cpu_cores >= 2",
+        "select": "efficient"
+      },
+      {
+        "condition": "ram_gb >= 4",
+        "select": "minimal"
+      }
+    ]
+  },
+  
+  "optimization_profiles": {
+    "high_performance": {
+      "description": "Maximum speed, higher resource usage",
+      "adjustments": {
+        "num_thread_multiplier": 1.5,
+        "num_batch_multiplier": 2,
+        "use_mlock": true,
+        "numa": true
+      }
+    },
+    "balanced": {
+      "description": "Default balanced configuration",
+      "adjustments": {}
+    },
+    "low_resource": {
+      "description": "Minimize resource usage, slower performance",
+      "adjustments": {
+        "num_thread_multiplier": 0.5,
+        "num_batch_multiplier": 0.5,
+        "use_mlock": false,
+        "low_vram": true
+      }
+    }
+  },
+  
+  "error_handling": {
+    "model_load_failure": {
+      "retry_attempts": 3,
+      "retry_delay_ms": 2000,
+      "fallback_to_smaller": true,
+      "user_message": "Optimizing for your system... This may take a moment."
+    },
+    "out_of_memory": {
+      "auto_reduce_context": true,
+      "minimum_context": 512,
+      "clear_cache": true,
+      "user_message": "Adjusting settings for optimal performance..."
+    },
+    "gpu_failure": {
+      "fallback_to_cpu": true,
+      "disable_gpu_layers": true,
+      "user_message": "Switching to CPU mode for compatibility..."
+    }
+  },
+  
+  "benchmark_tests": {
+    "quick_test": {
+      "prompt": "Explain photosynthesis in simple terms.",
+      "expected_tokens": 50,
+      "timeout_seconds": 10,
+      "success_threshold_ms": 3000
+    },
+    "performance_test": {
+      "prompt": "Write a detailed explanation of the water cycle including evaporation, condensation, precipitation, and collection.",
+      "expected_tokens": 200,
+      "timeout_seconds": 30,
+      "success_threshold_ms": 10000
+    }
+  },
+  
+  "model_switching": {
+    "allow_runtime_switching": false,
+    "switching_requires_restart": true,
+    "preserve_conversation_history": true,
+    "switching_reasons": [
+      "manual_user_selection",
+      "repeated_out_of_memory",
+      "consistent_slow_performance",
+      "hardware_change_detected"
+    ]
+  },
+  
+  "telemetry": {
+    "collect_performance_metrics": true,
+    "metrics_stored_locally": true,
+    "metrics_location": "/usb/telemetry/",
+    "metrics_retained_days": 30,
+    "anonymous_only": true,
+    "opt_out_available": true
+  },
+  
+  "deployment": {
+    "models_directory": "/cdrom/models/",
+    "config_directory": "/cdrom/config/",
+    "user_data_directory": "/usb/userdata/",
+    "temp_directory": "/tmp/sunflower_ai/",
+    "log_directory": "/usb/logs/"
+  },
+  
+  "compatibility": {
+    "minimum_os_versions": {
+      "windows": "Windows 10 version 1903",
+      "macos": "macOS 10.15 Catalina"
+    },
+    "required_libraries": {
+      "windows": [
+        "vcredist_x64_2022",
+        "dotnet_runtime_6"
+      ],
+      "macos": [
+        "xcode_command_line_tools"
+      ]
+    },
+    "supported_architectures": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  
+  "validation": {
+    "checksum_verification": true,
+    "signature_verification": true,
+    "model_integrity_check": true,
+    "pre_flight_tests": [
+      "memory_availability",
+      "disk_space",
+      "cpu_compatibility",
+      "os_version"
+    ]
+  }
+}
