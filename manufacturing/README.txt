@@ -1,179 +1,274 @@
-# Sunflower AI Production Scripts
+# Sunflower AI Professional System - Manufacturing Documentation
+Version 6.2.0 | Production Release | January 2025
 
-Production-ready manufacturing tools for creating Sunflower AI Professional System USB devices.
+## CRITICAL PRODUCTION INFORMATION
 
-## Overview
+This document contains essential information for manufacturing the Sunflower AI Professional System partitioned USB devices. All personnel must read and understand these procedures before beginning production.
 
-These scripts handle the complete manufacturing process for Sunflower AI's dual-partition USB drives:
-- **CD-ROM Partition**: Read-only partition containing the application and AI models
-- **Data Partition**: Writable partition for user profiles and data
+## Device Architecture
 
-## Prerequisites
+The Sunflower AI system uses a dual-partition USB device:
+- **CD-ROM Partition (Read-Only)**: 3-4GB containing system files, AI models, and applications
+- **USB Partition (Writable)**: 500MB-1GB for user data and profiles
 
-### Software Requirements
-- Python 3.8 or higher
-- Git (for version control)
-- ISO creation tools:
-  - **Windows**: Windows ADK (for oscdimg.exe)
-  - **macOS/Linux**: cdrtools (mkisofs/genisoimage)
+## Production Environment Setup
 
-### Hardware Requirements
-- 16GB+ RAM recommended for building large ISOs
-- 100GB+ free disk space
-- USB 3.0 ports for testing
+### Required Tools and Software
 
-### Installation
+1. **Operating System Requirements**
+   - Windows 10/11 Pro (64-bit) OR
+   - macOS 11.0+ (Big Sur or later)
+   - Minimum 16GB RAM for production systems
+   - 100GB free disk space for master files
 
-```bash
-# Clone repository
-git clone https://github.com/sunflowerai/sunflower-ai.git
-cd sunflower-ai
+2. **Python Environment**
+   ```
+   Python 3.9+ (64-bit)
+   Required packages: See production/requirements.txt
+   ```
 
-# Install production dependencies
-pip install -r production/requirements.txt
+3. **USB Device Requirements**
+   - USB 3.0+ devices (minimum 8GB capacity)
+   - Verified vendor list in config/approved_vendors.json
+   - Quality rating: A+ grade or higher
 
-# Build prerequisite components
-python build/compile_windows.py
-python build/compile_macos.py
-python build/create_models.py
-```
+4. **Platform-Specific Tools**
 
-## Quick Start
-
-### 1. Generate a Complete Batch (Recommended)
-
-```bash
-# Generate a batch of 100 units
-python -m production.batch_generator --size 100 --version 1.0.0
-```
-
-This creates:
-- Master ISO file for CD-ROM partition
-- Master USB image for data partition  
-- Serial numbers for all units
-- Complete documentation package
-- Quality control materials
-
-### 2. Create Individual Components
-
-```bash
-# Create ISO only
-python production/create_iso.py --version 1.0.0
-
-# Prepare USB partition only
-python production/prepare_usb_partition.py --size 1024
-```
+   **Windows:**
+   - ImDisk Virtual Disk Driver v2.0.10+
+   - Rufus 3.21+ (for hybrid ISO creation)
+   - Windows ADK (Assessment and Deployment Kit)
+   
+   **macOS:**
+   - Xcode Command Line Tools
+   - hdiutil (included with macOS)
+   - diskutil (included with macOS)
 
 ## Production Workflow
 
-### Step 1: Pre-Production
-1. Ensure all source code is compiled and tested
-2. Verify AI models are created and optimized
-3. Review version numbers and batch sizing
+### Phase 1: Preparation
+```
+1. Verify master files integrity
+   python scripts/validate_master_files.py
+   
+2. Initialize production batch
+   python production/batch_generator.py --batch-size 100 --platform universal
+   
+3. Prepare USB devices
+   - Insert devices into production hub
+   - Run device detection: python scripts/detect_devices.py
+```
 
-### Step 2: Generate Master Files
+### Phase 2: Device Creation
+```
+1. Create CD-ROM partition
+   python production/create_iso.py --batch-id [BATCH_ID] --platform [PLATFORM]
+   
+2. Prepare USB partition
+   python production/prepare_usb_partition.py --batch-id [BATCH_ID]
+   
+3. Deploy to physical devices
+   python scripts/build_master_usb.py --batch-id [BATCH_ID] --validate
+```
+
+### Phase 3: Quality Control
+```
+1. Automated validation (every device)
+   python scripts/validate_usb.py --device [DEVICE_PATH] --full-check
+   
+2. Manual spot checks (10% sampling)
+   - Boot test on reference hardware
+   - Profile creation test
+   - Model loading verification
+   
+3. Generate production report
+   python scripts/manufacturing_report.py --batch-id [BATCH_ID]
+```
+
+## Master Files Structure
+
+```
+master_files/
+├── current/
+│   ├── windows/
+│   │   ├── launcher/          # Windows launcher executable
+│   │   ├── ollama/           # Ollama installation files
+│   │   ├── models/           # Pre-built AI models
+│   │   └── manifests/        # Security manifests
+│   ├── macos/
+│   │   ├── launcher.app/     # macOS launcher application
+│   │   ├── ollama/           # Ollama for macOS
+│   │   ├── models/           # Pre-built AI models
+│   │   └── manifests/        # Security manifests
+│   └── shared/
+│       ├── documentation/    # User guides and manuals
+│       ├── modelfiles/       # Sunflower AI modelfiles
+│       └── certificates/    # Code signing certificates
+```
+
+## Model Variants
+
+Each device includes ALL model variants for automatic hardware detection:
+
+| Model | Size | RAM Required | Use Case |
+|-------|------|--------------|----------|
+| llama3.2:7b | 4.7GB | 8GB+ | High-end systems |
+| llama3.2:3b | 2.0GB | 6GB+ | Mid-range systems |
+| llama3.2:1b | 1.3GB | 4GB+ | Low-end systems |
+| llama3.2:1b-q4_0 | 0.7GB | 2GB+ | Minimum spec |
+
+## Security Requirements
+
+### Authentication Tokens
+Each device receives a unique hardware token during manufacturing:
+```python
+token = generate_hardware_token(device_id, SECRET_KEY)
+```
+
+### Checksum Validation
+All files must pass SHA-256 checksum validation:
+```python
+checksum = calculate_checksum(file_path, 'sha256')
+```
+
+### Partition Security
+- CD-ROM partition: Set as read-only at filesystem level
+- USB partition: Encrypted family data storage
+
+## Quality Control Standards
+
+### Acceptance Criteria
+- **Boot Success Rate**: 100% on reference hardware
+- **Profile Creation**: < 5 seconds
+- **Model Loading**: < 30 seconds on minimum spec
+- **Checksum Validation**: 100% pass rate
+
+### Failure Handling
+1. Device fails validation → Remove from batch
+2. Batch failure rate > 5% → Stop production
+3. Critical error → Alert production manager immediately
+
+## Batch Tracking
+
+Every batch must maintain complete traceability:
+
+```json
+{
+  "batch_id": "2025011501",
+  "timestamp": "2025-01-15T09:00:00Z",
+  "platform": "universal",
+  "devices_total": 100,
+  "devices_passed": 98,
+  "devices_failed": 2,
+  "operator_id": "PROD_001",
+  "qc_samples": 10,
+  "qc_passed": 10
+}
+```
+
+## Error Codes
+
+| Code | Description | Action |
+|------|-------------|--------|
+| E001 | Partition creation failed | Retry with new device |
+| E002 | Checksum mismatch | Verify master files |
+| E003 | Hardware token invalid | Check secret key |
+| E004 | Model deployment failed | Check disk space |
+| E005 | Validation timeout | Test on reference hardware |
+
+## Production Commands Reference
+
+### Create Single Device
 ```bash
-# Standard production batch
-python -m production.batch_generator --size 100
-
-# Small test batch
-python -m production.batch_generator --size 10 --version 1.0.0-test
+python production/create_iso.py \
+    --device-path /dev/disk2 \
+    --platform universal \
+    --model-variant auto \
+    --validate
 ```
 
-### Step 3: Pilot Production
-1. Produce 5-10 units using master files
-2. Run quality control on each unit
-3. Test on multiple systems
-4. Verify both partitions work correctly
-
-### Step 4: Mass Production
-1. Use professional USB duplicator
-2. Create both partitions according to specifications
-3. Write ISO to partition 1 (set as read-only/CD-ROM)
-4. Write USB image to partition 2 (keep writable)
-5. Apply serial number labels
-
-### Step 5: Quality Control
+### Batch Production
 ```bash
-# Run automated QC test
-python qc_test_script.py SF100-20240115-0001
-
-# Verify results
-cat qc_report_SF100-20240115-0001.json
+python production/batch_generator.py \
+    --batch-size 100 \
+    --platform universal \
+    --output-dir output/batch_20250115 \
+    --parallel 4
 ```
 
-### Step 6: Packaging
-1. Follow packaging_checklist.md
-2. Include all printed materials
-3. Apply security seals
-4. Box and prepare for shipping
-
-## File Structure
-
-```
-manufacturing/
-├── batches/
-│   └── BATCH-20240115-001/
-│       ├── master_files/
-│       │   ├── sunflower_ai_v1.0.0_*.iso
-│       │   └── sunflower_data_*.img
-│       ├── documentation/
-│       │   ├── duplication_instructions.md
-│       │   ├── serial_numbers.csv
-│       │   └── packaging_checklist.md
-│       └── quality_control/
-│           ├── qc_test_script.py
-│           └── qc_checklist_template.md
-├── iso_images/
-├── usb_images/
-└── batch_records/
+### Quality Control Check
+```bash
+python scripts/validate_usb.py \
+    --device /dev/disk2 \
+    --checks all \
+    --report output/validation_report.json
 ```
 
-## USB Specifications
-
-### Partition Layout
-| Partition | Type | Size | Filesystem | Contents |
-|-----------|------|------|------------|----------|
-| 1 | CD-ROM | 4-8GB | ISO9660/UDF | Application, Models |
-| 2 | Data | 8GB+ | FAT32 | User Data |
-
-### Required Features
-- USB 3.0 or higher
-- Dual-partition support
-- CD-ROM emulation capability
-- Minimum 16GB total capacity
+### Generate Production Report
+```bash
+python scripts/manufacturing_report.py \
+    --batch-id 2025011501 \
+    --format pdf \
+    --output reports/batch_2025011501.pdf
+```
 
 ## Troubleshooting
 
-### ISO Creation Fails
-- Ensure all models are built: `python build/create_models.py`
-- Check available disk space (need 2x ISO size)
-- Verify oscdimg.exe (Windows) or mkisofs (Unix) installed
+### Common Issues
 
-### USB Image Issues
-- Use FAT32 for maximum compatibility
-- Ensure partition size doesn't exceed FAT32 limits
-- Test on both Windows and macOS
+1. **"Device not recognized"**
+   - Verify USB 3.0+ compatibility
+   - Check device capacity (minimum 8GB)
+   - Try different USB port
 
-### Quality Control Failures
-- Verify USB device quality (use reputable brands)
-- Check USB 3.0 compatibility
-- Ensure proper partition alignment
+2. **"Partition creation failed"**
+   - Ensure device is not mounted
+   - Check for bad sectors: `chkdsk /f` (Windows) or `diskutil verifyDisk` (macOS)
+   - Replace device if errors persist
 
-## Security Notes
+3. **"Model deployment timeout"**
+   - Verify USB 3.0 connection
+   - Check available disk space
+   - Test write speed: should exceed 10MB/s
 
-- Each batch has unique authentication tokens
-- Serial numbers are cryptographically generated
-- CD-ROM partition must be truly read-only
-- Never distribute master files publicly
+4. **"Checksum validation failed"**
+   - Re-download master files
+   - Verify no corruption during transfer
+   - Check production system integrity
 
-## Support
+## Contact Information
 
-**Manufacturing Support**: mfg-support@sunflowerai.com  
-**Technical Issues**: tech@sunflowerai.com  
-**Emergency**: +1-555-SUNFLOW
+**Production Support**
+- Internal: ext. 5555
+- Email: production@sunflowerai.internal
+- Emergency: +1-555-PROD-911
 
-## License
+**Quality Control**
+- Internal: ext. 5556
+- Email: qc@sunflowerai.internal
 
-Copyright © 2025 Sunflower AI. All rights reserved.
-These tools are for authorized manufacturing partners only.
+**Engineering**
+- Internal: ext. 5557
+- Email: engineering@sunflowerai.internal
+
+## Compliance and Certification
+
+- ISO 9001:2015 Certified Process
+- COPPA Compliant (Children's Privacy)
+- FCC Part 15 Class B (Digital Device)
+- CE Marking (European Conformity)
+- RoHS Compliant (Hazardous Substances)
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 6.2.0 | 2025-01-15 | Partitioned device architecture |
+| 6.1.0 | 2024-12-01 | Multi-model support added |
+| 6.0.0 | 2024-10-15 | Initial production release |
+
+---
+
+**CONFIDENTIAL - INTERNAL USE ONLY**
+This document contains proprietary information and trade secrets of Sunflower AI Corporation.
+Unauthorized distribution is strictly prohibited.
