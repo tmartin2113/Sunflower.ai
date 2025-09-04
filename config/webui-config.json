@@ -1,0 +1,8 @@
+{
+  "default_models": ["sunflower-kids", "sunflower-educator"],
+  "enable_signup": true,
+  "enable_login": true,
+  "webui_name": "Sunflower AI Education System",
+  "safety_enabled": true,
+  "parent_dashboard": true
+}
