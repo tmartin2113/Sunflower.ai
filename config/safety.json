@@ -1,0 +1,9 @@
+{
+  "filter_accuracy_target": 1.0,
+  "blocked_terms": [
+    "violence", "weapon", "drug", "alcohol", 
+    "explicit", "inappropriate", "dangerous"
+  ],
+  "redirect_to_stem": true,
+  "log_safety_events": true
+}
