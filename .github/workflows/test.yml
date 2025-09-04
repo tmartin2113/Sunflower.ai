@@ -1,0 +1,510 @@
+name: Sunflower AI Test Suite
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Test type to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - unit
+        - integration
+        - performance
+        - safety
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # Validate code quality and security
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install black flake8 mypy bandit safety pylint
+        pip install -r requirements.txt
+        
+    - name: Run Black formatter check
+      run: black --check --line-length 100 .
+      
+    - name: Run Flake8 linter
+      run: flake8 . --max-line-length=100 --exclude=venv,__pycache__
+      
+    - name: Run MyPy type checker
+      run: mypy --ignore-missing-imports .
+      
+    - name: Run Bandit security scanner
+      run: bandit -r . -f json -o bandit-report.json
+      
+    - name: Check dependencies for vulnerabilities
+      run: safety check --json
+      
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          
+  # Test on Windows platform
+  test-windows:
+    runs-on: windows-latest
+    needs: code-quality
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-timeout pytest-xdist
+        
+    - name: Download and setup Ollama
+      run: |
+        Invoke-WebRequest -Uri "https://ollama.ai/download/windows" -OutFile "ollama-installer.exe"
+        Start-Process -FilePath "ollama-installer.exe" -ArgumentList "/S" -Wait
+        
+    - name: Load Sunflower models
+      run: |
+        ollama pull llama3.2:1b
+        ollama create sunflower-kids -f modelfiles/sunflower-kids.modelfile
+        ollama create sunflower-educator -f modelfiles/sunflower-educator.modelfile
+        
+    - name: Run Windows-specific tests
+      run: |
+        pytest tests/test_windows.py -v --cov=. --cov-report=xml --cov-report=term
+        
+    - name: Test Windows launcher
+      run: |
+        cd launchers/windows
+        ./test_launcher.bat
+        
+    - name: Test partition detection on Windows
+      run: |
+        python -c "import wmi; c = wmi.WMI(); print([disk.Caption for disk in c.Win32_LogicalDisk()])"
+        
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: windows
+        
+  # Test on macOS platform
+  test-macos:
+    runs-on: macos-latest
+    needs: code-quality
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-timeout pytest-xdist
+        
+    - name: Install Ollama
+      run: |
+        brew install ollama
+        ollama serve &
+        sleep 5
+        
+    - name: Load Sunflower models
+      run: |
+        ollama pull llama3.2:1b
+        ollama create sunflower-kids -f modelfiles/sunflower-kids.modelfile
+        ollama create sunflower-educator -f modelfiles/sunflower-educator.modelfile
+        
+    - name: Run macOS-specific tests
+      run: |
+        pytest tests/test_macos.py -v --cov=. --cov-report=xml --cov-report=term
+        
+    - name: Test macOS launcher
+      run: |
+        cd launchers/macos
+        chmod +x test_launcher.sh
+        ./test_launcher.sh
+        
+    - name: Test partition detection on macOS
+      run: |
+        diskutil list
+        python tests/test_partition_macos.py
+        
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: macos
+        
+  # Core functionality tests
+  test-core:
+    runs-on: ubuntu-latest
+    needs: code-quality
+    strategy:
+      matrix:
+        test-suite: [unit, integration, performance, safety]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+      
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-timeout pytest-xdist pytest-benchmark
+        pip install selenium docker websocket-client
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser chromium-chromedriver
+        
+    - name: Start Docker services
+      run: |
+        docker-compose -f docker-compose.test.yml up -d
+        sleep 30  # Wait for services to be ready
+        
+    - name: Run test suite - ${{ matrix.test-suite }}
+      run: |
+        if [ "${{ matrix.test-suite }}" == "unit" ]; then
+          pytest tests/unit/ -v --cov=. --cov-report=xml --maxfail=1
+        elif [ "${{ matrix.test-suite }}" == "integration" ]; then
+          pytest tests/integration/ -v --cov=. --cov-report=xml --maxfail=1
+        elif [ "${{ matrix.test-suite }}" == "performance" ]; then
+          pytest tests/performance/ -v --benchmark-only --benchmark-json=benchmark.json
+        elif [ "${{ matrix.test-suite }}" == "safety" ]; then
+          pytest tests/safety/ -v --cov=. --cov-report=xml -k safety
+        fi
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.test-suite }}
+        path: |
+          coverage.xml
+          benchmark.json
+          pytest-report.xml
+          
+    - name: Stop Docker services
+      if: always()
+      run: docker-compose -f docker-compose.test.yml down
+      
+  # Open WebUI integration tests
+  test-openwebui-integration:
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Clone Open WebUI repository
+      run: |
+        git clone https://github.com/open-webui/open-webui.git
+        cd open-webui
+        git checkout main
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: Build Open WebUI
+      run: |
+        cd open-webui
+        npm install
+        npm run build
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r open-webui/backend/requirements.txt
+        
+    - name: Start Ollama service
+      run: |
+        docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
+        sleep 10
+        
+    - name: Load Sunflower models
+      run: |
+        docker exec ollama ollama pull llama3.2:1b
+        docker cp modelfiles/sunflower-kids.modelfile ollama:/tmp/
+        docker cp modelfiles/sunflower-educator.modelfile ollama:/tmp/
+        docker exec ollama ollama create sunflower-kids -f /tmp/sunflower-kids.modelfile
+        docker exec ollama ollama create sunflower-educator -f /tmp/sunflower-educator.modelfile
+        
+    - name: Start Open WebUI with Sunflower configuration
+      run: |
+        cd open-webui
+        cp ../config/sunflower-webui.json backend/data/config.json
+        python backend/main.py &
+        sleep 20
+        
+    - name: Run Open WebUI integration tests
+      run: |
+        pytest test_openwebui_integration.py -v --cov=. --cov-report=xml
+        
+    - name: Upload integration test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: openwebui-integration-results
+        path: |
+          coverage.xml
+          test-results.xml
+          
+  # Family safety validation tests
+  test-family-safety:
+    runs-on: ubuntu-latest
+    needs: [test-core]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run comprehensive safety tests
+      run: |
+        python tests/test_family_safety.py --comprehensive
+        
+    - name: Validate content filtering accuracy
+      run: |
+        python tests/validate_safety_filter.py --required-accuracy 1.0
+        
+    - name: Test age-appropriate responses
+      run: |
+        python tests/test_age_appropriate.py --all-age-groups
+        
+    - name: Generate safety report
+      run: |
+        python scripts/generate_safety_report.py --output safety-report.html
+        
+    - name: Upload safety validation report
+      uses: actions/upload-artifact@v3
+      with:
+        name: safety-validation-report
+        path: safety-report.html
+        
+  # Performance benchmarking
+  benchmark:
+    runs-on: ubuntu-latest
+    needs: [test-core]
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-benchmark matplotlib pandas
+        
+    - name: Run performance benchmarks
+      run: |
+        pytest tests/benchmarks/ --benchmark-only --benchmark-json=benchmark.json
+        
+    - name: Generate performance report
+      run: |
+        python scripts/analyze_benchmarks.py benchmark.json --output performance-report.html
+        
+    - name: Check performance regression
+      run: |
+        python scripts/check_regression.py benchmark.json --threshold 10
+        
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: |
+          benchmark.json
+          performance-report.html
+          
+  # Device manufacturing validation
+  test-manufacturing:
+    runs-on: ubuntu-latest
+    needs: [test-windows, test-macos]
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        sudo apt-get install -y genisoimage squashfs-tools
+        
+    - name: Create dual-partition test image
+      run: |
+        python scripts/create_device_image.py \
+          --cdrom-size 4G \
+          --usb-size 1G \
+          --output sunflower-test.img
+          
+    - name: Validate partition structure
+      run: |
+        python scripts/validate_device_image.py sunflower-test.img
+        
+    - name: Test device authentication
+      run: |
+        python scripts/test_device_auth.py sunflower-test.img
+        
+    - name: Generate manufacturing report
+      run: |
+        python scripts/manufacturing_report.py --output manufacturing-validation.pdf
+        
+    - name: Upload manufacturing validation
+      uses: actions/upload-artifact@v3
+      with:
+        name: manufacturing-validation
+        path: |
+          manufacturing-validation.pdf
+          device-checksum.txt
+          
+  # Final test report generation
+  generate-report:
+    runs-on: ubuntu-latest
+    needs: [test-windows, test-macos, test-core, test-openwebui-integration, test-family-safety]
+    if: always()
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install report dependencies
+      run: |
+        pip install jinja2 markdown pandas matplotlib seaborn
+        
+    - name: Generate comprehensive test report
+      run: |
+        python scripts/generate_test_report.py \
+          --input-dir . \
+          --output test-report.html \
+          --format html
+          
+    - name: Generate executive summary
+      run: |
+        python scripts/generate_executive_summary.py \
+          --input test-report.html \
+          --output executive-summary.pdf
+          
+    - name: Calculate test metrics
+      run: |
+        python scripts/calculate_metrics.py --output metrics.json
+        
+    - name: Upload final reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-reports
+        path: |
+          test-report.html
+          executive-summary.pdf
+          metrics.json
+          
+    - name: Post results to PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const metrics = JSON.parse(fs.readFileSync('metrics.json', 'utf8'));
+          
+          const comment = `## 🧪 Test Results
+          
+          **Overall Success Rate:** ${metrics.success_rate}%
+          **Tests Passed:** ${metrics.passed}/${metrics.total}
+          **Safety Filter Accuracy:** ${metrics.safety_accuracy}%
+          **Average Response Time:** ${metrics.avg_response_time}s
+          
+          ### Platform Coverage
+          - ✅ Windows: ${metrics.windows_passed ? 'Passed' : 'Failed'}
+          - ✅ macOS: ${metrics.macos_passed ? 'Passed' : 'Failed'}
+          - ✅ Linux: ${metrics.linux_passed ? 'Passed' : 'Failed'}
+          
+          ### Critical Requirements
+          - ${metrics.safety_100 ? '✅' : '❌'} Safety Filter 100% Effective
+          - ${metrics.setup_95 ? '✅' : '❌'} Setup Success Rate ≥ 95%
+          - ${metrics.response_3s ? '✅' : '❌'} Response Time < 3 seconds
+          - ${metrics.switch_1s ? '✅' : '❌'} Profile Switch < 1 second
+          
+          [View Full Report](https://github.com/${{github.repository}}/actions/runs/${{github.run_id}})`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
