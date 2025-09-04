@@ -1,0 +1,7 @@
+{
+  "max_response_time": 3.0,
+  "profile_switch_time": 1.0,
+  "model_timeout": 30,
+  "cache_enabled": true,
+  "concurrent_users": 10
+}
