@@ -1,92 +1,130 @@
-# Sunflower AI Professional System - Production Dependencies
-# Python 3.9+ required for optimal performance
-# Version: 6.2
+# Sunflower AI Education System - Core Requirements
+# Python 3.11+ required
 
-# Core Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+# ==========================
+# Core Dependencies
+# ==========================
+requests>=2.31.0                 # HTTP requests for API calls
+httpx>=0.25.0                    # Async HTTP client
+urllib3>=2.0.0                   # HTTP library
+psutil>=5.9.8                    # System monitoring and hardware detection
+python-dotenv>=1.0.0             # Environment variable management
+click>=8.1.7                     # Command line interface
+rich>=13.7.0                     # Terminal formatting and colors
+typing-extensions>=4.9.0         # Type hints backport
 
-# Open WebUI Integration
-openai==1.3.0
-httpx==0.25.2
-websockets==12.0
-python-multipart==0.0.6
+# ==========================
+# Security & Encryption
+# ==========================
+cryptography>=41.0.7             # Encryption for family profiles
+bcrypt>=4.1.2                    # Password hashing
+secrets                          # Built-in, for token generation
+pycryptodome>=3.19.0            # Additional crypto operations
+python-jose[cryptography]>=3.3.0 # JWT tokens for auth
 
+# ==========================
 # Database
-sqlalchemy==2.0.23
-alembic==1.12.1
-aiosqlite==0.19.0
+# ==========================
+sqlalchemy>=2.0.25               # ORM for profile management
+alembic>=1.13.1                  # Database migrations
+psycopg2-binary>=2.9.9          # PostgreSQL adapter
+sqlite3                          # Built-in, for local storage
+redis>=5.0.1                     # Caching and session management
 
-# Security & Authentication
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-cryptography==41.0.7
-secrets-generator==0.1.0
+# ==========================
+# Web Framework & API
+# ==========================
+fastapi>=0.109.0                 # Web framework for API
+uvicorn[standard]>=0.25.0        # ASGI server
+pydantic>=2.5.3                  # Data validation
+pydantic-settings>=2.1.0         # Settings management
+starlette>=0.35.1                # ASGI framework
+python-multipart>=0.0.6          # File upload support
+aiofiles>=23.2.1                 # Async file operations
+websocket-client>=1.7.0          # WebSocket support
+websockets>=12.0                 # WebSocket server/client
 
-# Content Safety
-better-profanity==0.7.0
-detoxify==0.5.1
-textstat==0.7.3
+# ==========================
+# AI/ML Integration
+# ==========================
+ollama>=0.1.7                    # Ollama Python client (if available)
+openai>=1.6.1                    # OpenAI API client (for compatibility)
+langchain>=0.1.0                 # LLM orchestration (optional)
+tiktoken>=0.5.2                  # Token counting
 
-# System Integration
-psutil==5.9.6
-python-dotenv==1.0.0
-click==8.1.7
-typer==0.9.0
-rich==13.7.0
-
-# File Handling
-pyyaml==6.0.1
-python-magic==0.4.27
-chardet==5.2.0
-
-# Platform Specific
-pywin32==306; sys_platform == 'win32'
-pyobjc-framework-Cocoa==10.0; sys_platform == 'darwin'
-pyobjc-framework-IOKit==10.0; sys_platform == 'darwin'
-
-# Monitoring & Logging
-structlog==23.2.0
-python-json-logger==2.0.7
-
-# Async Support
-aiofiles==23.2.1
-aiocache==0.12.2
-asyncio==3.4.3
-
+# ==========================
 # Data Processing
-numpy==1.26.2
-pandas==2.1.3
+# ==========================
+pandas>=2.1.4                    # Data manipulation
+numpy>=1.26.2                    # Numerical operations
+pyyaml>=6.0.1                    # YAML parsing
+jinja2>=3.1.2                    # Template engine
+markdown>=3.5.1                  # Markdown processing
+beautifulsoup4>=4.12.2           # HTML parsing
 
-# Ollama Integration
-ollama==0.1.6
-langchain==0.0.348
-langchain-community==0.0.5
+# ==========================
+# Monitoring & Logging
+# ==========================
+loguru>=0.7.2                    # Advanced logging
+prometheus-client>=0.19.0        # Metrics collection
+sentry-sdk>=1.39.1               # Error tracking
+python-json-logger>=2.0.7        # Structured logging
 
-# Testing Support (minimal for production diagnostics)
-pytest==7.4.3
-pytest-asyncio==0.21.1
+# ==========================
+# System Integration
+# ==========================
+docker>=7.0.0                    # Docker container management
+gitpython>=3.1.40                # Git operations
+platformdirs>=4.1.0              # Platform-specific directories
+appdirs>=1.4.4                   # Application directories
+pywin32>=306; sys_platform == 'win32'  # Windows-specific features
+pyobjc>=10.1; sys_platform == 'darwin'  # macOS-specific features
 
-# Rate Limiting
-slowapi==0.1.9
-python-limits==3.6.0
+# ==========================
+# Configuration Management
+# ==========================
+configparser>=6.0.0              # Config file parsing
+toml>=0.10.2                     # TOML configuration files
+omegaconf>=2.3.0                 # Hierarchical configuration
 
+# ==========================
+# Scheduling & Background Tasks
+# ==========================
+celery>=5.3.4                    # Distributed task queue
+redis>=5.0.1                     # Celery broker
+apscheduler>=3.10.4              # Task scheduling
+schedule>=1.2.0                  # Simple job scheduling
+
+# ==========================
+# CLI & Terminal
+# ==========================
+typer>=0.9.0                     # CLI application framework
+questionary>=2.0.1               # Interactive CLI prompts
+colorama>=0.4.6                  # Cross-platform colored output
+tqdm>=4.66.1                     # Progress bars
+
+# ==========================
 # Utilities
-python-dateutil==2.8.2
-pytz==2023.3
-regex==2023.10.3
-unicodedata2==15.1.0
+# ==========================
+python-dateutil>=2.8.2           # Date/time utilities
+pytz>=2023.3                     # Timezone support
+humanize>=4.9.0                  # Human-readable output
+validators>=0.22.0               # Data validation utilities
+phonenumbers>=8.13.27            # Phone number validation
+email-validator>=2.1.0           # Email validation
 
-# Session Management
-python-session==0.0.1
-cachetools==5.3.2
+# ==========================
+# File Handling
+# ==========================
+python-magic>=0.4.27             # File type detection
+pillow>=10.2.0                   # Image processing
+pypdf>=3.17.4                    # PDF processing
+openpyxl>=3.1.2                  # Excel file support
+xlrd>=2.0.1                      # Excel reading
 
-# Validation
-jsonschema==4.20.0
-email-validator==2.1.0
-
-# Process Management
-supervisor==4.2.5
-schedule==1.2.0
+# ==========================
+# Partition & Device Management
+# ==========================
+pyudev>=0.24.1; sys_platform == 'linux'  # Linux device management
+wmi>=1.5.1; sys_platform == 'win32'      # Windows management instrumentation
+plistlib                         # Built-in, macOS plist handling
