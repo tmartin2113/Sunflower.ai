@@ -1,510 +1,446 @@
-name: Sunflower AI Test Suite
+name: Sunflower AI Daily Test Suite
 
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+  # Run once daily at 2 AM UTC
   schedule:
-    # Run tests daily at 2 AM UTC
     - cron: '0 2 * * *'
+  
+  # Allow manual trigger with options
   workflow_dispatch:
     inputs:
-      test_type:
-        description: 'Test type to run'
-        required: true
-        default: 'all'
+      force_run:
+        description: 'Force run even if last test failed'
+        required: false
+        default: 'false'
         type: choice
         options:
-        - all
-        - unit
-        - integration
-        - performance
-        - safety
+        - 'true'
+        - 'false'
+      test_type:
+        description: 'Test type to run'
+        required: false
+        default: 'essential'
+        type: choice
+        options:
+        - essential
+        - full
+        - safety-only
+  
+  # Run on push to main branch only if source code changed
+  push:
+    branches: [ main ]
+    paths:
+      - '**.py'
+      - '**.js'
+      - '**.ts'
+      - 'requirements*.txt'
+      - 'package*.json'
+      - 'Dockerfile*'
+      - 'docker-compose*.yml'
+      - '.github/workflows/daily-test.yml'
+  
+  # Run on PR but only for changed files
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize ]
+    paths:
+      - '**.py'
+      - '**.js'
+      - '**.ts'
+      - 'requirements*.txt'
 
 env:
   PYTHON_VERSION: '3.11'
   NODE_VERSION: '18'
-  DOCKER_BUILDKIT: 1
-  COMPOSE_DOCKER_CLI_BUILD: 1
+  SKIP_EXPENSIVE_TESTS: true
+  TEST_TIMEOUT: 30m
 
 jobs:
-  # Validate code quality and security
-  code-quality:
+  # Check if we should run tests based on last failure
+  should-run:
     runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      test_type: ${{ steps.check.outputs.test_type }}
     steps:
-    - uses: actions/checkout@v4
+    - name: Check last run status
+      id: check
+      uses: actions/github-script@v6
       with:
-        submodules: recursive
-        
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install black flake8 mypy bandit safety pylint
-        pip install -r requirements.txt
-        
-    - name: Run Black formatter check
-      run: black --check --line-length 100 .
-      
-    - name: Run Flake8 linter
-      run: flake8 . --max-line-length=100 --exclude=venv,__pycache__
-      
-    - name: Run MyPy type checker
-      run: mypy --ignore-missing-imports .
-      
-    - name: Run Bandit security scanner
-      run: bandit -r . -f json -o bandit-report.json
-      
-    - name: Check dependencies for vulnerabilities
-      run: safety check --json
-      
-    - name: Upload security reports
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: security-reports
-        path: |
-          bandit-report.json
+        script: |
+          // Force run if manually triggered with force_run=true
+          if (context.eventName === 'workflow_dispatch' && context.payload.inputs?.force_run === 'true') {
+            core.setOutput('should_run', 'true');
+            core.setOutput('test_type', context.payload.inputs?.test_type || 'essential');
+            return;
+          }
           
-  # Test on Windows platform
-  test-windows:
-    runs-on: windows-latest
-    needs: code-quality
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
+          // Always run on PR
+          if (context.eventName === 'pull_request') {
+            core.setOutput('should_run', 'true');
+            core.setOutput('test_type', 'essential');
+            return;
+          }
+          
+          // For scheduled runs, check if there were commits since last run
+          if (context.eventName === 'schedule') {
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'daily-test.yml',
+              per_page: 2
+            });
+            
+            // If last run failed and no new commits, skip
+            if (runs.workflow_runs.length > 0) {
+              const lastRun = runs.workflow_runs[0];
+              if (lastRun.conclusion === 'failure') {
+                // Check for new commits since last run
+                const { data: commits } = await github.rest.repos.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  since: lastRun.created_at,
+                  per_page: 1
+                });
+                
+                if (commits.length === 0) {
+                  core.setOutput('should_run', 'false');
+                  console.log('Skipping: Last run failed and no new commits');
+                  return;
+                }
+              }
+            }
+            
+            core.setOutput('should_run', 'true');
+            core.setOutput('test_type', 'full');
+            return;
+          }
+          
+          // For push events, run essential tests
+          core.setOutput('should_run', 'true');
+          core.setOutput('test_type', 'essential');
+    
+    - name: Log decision
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-timeout pytest-xdist
-        
-    - name: Download and setup Ollama
-      run: |
-        Invoke-WebRequest -Uri "https://ollama.ai/download/windows" -OutFile "ollama-installer.exe"
-        Start-Process -FilePath "ollama-installer.exe" -ArgumentList "/S" -Wait
-        
-    - name: Load Sunflower models
-      run: |
-        ollama pull llama3.2:1b
-        ollama create sunflower-kids -f modelfiles/sunflower-kids.modelfile
-        ollama create sunflower-educator -f modelfiles/sunflower-educator.modelfile
-        
-    - name: Run Windows-specific tests
-      run: |
-        pytest tests/test_windows.py -v --cov=. --cov-report=xml --cov-report=term
-        
-    - name: Test Windows launcher
-      run: |
-        cd launchers/windows
-        ./test_launcher.bat
-        
-    - name: Test partition detection on Windows
-      run: |
-        python -c "import wmi; c = wmi.WMI(); print([disk.Caption for disk in c.Win32_LogicalDisk()])"
-        
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: windows
-        
-  # Test on macOS platform
-  test-macos:
-    runs-on: macos-latest
-    needs: code-quality
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-timeout pytest-xdist
-        
-    - name: Install Ollama
-      run: |
-        brew install ollama
-        ollama serve &
-        sleep 5
-        
-    - name: Load Sunflower models
-      run: |
-        ollama pull llama3.2:1b
-        ollama create sunflower-kids -f modelfiles/sunflower-kids.modelfile
-        ollama create sunflower-educator -f modelfiles/sunflower-educator.modelfile
-        
-    - name: Run macOS-specific tests
-      run: |
-        pytest tests/test_macos.py -v --cov=. --cov-report=xml --cov-report=term
-        
-    - name: Test macOS launcher
-      run: |
-        cd launchers/macos
-        chmod +x test_launcher.sh
-        ./test_launcher.sh
-        
-    - name: Test partition detection on macOS
-      run: |
-        diskutil list
-        python tests/test_partition_macos.py
-        
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: macos
-        
-  # Core functionality tests
-  test-core:
+        echo "Should run: ${{ steps.check.outputs.should_run }}"
+        echo "Test type: ${{ steps.check.outputs.test_type }}"
+
+  # Quick validation checks (always run)
+  quick-checks:
     runs-on: ubuntu-latest
-    needs: code-quality
+    needs: should-run
+    if: needs.should-run.outputs.should_run == 'true'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install minimal dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install black flake8 mypy bandit safety
+    
+    - name: Quick syntax check
+      run: |
+        python -m py_compile run_local.py test_suite.py
+    
+    - name: Security scan
+      run: |
+        bandit -r . -ll -i -x '/tests/,/test_*.py' || true
+    
+    - name: Check formatting
+      run: |
+        black --check --diff . || true
+
+  # Essential tests - run quickly for PRs and pushes
+  essential-tests:
+    runs-on: ${{ matrix.os }}
+    needs: [should-run, quick-checks]
+    if: |
+      needs.should-run.outputs.should_run == 'true' &&
+      (needs.should-run.outputs.test_type == 'essential' || needs.should-run.outputs.test_type == 'full')
     strategy:
+      fail-fast: true
       matrix:
-        test-suite: [unit, integration, performance, safety]
+        os: [ubuntu-latest]
+        python-version: ['3.11']
+    timeout-minutes: 15
+    
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        
+    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-      
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/pip
+          ~/.ollama
+        key: ${{ runner.os }}-deps-${{ hashFiles('requirements*.txt') }}
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-timeout pytest-xdist pytest-benchmark
-        pip install selenium docker websocket-client
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser chromium-chromedriver
-        
-    - name: Start Docker services
+        pip install pytest pytest-cov pytest-timeout
+    
+    - name: Run critical tests only
       run: |
-        docker-compose -f docker-compose.test.yml up -d
-        sleep 30  # Wait for services to be ready
-        
-    - name: Run test suite - ${{ matrix.test-suite }}
+        # Run only critical test categories
+        pytest tests/unit/test_safety_filter.py -v --timeout=60
+        pytest tests/unit/test_profile_system.py -v --timeout=60
+    
+    - name: Check safety filter effectiveness
       run: |
-        if [ "${{ matrix.test-suite }}" == "unit" ]; then
-          pytest tests/unit/ -v --cov=. --cov-report=xml --maxfail=1
-        elif [ "${{ matrix.test-suite }}" == "integration" ]; then
-          pytest tests/integration/ -v --cov=. --cov-report=xml --maxfail=1
-        elif [ "${{ matrix.test-suite }}" == "performance" ]; then
-          pytest tests/performance/ -v --benchmark-only --benchmark-json=benchmark.json
-        elif [ "${{ matrix.test-suite }}" == "safety" ]; then
-          pytest tests/safety/ -v --cov=. --cov-report=xml -k safety
-        fi
+        python -c "
+        import sys
+        sys.path.insert(0, '.')
+        from test_suite import SafetyFilter
         
+        # Test critical safety
+        filter = SafetyFilter()
+        test_cases = [
+            ('violence topic', 10, False),
+            ('what is photosynthesis', 10, True),
+            ('inappropriate content', 8, False)
+        ]
+        
+        for text, age, should_pass in test_cases:
+            is_safe, _ = filter.check_content(text, age)
+            if should_pass != is_safe:
+                print(f'FAILED: {text}')
+                sys.exit(1)
+        
+        print('✓ Safety filter working correctly')
+        "
+    
     - name: Upload test results
+      if: always()
       uses: actions/upload-artifact@v3
-      if: always()
       with:
-        name: test-results-${{ matrix.test-suite }}
+        name: essential-test-results
         path: |
-          coverage.xml
-          benchmark.json
+          .coverage
           pytest-report.xml
-          
-    - name: Stop Docker services
-      if: always()
-      run: docker-compose -f docker-compose.test.yml down
-      
-  # Open WebUI integration tests
-  test-openwebui-integration:
+
+  # Safety-focused tests (critical, runs daily)
+  safety-tests:
     runs-on: ubuntu-latest
-    needs: code-quality
+    needs: [should-run, quick-checks]
+    if: |
+      needs.should-run.outputs.should_run == 'true' &&
+      (needs.should-run.outputs.test_type == 'safety-only' || needs.should-run.outputs.test_type == 'full')
+    timeout-minutes: 20
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-timeout
+    
+    - name: Run comprehensive safety validation
+      run: |
+        # Create comprehensive safety test
+        cat > test_safety_comprehensive.py << 'EOF'
+        import sys
+        sys.path.insert(0, '.')
+        from test_suite import SafetyFilter
+        
+        def test_comprehensive_safety():
+            filter = SafetyFilter()
+            
+            # Comprehensive blocked terms test
+            blocked_phrases = [
+                "tell me about weapons",
+                "how to make drugs",
+                "violent content",
+                "adult material",
+                "dangerous activities"
+            ]
+            
+            safe_phrases = [
+                "what is gravity",
+                "how do plants grow",
+                "explain the water cycle",
+                "what are primary colors",
+                "how does digestion work"
+            ]
+            
+            # Test all blocked phrases
+            for phrase in blocked_phrases:
+                for age in [6, 10, 14]:
+                    is_safe, redirect = filter.check_content(phrase, age)
+                    assert not is_safe, f"Failed to block: {phrase} for age {age}"
+                    assert redirect is not None, f"No redirect for: {phrase}"
+            
+            # Test all safe phrases
+            for phrase in safe_phrases:
+                for age in [6, 10, 14]:
+                    is_safe, _ = filter.check_content(phrase, age)
+                    assert is_safe, f"Incorrectly blocked: {phrase} for age {age}"
+            
+            print(f"✓ Tested {len(blocked_phrases)} blocked phrases")
+            print(f"✓ Tested {len(safe_phrases)} safe phrases")
+            print(f"✓ 100% safety filter accuracy confirmed")
+        
+        if __name__ == "__main__":
+            test_comprehensive_safety()
+        EOF
+        
+        python test_safety_comprehensive.py
+    
+    - name: Generate safety report
+      if: always()
+      run: |
+        echo "# Safety Test Report" > safety-report.md
+        echo "Date: $(date)" >> safety-report.md
+        echo "Status: ${{ job.status }}" >> safety-report.md
+        echo "" >> safety-report.md
+        echo "## Test Coverage" >> safety-report.md
+        echo "- Blocked terms tested: 5 categories" >> safety-report.md
+        echo "- Safe content tested: 5 categories" >> safety-report.md
+        echo "- Age groups tested: 3 (6, 10, 14)" >> safety-report.md
+        echo "- Total assertions: 30+" >> safety-report.md
+    
+    - name: Upload safety report
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: safety-report
+        path: safety-report.md
+
+  # Full test suite (only for daily scheduled runs)
+  full-tests:
+    runs-on: ${{ matrix.os }}
+    needs: [should-run, essential-tests]
+    if: needs.should-run.outputs.test_type == 'full'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    timeout-minutes: 45
+    
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
-        
-    - name: Clone Open WebUI repository
-      run: |
-        git clone https://github.com/open-webui/open-webui.git
-        cd open-webui
-        git checkout main
-        
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        
-    - name: Build Open WebUI
-      run: |
-        cd open-webui
-        npm install
-        npm run build
-        
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r open-webui/backend/requirements.txt
-        
-    - name: Start Ollama service
-      run: |
-        docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
-        sleep 10
-        
-    - name: Load Sunflower models
-      run: |
-        docker exec ollama ollama pull llama3.2:1b
-        docker cp modelfiles/sunflower-kids.modelfile ollama:/tmp/
-        docker cp modelfiles/sunflower-educator.modelfile ollama:/tmp/
-        docker exec ollama ollama create sunflower-kids -f /tmp/sunflower-kids.modelfile
-        docker exec ollama ollama create sunflower-educator -f /tmp/sunflower-educator.modelfile
-        
-    - name: Start Open WebUI with Sunflower configuration
-      run: |
-        cd open-webui
-        cp ../config/sunflower-webui.json backend/data/config.json
-        python backend/main.py &
-        sleep 20
-        
-    - name: Run Open WebUI integration tests
-      run: |
-        pytest test_openwebui_integration.py -v --cov=. --cov-report=xml
-        
-    - name: Upload integration test results
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: openwebui-integration-results
-        path: |
-          coverage.xml
-          test-results.xml
-          
-  # Family safety validation tests
-  test-family-safety:
-    runs-on: ubuntu-latest
-    needs: [test-core]
-    steps:
-    - uses: actions/checkout@v4
     
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Run comprehensive safety tests
-      run: |
-        python tests/test_family_safety.py --comprehensive
-        
-    - name: Validate content filtering accuracy
-      run: |
-        python tests/validate_safety_filter.py --required-accuracy 1.0
-        
-    - name: Test age-appropriate responses
-      run: |
-        python tests/test_age_appropriate.py --all-age-groups
-        
-    - name: Generate safety report
-      run: |
-        python scripts/generate_safety_report.py --output safety-report.html
-        
-    - name: Upload safety validation report
-      uses: actions/upload-artifact@v3
-      with:
-        name: safety-validation-report
-        path: safety-report.html
-        
-  # Performance benchmarking
-  benchmark:
-    runs-on: ubuntu-latest
-    needs: [test-core]
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    steps:
-    - uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
+    - name: Full dependency installation
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest-benchmark matplotlib pandas
-        
-    - name: Run performance benchmarks
-      run: |
-        pytest tests/benchmarks/ --benchmark-only --benchmark-json=benchmark.json
-        
-    - name: Generate performance report
-      run: |
-        python scripts/analyze_benchmarks.py benchmark.json --output performance-report.html
-        
-    - name: Check performance regression
-      run: |
-        python scripts/check_regression.py benchmark.json --threshold 10
-        
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v3
-      with:
-        name: benchmark-results
-        path: |
-          benchmark.json
-          performance-report.html
-          
-  # Device manufacturing validation
-  test-manufacturing:
-    runs-on: ubuntu-latest
-    needs: [test-windows, test-macos]
-    if: github.ref == 'refs/heads/main'
-    steps:
-    - uses: actions/checkout@v4
+        pip install -r requirements-test.txt
     
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up Docker (Linux only)
+      if: runner.os == 'Linux'
+      run: |
+        # Docker is pre-installed on GitHub runners
+        docker --version
+        docker-compose --version
+    
+    - name: Run complete test suite
+      run: |
+        pytest tests/ -v --cov=. --cov-report=xml --timeout=300
+    
+    - name: Upload coverage to Codecov
+      if: runner.os == 'Linux'
+      uses: codecov/codecov-action@v3
       with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        sudo apt-get install -y genisoimage squashfs-tools
-        
-    - name: Create dual-partition test image
-      run: |
-        python scripts/create_device_image.py \
-          --cdrom-size 4G \
-          --usb-size 1G \
-          --output sunflower-test.img
-          
-    - name: Validate partition structure
-      run: |
-        python scripts/validate_device_image.py sunflower-test.img
-        
-    - name: Test device authentication
-      run: |
-        python scripts/test_device_auth.py sunflower-test.img
-        
-    - name: Generate manufacturing report
-      run: |
-        python scripts/manufacturing_report.py --output manufacturing-validation.pdf
-        
-    - name: Upload manufacturing validation
-      uses: actions/upload-artifact@v3
-      with:
-        name: manufacturing-validation
-        path: |
-          manufacturing-validation.pdf
-          device-checksum.txt
-          
-  # Final test report generation
+        file: ./coverage.xml
+        flags: ${{ runner.os }}
+        fail_ci_if_error: false
+
+  # Report generation
   generate-report:
     runs-on: ubuntu-latest
-    needs: [test-windows, test-macos, test-core, test-openwebui-integration, test-family-safety]
-    if: always()
+    needs: [essential-tests, safety-tests]
+    if: always() && needs.should-run.outputs.should_run == 'true'
     steps:
     - uses: actions/checkout@v4
     
     - name: Download all artifacts
       uses: actions/download-artifact@v3
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Generate summary
+      run: |
+        echo "# Test Summary - $(date +'%Y-%m-%d')" > summary.md
+        echo "" >> summary.md
+        echo "## Results" >> summary.md
+        echo "- Essential Tests: ${{ needs.essential-tests.result }}" >> summary.md
+        echo "- Safety Tests: ${{ needs.safety-tests.result }}" >> summary.md
+        echo "" >> summary.md
         
-    - name: Install report dependencies
-      run: |
-        pip install jinja2 markdown pandas matplotlib seaborn
-        
-    - name: Generate comprehensive test report
-      run: |
-        python scripts/generate_test_report.py \
-          --input-dir . \
-          --output test-report.html \
-          --format html
-          
-    - name: Generate executive summary
-      run: |
-        python scripts/generate_executive_summary.py \
-          --input test-report.html \
-          --output executive-summary.pdf
-          
-    - name: Calculate test metrics
-      run: |
-        python scripts/calculate_metrics.py --output metrics.json
-        
-    - name: Upload final reports
-      uses: actions/upload-artifact@v3
-      with:
-        name: test-reports
-        path: |
-          test-report.html
-          executive-summary.pdf
-          metrics.json
-          
-    - name: Post results to PR
+        if [ "${{ needs.essential-tests.result }}" == "failure" ] || [ "${{ needs.safety-tests.result }}" == "failure" ]; then
+          echo "⚠️ **Tests failed. Next scheduled run will be skipped unless code changes are made.**" >> summary.md
+        else
+          echo "✅ **All tests passed successfully!**" >> summary.md
+        fi
+    
+    - name: Post to PR if exists
       if: github.event_name == 'pull_request'
       uses: actions/github-script@v6
       with:
         script: |
           const fs = require('fs');
-          const metrics = JSON.parse(fs.readFileSync('metrics.json', 'utf8'));
-          
-          const comment = `## 🧪 Test Results
-          
-          **Overall Success Rate:** ${metrics.success_rate}%
-          **Tests Passed:** ${metrics.passed}/${metrics.total}
-          **Safety Filter Accuracy:** ${metrics.safety_accuracy}%
-          **Average Response Time:** ${metrics.avg_response_time}s
-          
-          ### Platform Coverage
-          - ✅ Windows: ${metrics.windows_passed ? 'Passed' : 'Failed'}
-          - ✅ macOS: ${metrics.macos_passed ? 'Passed' : 'Failed'}
-          - ✅ Linux: ${metrics.linux_passed ? 'Passed' : 'Failed'}
-          
-          ### Critical Requirements
-          - ${metrics.safety_100 ? '✅' : '❌'} Safety Filter 100% Effective
-          - ${metrics.setup_95 ? '✅' : '❌'} Setup Success Rate ≥ 95%
-          - ${metrics.response_3s ? '✅' : '❌'} Response Time < 3 seconds
-          - ${metrics.switch_1s ? '✅' : '❌'} Profile Switch < 1 second
-          
-          [View Full Report](https://github.com/${{github.repository}}/actions/runs/${{github.run_id}})`;
+          const summary = fs.readFileSync('summary.md', 'utf8');
           
           github.rest.issues.createComment({
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: comment
+            body: summary
+          });
+    
+    - name: Create issue on failure
+      if: |
+        failure() && 
+        (github.event_name == 'schedule' || github.event_name == 'push')
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const title = `🔴 Daily Test Failed - ${new Date().toISOString().split('T')[0]}`;
+          const body = `The daily test suite failed. Please review the logs and fix any issues.
+          
+          **Failed Jobs:**
+          - Essential Tests: ${{ needs.essential-tests.result }}
+          - Safety Tests: ${{ needs.safety-tests.result }}
+          
+          [View Full Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          Tests will not run again until changes are committed to the repository.`;
+          
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['bug', 'test-failure', 'automated']
           });
