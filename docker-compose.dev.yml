@@ -1,0 +1,213 @@
+version: '3.8'
+
+services:
+  # Ollama service for running AI models
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sunflower-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models:/models
+      - ./scripts:/scripts
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
+    networks:
+      - sunflower-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+
+  # Model loader - initializes Sunflower models
+  model-loader:
+    image: ollama/ollama:latest
+    container_name: sunflower-model-loader
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./models:/models
+      - ./scripts/load_models.sh:/load_models.sh
+    entrypoint: ["/bin/bash", "/load_models.sh"]
+    networks:
+      - sunflower-net
+
+  # Open WebUI for the interface
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: sunflower-webui
+    ports:
+      - "8080:8080"
+    volumes:
+      - webui_data:/app/backend/data
+      - ./config/webui-config.json:/app/backend/data/config.json
+      - ./custom:/app/backend/custom
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_NAME=🌻 Sunflower AI Education System
+      - WEBUI_URL=http://localhost:8080
+      - WEBUI_SECRET_KEY=sunflower-dev-secret-key-change-in-production
+      - ENABLE_SIGNUP=true
+      - ENABLE_LOGIN=true
+      - DEFAULT_MODELS=sunflower-kids,sunflower-educator
+      - ENABLE_ADMIN_EXPORT=true
+      - ENABLE_MODEL_FILTER=true
+      - MODEL_FILTER_LIST=sunflower-kids,sunflower-educator
+      - ENABLE_COMMUNITY_SHARING=false
+      - WEBHOOK_URL=
+      - ENABLE_OAUTH_SIGNUP=false
+      - SHOW_ADMIN_DETAILS=true
+      - ADMIN_EMAIL=admin@sunflower.local
+      - DEFAULT_USER_ROLE=user
+      - USER_PERMISSIONS_CHAT_DELETION=true
+      - ENABLE_LOCAL_WEB_FETCH=false
+    depends_on:
+      - ollama
+      - model-loader
+    networks:
+      - sunflower-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/config"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # Parent Dashboard (custom component)
+  parent-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: sunflower-dashboard
+    ports:
+      - "8081:3000"
+    volumes:
+      - dashboard_data:/app/data
+      - ./dashboard/config:/app/config
+    environment:
+      - API_URL=http://open-webui:8080
+      - NODE_ENV=development
+      - DASHBOARD_SECRET=sunflower-dashboard-secret
+    depends_on:
+      - open-webui
+    networks:
+      - sunflower-net
+    restart: unless-stopped
+
+  # Safety Monitor Service
+  safety-monitor:
+    build:
+      context: ./safety
+      dockerfile: Dockerfile
+    container_name: sunflower-safety
+    volumes:
+      - safety_logs:/app/logs
+      - ./safety/filters:/app/filters
+    environment:
+      - WEBUI_API=http://open-webui:8080/api
+      - SAFETY_LOG_LEVEL=INFO
+      - FILTER_ACCURACY_TARGET=1.0
+    depends_on:
+      - open-webui
+    networks:
+      - sunflower-net
+    restart: unless-stopped
+
+  # Development database for profiles and sessions
+  postgres:
+    image: postgres:15-alpine
+    container_name: sunflower-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      - POSTGRES_USER=sunflower
+      - POSTGRES_PASSWORD=sunflower-dev-password
+      - POSTGRES_DB=sunflower_dev
+    networks:
+      - sunflower-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sunflower"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: sunflower-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - sunflower-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Nginx reverse proxy (optional, for production-like testing)
+  nginx:
+    image: nginx:alpine
+    container_name: sunflower-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - open-webui
+      - parent-dashboard
+    networks:
+      - sunflower-net
+    restart: unless-stopped
+
+networks:
+  sunflower-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+volumes:
+  ollama_data:
+    driver: local
+  webui_data:
+    driver: local
+  dashboard_data:
+    driver: local
+  safety_logs:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  nginx_logs:
+    driver: local
