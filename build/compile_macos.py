@@ -1,284 +1,223 @@
+#!/usr/bin/env python3
 """
-Sunflower AI Professional System - macOS Compilation
-Production macOS app bundle and DMG build system
-Version: 6.2 - January 2025
+Sunflower AI Professional System - macOS Compiler
+Production-ready build system for macOS deployment
+Version: 6.2
 """
 
 import os
 import sys
-import subprocess
+import json
 import shutil
+import subprocess
 import tempfile
 import plistlib
-import zipfile
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-import json
 import hashlib
+import logging
+from pathlib import Path
+from typing import Dict, Optional, List, Tuple
+from datetime import datetime
+import argparse
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from build import (
-    BuildConfiguration, SecurityManager, PartitionManager,
-    BUILD_DIR, OUTPUT_DIR, TEMPLATES_DIR, ASSETS_DIR, MODELS_DIR
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
+
 
 class MacOSCompiler:
-    """macOS-specific compilation and packaging manager"""
+    """
+    Production compiler for macOS deployment.
+    Creates signed, notarized application bundles with partitioned device support.
+    """
     
-    def __init__(self, config: BuildConfiguration):
-        self.config = config
-        self.security = SecurityManager(config)
-        self.partition = PartitionManager(config)
-        self.spec_file = TEMPLATES_DIR / "macos.spec"
-        self.output_dir = config.get_output_path("macos")
+    def __init__(self, project_root: Path, output_dir: Path):
+        """Initialize macOS compiler"""
+        self.project_root = Path(project_root).resolve()
+        self.output_dir = Path(output_dir).resolve()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Build configuration
+        self.app_name = "SunflowerAI.app"
+        self.bundle_id = "com.sunflowerai.professional"
+        self.version = "6.2.0"
+        self.min_macos_version = "10.14"
+        
+        # Paths
+        self.src_dir = self.project_root / "src"
+        self.resources_dir = self.project_root / "resources"
+        self.modelfiles_dir = self.project_root / "modelfiles"
+        self.docs_dir = self.project_root / "docs"
+        
+        # Temporary build directory
         self.temp_build_dir = Path(tempfile.mkdtemp(prefix="sunflower_build_"))
         
-        # macOS-specific paths
-        self.app_name = "SunflowerAI.app"
-        self.dmg_name = f"SunflowerAI_{config.config['version']}.dmg"
-        self.launcher_app = "SunflowerLauncher.app"
+        # Load configuration
+        self.config = self._load_build_config()
         
-        # Verify macOS environment
-        if not self._is_macos():
-            raise EnvironmentError("macOS compilation must run on macOS")
-    
-    def _is_macos(self) -> bool:
-        """Verify macOS environment"""
-        return sys.platform == 'darwin'
-    
-    def compile(self) -> Path:
-        """Main macOS compilation process"""
-        print("╔════════════════════════════════════════╗")
-        print("║  Sunflower AI macOS Build System       ║")
-        print("║  Version 6.2 - Production Build        ║")
-        print("╚════════════════════════════════════════╝")
+        # Import security manager
+        sys.path.insert(0, str(self.src_dir))
+        from security import SecurityManager
+        self.security = SecurityManager(self.output_dir)
         
+        logger.info(f"macOS compiler initialized - Output: {self.output_dir}")
+    
+    def _load_build_config(self) -> Dict:
+        """Load build configuration"""
+        config_file = self.project_root / "config" / "build_config.json"
+        
+        if not config_file.exists():
+            # Default configuration
+            return {
+                "signing": {
+                    "enabled": True,
+                    "identity": "Developer ID Application",
+                    "team_id": "XXXXXXXXXX"
+                },
+                "notarization": {
+                    "enabled": True,
+                    "username": "developer@sunflowerai.com",
+                    "password": "@keychain:AC_PASSWORD"
+                },
+                "dmg": {
+                    "create": True,
+                    "background": "installer_background.png",
+                    "window_size": [600, 400]
+                }
+            }
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    
+    def compile(self) -> Tuple[bool, Path]:
+        """Main compilation process"""
         try:
-            # Phase 1: Environment preparation
-            print("\n[Phase 1/8] Preparing build environment...")
+            logger.info("Starting macOS compilation...")
+            
+            # Step 1: Prepare build environment
             self._prepare_environment()
             
-            # Phase 2: Compile main application
-            print("\n[Phase 2/8] Compiling main application...")
-            main_app = self._compile_main_app()
+            # Step 2: Create application bundle structure
+            app_bundle = self._create_app_bundle()
             
-            # Phase 3: Compile launcher
-            print("\n[Phase 3/8] Compiling universal launcher...")
-            launcher_app = self._compile_launcher()
+            # Step 3: Compile Python code
+            self._compile_python_code(app_bundle)
             
-            # Phase 4: Compile helper daemon
-            print("\n[Phase 4/8] Compiling helper daemon...")
-            helper_daemon = self._compile_helper()
+            # Step 4: Copy resources
+            self._copy_resources(app_bundle)
             
-            # Phase 5: Create partition structure
-            print("\n[Phase 5/8] Creating partition structure...")
-            cdrom_path, usb_path = self._create_partitions()
+            # Step 5: Create Info.plist
+            self._create_info_plist(app_bundle)
             
-            # Phase 6: Build app bundle
-            print("\n[Phase 6/8] Building application bundle...")
-            app_bundle = self._build_app_bundle(
-                main_app, launcher_app, helper_daemon, cdrom_path
-            )
+            # Step 6: Create launch script
+            self._create_launch_script(app_bundle)
             
-            # Phase 7: Create DMG installer
-            print("\n[Phase 7/8] Creating DMG installer...")
-            dmg_path = self._create_dmg(app_bundle)
+            # Step 7: Sign application
+            if self.config["signing"]["enabled"]:
+                self._sign_application(app_bundle)
             
-            # Phase 8: Sign and notarize
-            print("\n[Phase 8/8] Signing and notarizing...")
-            final_path = self._finalize_build(dmg_path)
+            # Step 8: Create DMG installer
+            if self.config["dmg"]["create"]:
+                dmg_path = self._create_dmg(app_bundle)
+                
+                # Step 9: Notarize DMG
+                if self.config["notarization"]["enabled"]:
+                    self._notarize_dmg(dmg_path)
+                
+                return True, dmg_path
             
-            print(f"\n✓ macOS build complete: {final_path}")
-            return final_path
+            return True, app_bundle
             
         except Exception as e:
-            print(f"\n✗ Build failed: {e}")
-            raise
+            logger.error(f"Compilation failed: {e}")
+            return False, None
         finally:
-            # Cleanup temporary directory
+            # Cleanup
             if self.temp_build_dir.exists():
                 shutil.rmtree(self.temp_build_dir, ignore_errors=True)
     
     def _prepare_environment(self):
-        """Prepare macOS build environment"""
-        # Check for required tools
-        required_tools = {
-            "pyinstaller": self._check_pyinstaller,
-            "codesign": self._check_codesign,
-            "hdiutil": self._check_hdiutil,
-            "xcrun": self._check_xcrun
-        }
+        """Prepare build environment"""
+        logger.info("  → Preparing build environment...")
         
-        for tool, checker in required_tools.items():
-            if not checker():
-                raise EnvironmentError(f"Required tool not found: {tool}")
-        
-        # Check for Xcode command line tools
-        if not self._check_xcode_tools():
-            raise EnvironmentError("Xcode command line tools not installed")
-        
-        # Create build directories
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.temp_build_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copy assets
-        self._copy_assets()
-        
-        # Generate build metadata
-        self._generate_metadata()
-    
-    def _check_pyinstaller(self) -> bool:
-        """Check PyInstaller availability"""
-        try:
-            result = subprocess.run(
-                ["pyinstaller", "--version"],
-                capture_output=True,
-                text=True
-            )
-            return result.returncode == 0
-        except FileNotFoundError:
-            return False
-    
-    def _check_codesign(self) -> bool:
-        """Check codesign availability"""
-        return shutil.which("codesign") is not None
-    
-    def _check_hdiutil(self) -> bool:
-        """Check hdiutil availability"""
-        return shutil.which("hdiutil") is not None
-    
-    def _check_xcrun(self) -> bool:
-        """Check xcrun availability"""
-        return shutil.which("xcrun") is not None
-    
-    def _check_xcode_tools(self) -> bool:
-        """Check if Xcode command line tools are installed"""
-        try:
-            result = subprocess.run(
-                ["xcode-select", "-p"],
-                capture_output=True,
-                text=True
-            )
-            return result.returncode == 0
-        except:
-            return False
-    
-    def _copy_assets(self):
-        """Copy required assets to build directory"""
-        assets_to_copy = [
-            ("icons/sunflower.icns", "sunflower.icns"),
-            ("icons/sunflower_512.png", "sunflower.png"),
-            ("certificates/root_ca.pem", "certs/root_ca.pem"),
-            ("documentation/user_guide.pdf", "docs/user_guide.pdf"),
-            ("documentation/quick_start.pdf", "docs/quick_start.pdf")
+        # Create required directories
+        dirs = [
+            self.temp_build_dir / "build",
+            self.temp_build_dir / "dist",
+            self.temp_build_dir / "resources"
         ]
         
-        for src, dst in assets_to_copy:
-            src_path = ASSETS_DIR / src
-            dst_path = self.temp_build_dir / dst
-            
-            if src_path.exists():
-                dst_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_path, dst_path)
+        for dir_path in dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
+        
+        # Copy source files
+        shutil.copytree(
+            self.src_dir,
+            self.temp_build_dir / "src",
+            ignore=shutil.ignore_patterns('__pycache__', '*.pyc')
+        )
+        
+        logger.info("  ✓ Build environment ready")
     
-    def _generate_metadata(self):
-        """Generate macOS-specific metadata"""
-        # Create Info.plist for main app
-        info_plist = {
-            "CFBundleName": "Sunflower AI",
-            "CFBundleDisplayName": "Sunflower AI Professional System",
-            "CFBundleIdentifier": "com.sunflowerai.professional",
-            "CFBundleVersion": self.config.config["version"],
-            "CFBundleShortVersionString": self.config.config["version"],
-            "CFBundlePackageType": "APPL",
-            "CFBundleSignature": "SNFL",
-            "CFBundleExecutable": "SunflowerAI",
-            "CFBundleIconFile": "sunflower.icns",
-            "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "10.14.0",
-            "NSRequiresAquaSystemAppearance": False,
-            "NSCameraUsageDescription": "Sunflower AI requires camera access for educational features",
-            "NSMicrophoneUsageDescription": "Sunflower AI requires microphone access for voice interaction",
-            "LSApplicationCategoryType": "public.app-category.education",
-            "NSHumanReadableCopyright": "Copyright © 2025 Sunflower AI Education",
-            "NSAppleEventsUsageDescription": "Sunflower AI requires automation access for system integration",
-            "NSAppTransportSecurity": {
-                "NSAllowsArbitraryLoads": False,
-                "NSAllowsLocalNetworking": True
-            }
-        }
+    def _create_app_bundle(self) -> Path:
+        """Create macOS application bundle structure"""
+        logger.info("  → Creating application bundle...")
         
-        plist_path = self.temp_build_dir / "Info.plist"
-        with open(plist_path, 'wb') as f:
-            plistlib.dump(info_plist, f)
+        app_path = self.output_dir / self.app_name
         
-        # Create entitlements.plist
-        self._create_entitlements()
+        # Remove existing bundle
+        if app_path.exists():
+            shutil.rmtree(app_path)
+        
+        # Create bundle structure
+        bundle_dirs = [
+            app_path / "Contents",
+            app_path / "Contents" / "MacOS",
+            app_path / "Contents" / "Resources",
+            app_path / "Contents" / "Frameworks",
+            app_path / "Contents" / "Library"
+        ]
+        
+        for bundle_dir in bundle_dirs:
+            bundle_dir.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"  ✓ Bundle created: {app_path}")
+        return app_path
     
-    def _create_entitlements(self):
-        """Create entitlements for code signing"""
-        entitlements = {
-            "com.apple.security.app-sandbox": False,  # Disabled for system access
-            "com.apple.security.device.camera": True,
-            "com.apple.security.device.microphone": True,
-            "com.apple.security.files.user-selected.read-write": True,
-            "com.apple.security.files.bookmarks.app-scope": True,
-            "com.apple.security.network.client": True,
-            "com.apple.security.network.server": True,
-            "com.apple.security.automation.apple-events": True,
-            "com.apple.security.cs.allow-jit": True,  # For Python runtime
-            "com.apple.security.cs.allow-unsigned-executable-memory": True,
-            "com.apple.security.cs.disable-library-validation": True
-        }
+    def _compile_python_code(self, app_bundle: Path):
+        """Compile Python code using PyInstaller"""
+        logger.info("  → Compiling Python code...")
         
-        entitlements_path = self.temp_build_dir / "entitlements.plist"
-        with open(entitlements_path, 'wb') as f:
-            plistlib.dump(entitlements, f)
-    
-    def _compile_main_app(self) -> Path:
-        """Compile main Sunflower AI application"""
-        print("  → Compiling main application with PyInstaller...")
+        # Generate PyInstaller spec file
+        spec_content = self._generate_spec_file()
+        spec_file = self.temp_build_dir / "sunflower.spec"
         
-        # Prepare PyInstaller spec
-        spec_content = self._generate_main_spec()
-        temp_spec = self.temp_build_dir / "main.spec"
-        
-        with open(temp_spec, 'w', encoding='utf-8') as f:
+        with open(spec_file, 'w', encoding='utf-8') as f:
             f.write(spec_content)
         
         # Run PyInstaller
         cmd = [
-            "pyinstaller",
+            sys.executable, "-m", "PyInstaller",
             "--clean",
             "--noconfirm",
-            "--distpath", str(self.temp_build_dir / "dist"),
+            "--distpath", str(app_bundle / "Contents" / "MacOS"),
             "--workpath", str(self.temp_build_dir / "build"),
-            str(temp_spec)
+            str(spec_file)
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
         if result.returncode != 0:
-            print(f"PyInstaller error: {result.stderr}")
-            raise RuntimeError("Main app compilation failed")
+            logger.error(f"PyInstaller failed: {result.stderr}")
+            raise RuntimeError("Python compilation failed")
         
-        app_path = self.temp_build_dir / "dist" / self.app_name
-        
-        # Fix bundle structure
-        self._fix_bundle_structure(app_path)
-        
-        # Sign application
-        if self.config.config["security"]["signing_required"]:
-            print("  → Signing main application...")
-            self.security.sign_executable(app_path, "macos")
-        
-        return app_path
+        logger.info("  ✓ Python code compiled")
     
-    def _generate_main_spec(self) -> str:
-        """Generate PyInstaller spec for main app"""
-        return f"""
-# -*- mode: python ; coding: utf-8 -*-
+    def _generate_spec_file(self) -> str:
+        """Generate PyInstaller spec file"""
+        return f"""# -*- mode: python ; coding: utf-8 -*-
 
 import sys
 import os
@@ -287,40 +226,31 @@ from pathlib import Path
 block_cipher = None
 
 a = Analysis(
-    ['{Path(__file__).parent.parent / "src" / "main.py"}'],
-    pathex=['{Path(__file__).parent.parent / "src"}'],
+    ['{self.temp_build_dir / "src" / "main.py"}'],
+    pathex=['{self.temp_build_dir / "src"}'],
     binaries=[],
     datas=[
-        ('{Path(__file__).parent.parent / "modelfiles"}', 'modelfiles'),
-        ('{Path(__file__).parent.parent / "assets"}', 'assets'),
-        ('{self.temp_build_dir / "docs"}', 'docs'),
-        ('{self.temp_build_dir / "certs"}', 'certs'),
-        ('{self.temp_build_dir / "sunflower.icns"}', '.'),
+        ('{self.modelfiles_dir}', 'modelfiles'),
+        ('{self.resources_dir}', 'resources'),
+        ('{self.docs_dir}', 'docs'),
     ],
     hiddenimports=[
-        'pydantic',
-        'uvicorn',
-        'fastapi',
-        'starlette',
-        'httpx',
-        'psutil',
+        'tkinter',
+        'PIL',
         'cryptography',
-        'Foundation',
-        'AppKit',
-        'CoreFoundation',
-        'SystemConfiguration',
+        'psutil',
+        'sqlite3',
+        'json',
+        'yaml',
+        'platform',
+        'subprocess',
+        'threading',
+        'queue'
     ],
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=[],
-    excludes=[
-        'matplotlib',
-        'numpy',
-        'pandas',
-        'scipy',
-        'PIL',
-        'tkinter',
-    ],
+    excludes=['matplotlib', 'scipy', 'numpy'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -332,504 +262,359 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='SunflowerAI',
     debug=False,
     bootloader_ignore_signals=False,
     strip=True,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
-    target_arch='universal2',  # Support both Intel and Apple Silicon
-    codesign_identity=os.environ.get('MACOS_DEVELOPER_ID'),
-    entitlements_file='{self.temp_build_dir / "entitlements.plist"}',
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=True,
-    upx=True,
-    upx_exclude=[],
-    name='SunflowerAI',
-)
-
-app = BUNDLE(
-    coll,
-    name='SunflowerAI.app',
-    icon='{self.temp_build_dir / "sunflower.icns"}',
-    bundle_identifier='com.sunflowerai.professional',
-    info_plist={{
-        'CFBundleShortVersionString': '{self.config.config["version"]}',
-        'CFBundleVersion': '{self.config.config["build_number"]}',
-        'NSHighResolutionCapable': True,
-        'LSMinimumSystemVersion': '10.14.0',
-    }},
+    argv_emulation=True,
+    target_arch='universal2',
+    codesign_identity='{self.config["signing"]["identity"]}',
+    entitlements_file=None,
 )
 """
     
-    def _fix_bundle_structure(self, app_path: Path):
-        """Fix macOS app bundle structure after PyInstaller"""
-        contents_path = app_path / "Contents"
+    def _copy_resources(self, app_bundle: Path):
+        """Copy resources to bundle"""
+        logger.info("  → Copying resources...")
         
-        # Ensure proper directory structure
-        (contents_path / "MacOS").mkdir(exist_ok=True)
-        (contents_path / "Resources").mkdir(exist_ok=True)
-        (contents_path / "Frameworks").mkdir(exist_ok=True)
+        resources_dir = app_bundle / "Contents" / "Resources"
         
-        # Copy Info.plist
-        shutil.copy2(
-            self.temp_build_dir / "Info.plist",
-            contents_path / "Info.plist"
-        )
+        # Copy icons
+        icon_file = self.resources_dir / "icons" / "sunflower.icns"
+        if icon_file.exists():
+            shutil.copy2(icon_file, resources_dir / "sunflower.icns")
+        else:
+            self._generate_default_icon(resources_dir / "sunflower.icns")
         
-        # Copy icon
-        if (self.temp_build_dir / "sunflower.icns").exists():
-            shutil.copy2(
-                self.temp_build_dir / "sunflower.icns",
-                contents_path / "Resources" / "sunflower.icns"
-            )
+        # Copy modelfiles
+        modelfiles_dest = resources_dir / "modelfiles"
+        if self.modelfiles_dir.exists():
+            shutil.copytree(self.modelfiles_dir, modelfiles_dest, dirs_exist_ok=True)
+        
+        # Copy documentation
+        docs_dest = resources_dir / "docs"
+        if self.docs_dir.exists():
+            shutil.copytree(self.docs_dir, docs_dest, dirs_exist_ok=True)
+        
+        logger.info("  ✓ Resources copied")
     
-    def _compile_launcher(self) -> Path:
-        """Compile universal launcher application"""
-        print("  → Compiling universal launcher...")
-        
-        launcher_source = self._generate_launcher_source()
-        launcher_py = self.temp_build_dir / "launcher.py"
-        
-        with open(launcher_py, 'w', encoding='utf-8') as f:
-            f.write(launcher_source)
-        
-        # Compile launcher with PyInstaller
-        cmd = [
-            "pyinstaller",
-            "--windowed",
-            "--onefile",
-            "--clean",
-            "--noconfirm",
-            "--name", "SunflowerLauncher",
-            "--icon", str(self.temp_build_dir / "sunflower.icns"),
-            "--distpath", str(self.temp_build_dir / "dist"),
-            "--workpath", str(self.temp_build_dir / "build"),
-            "--target-arch", "universal2",
-            "--osx-bundle-identifier", "com.sunflowerai.launcher",
-            str(launcher_py)
-        ]
-        
-        subprocess.run(cmd, check=True, capture_output=True)
-        
-        launcher_app = self.temp_build_dir / "dist" / self.launcher_app
-        
-        # Sign launcher
-        if self.config.config["security"]["signing_required"]:
-            self.security.sign_executable(launcher_app, "macos")
-        
-        return launcher_app
-    
-    def _generate_launcher_source(self) -> str:
-        """Generate launcher Python source code for macOS"""
-        return '''
-"""
-Sunflower AI Universal Launcher for macOS
-Auto-detects partitions and initiates setup
-"""
-
-import os
-import sys
-import json
-import subprocess
-import tkinter as tk
-from tkinter import messagebox, ttk
-from pathlib import Path
-import platform
-import plistlib
-
-# macOS-specific imports
-try:
-    from Foundation import NSBundle
-    import objc
-except ImportError:
-    pass
-
-class SunflowerLauncher:
-    """Universal launcher for Sunflower AI Professional System"""
-    
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Sunflower AI Professional System")
-        self.root.geometry("700x500")
-        self.root.resizable(False, False)
-        
-        # macOS-specific styling
-        if platform.system() == "Darwin":
-            self.setup_macos_style()
-        
-        self.cdrom_path = None
-        self.usb_path = None
-        self.setup_ui()
-        self.detect_partitions()
-    
-    def setup_macos_style(self):
-        """Apply macOS-specific styling"""
+    def _generate_default_icon(self, icon_path: Path):
+        """Generate a default icon if none exists"""
         try:
-            # Set app to use native macOS appearance
-            self.root.tk.call("::tk::unsupported::MacWindowStyle",
-                            "style", self.root._w, "floating")
-        except:
-            pass
-    
-    def setup_ui(self):
-        """Setup launcher UI with macOS design"""
-        # Header with gradient effect
-        header = tk.Frame(self.root, bg="#2E7D32", height=100)
-        header.pack(fill=tk.X)
-        
-        # Logo and title
-        title_frame = tk.Frame(header, bg="#2E7D32")
-        title_frame.pack(expand=True)
-        
-        title = tk.Label(
-            title_frame,
-            text="🌻 Sunflower AI Professional System",
-            font=("SF Pro Display", 24, "bold"),
-            bg="#2E7D32",
-            fg="white"
-        )
-        title.pack(pady=30)
-        
-        subtitle = tk.Label(
-            title_frame,
-            text="K-12 STEM Education Platform",
-            font=("SF Pro Text", 14),
-            bg="#2E7D32",
-            fg="#E8F5E9"
-        )
-        subtitle.pack()
-        
-        # Main content area
-        self.content_frame = tk.Frame(self.root, bg="#F5F5F5")
-        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=30)
-        
-        # Status section
-        self.status_label = tk.Label(
-            self.content_frame,
-            text="🔍 Detecting Sunflower AI device...",
-            font=("SF Pro Text", 14),
-            bg="#F5F5F5",
-            fg="#424242"
-        )
-        self.status_label.pack(pady=20)
-        
-        # Progress indicator
-        self.progress = ttk.Progressbar(
-            self.content_frame,
-            mode="indeterminate",
-            length=400,
-            style="TProgressbar"
-        )
-        self.progress.pack(pady=10)
-        self.progress.start(10)
-        
-        # Device info (hidden initially)
-        self.info_frame = tk.Frame(self.content_frame, bg="#F5F5F5")
-        
-        # Action buttons (hidden initially)
-        self.button_frame = tk.Frame(self.content_frame, bg="#F5F5F5")
-        
-        self.setup_button = tk.Button(
-            self.button_frame,
-            text="🚀 Setup Sunflower AI",
-            font=("SF Pro Text", 14, "bold"),
-            bg="#4CAF50",
-            fg="white",
-            width=20,
-            height=2,
-            borderwidth=0,
-            highlightthickness=0,
-            command=self.start_setup,
-            state=tk.DISABLED
-        )
-        self.setup_button.pack(side=tk.LEFT, padx=10)
-        
-        self.launch_button = tk.Button(
-            self.button_frame,
-            text="▶️ Launch Sunflower AI",
-            font=("SF Pro Text", 14, "bold"),
-            bg="#2196F3",
-            fg="white",
-            width=20,
-            height=2,
-            borderwidth=0,
-            highlightthickness=0,
-            command=self.launch_app,
-            state=tk.DISABLED
-        )
-        self.launch_button.pack(side=tk.LEFT, padx=10)
-        
-        # Style progress bar for macOS
-        style = ttk.Style()
-        style.theme_use('default')
-        style.configure("TProgressbar",
-                       background="#4CAF50",
-                       troughcolor="#E0E0E0",
-                       borderwidth=0,
-                       lightcolor="#4CAF50",
-                       darkcolor="#4CAF50")
-    
-    def detect_partitions(self):
-        """Detect CD-ROM and USB partitions on macOS"""
-        self.root.after(1000, self._scan_volumes)
-    
-    def _scan_volumes(self):
-        """Scan for Sunflower AI partitions using macOS diskutil"""
-        import subprocess
-        
-        # Get list of mounted volumes
-        result = subprocess.run(
-            ["diskutil", "list", "-plist"],
-            capture_output=True,
-            text=True
-        )
-        
-        if result.returncode == 0:
-            # Parse plist output
-            import plistlib
-            disks = plistlib.loads(result.stdout.encode())
+            from PIL import Image, ImageDraw, ImageFont
             
-            # Check each volume
-            volumes_path = Path("/Volumes")
-            for volume in volumes_path.iterdir():
-                if volume.is_dir():
-                    # Check for CD-ROM partition
-                    if self._verify_cdrom_partition(volume):
-                        self.cdrom_path = volume
-                    # Check for USB partition  
-                    elif self._verify_usb_partition(volume):
-                        self.usb_path = volume
-        
-        if self.cdrom_path and self.usb_path:
-            self.on_device_found()
-        else:
-            # Retry detection
-            self.root.after(2000, self._scan_volumes)
-    
-    def _verify_cdrom_partition(self, volume_path):
-        """Verify CD-ROM partition signature"""
-        try:
-            signature_file = volume_path / "SUNFLOWER.ID"
-            if signature_file.exists():
-                with open(signature_file, "r") as f:
-                    return f.read().strip() == "SUNFLOWER_AI_PRO_v6"
-        except:
-            pass
-        return False
-    
-    def _verify_usb_partition(self, volume_path):
-        """Verify USB partition structure"""
-        try:
-            config_file = volume_path / "config" / "system.json"
-            return config_file.exists()
-        except:
-            pass
-        return False
-    
-    def on_device_found(self):
-        """Handle successful device detection"""
-        self.progress.stop()
-        self.progress.pack_forget()
-        
-        # Update status
-        self.status_label.config(
-            text="✅ Sunflower AI device detected",
-            fg="#2E7D32"
-        )
-        
-        # Show device info
-        info_text = tk.Text(
-            self.info_frame,
-            height=4,
-            width=50,
-            font=("SF Mono", 11),
-            bg="#FFFFFF",
-            fg="#424242",
-            borderwidth=1,
-            relief=tk.SOLID
-        )
-        info_text.pack(pady=10)
-        
-        info_text.insert(tk.END, f"📀 CD-ROM: {self.cdrom_path.name}\\n")
-        info_text.insert(tk.END, f"💾 USB: {self.usb_path.name}\\n")
-        
-        # Check initialization status
-        if self._is_initialized():
-            info_text.insert(tk.END, "✓ System initialized\\n")
-            info_text.insert(tk.END, "✓ Ready to launch")
-            self.launch_button.config(state=tk.NORMAL)
-        else:
-            info_text.insert(tk.END, "⚠️ First-time setup required\\n")
-            info_text.insert(tk.END, "   Click Setup to begin")
-            self.setup_button.config(state=tk.NORMAL)
-        
-        info_text.config(state=tk.DISABLED)
-        self.info_frame.pack(pady=10)
-        self.button_frame.pack(pady=20)
-    
-    def _is_initialized(self):
-        """Check if system is initialized"""
-        try:
-            config_file = self.usb_path / "config" / "system.json"
-            with open(config_file, "r") as f:
-                config = json.load(f)
-                return config.get("initialized", False)
-        except:
-            return False
-    
-    def start_setup(self):
-        """Start first-time setup process"""
-        setup_app = self.cdrom_path / "system" / "SunflowerSetup.app"
-        if setup_app.exists():
+            # Create a sunflower-themed icon
+            size = (512, 512)
+            img = Image.new('RGBA', size, (255, 255, 255, 0))
+            draw = ImageDraw.Draw(img)
+            
+            # Draw sunflower shape
+            center = (256, 256)
+            petal_color = (255, 215, 0)  # Gold
+            center_color = (139, 69, 19)  # Brown
+            
+            # Draw petals
+            for angle in range(0, 360, 30):
+                x = center[0] + 150 * (angle % 2 + 1) * 0.7
+                y = center[1] + 150 * (angle % 2 + 1) * 0.7
+                draw.ellipse([x-40, y-40, x+40, y+40], fill=petal_color)
+            
+            # Draw center
+            draw.ellipse([center[0]-80, center[1]-80, center[0]+80, center[1]+80], 
+                        fill=center_color)
+            
+            # Save as ICNS (simplified - would need iconutil in production)
+            img.save(icon_path.with_suffix('.png'))
+            
+            # Convert PNG to ICNS using iconutil
             subprocess.run([
-                "open", "-a", str(setup_app),
-                "--args", str(self.cdrom_path), str(self.usb_path)
-            ])
-            self.root.destroy()
-        else:
-            messagebox.showerror("Error", "Setup application not found on device")
+                'iconutil', '-c', 'icns',
+                '-o', str(icon_path),
+                str(icon_path.with_suffix('.png'))
+            ], check=False)
+            
+        except Exception as e:
+            logger.warning(f"Could not generate icon: {e}")
     
-    def launch_app(self):
-        """Launch main Sunflower AI application"""
-        main_app = self.cdrom_path / "system" / "SunflowerAI.app"
-        if main_app.exists():
-            subprocess.run([
-                "open", "-a", str(main_app),
-                "--args", str(self.cdrom_path), str(self.usb_path)
-            ])
-            self.root.destroy()
-        else:
-            messagebox.showerror("Error", "Application not found on device")
-    
-    def run(self):
-        """Run launcher"""
-        # Center window on screen
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
+    def _create_info_plist(self, app_bundle: Path):
+        """Create Info.plist file"""
+        logger.info("  → Creating Info.plist...")
         
-        self.root.mainloop()
-
-if __name__ == "__main__":
-    launcher = SunflowerLauncher()
-    launcher.run()
-'''
-    
-    def _compile_helper(self) -> Path:
-        """Compile helper daemon for background services"""
-        print("  → Compiling helper daemon...")
-        
-        helper_source = self._generate_helper_source()
-        helper_py = self.temp_build_dir / "helper.py"
-        
-        with open(helper_py, 'w', encoding='utf-8') as f:
-            f.write(helper_source)
-        
-        # Compile helper daemon
-        cmd = [
-            "pyinstaller",
-            "--onefile",
-            "--console",  # Daemon runs in background
-            "--clean",
-            "--noconfirm",
-            "--name", "SunflowerHelper",
-            "--distpath", str(self.temp_build_dir / "dist"),
-            "--workpath", str(self.temp_build_dir / "build"),
-            "--target-arch", "universal2",
-            str(helper_py)
-        ]
-        
-        subprocess.run(cmd, check=True, capture_output=True)
-        
-        helper_exe = self.temp_build_dir / "dist" / "SunflowerHelper"
-        
-        # Sign helper
-        if self.config.config["security"]["signing_required"]:
-            self.security.sign_executable(helper_exe, "macos")
-        
-        return helper_exe
-    
-    def _generate_helper_source(self) -> str:
-        """Generate helper daemon source code"""
-        return '''
-"""
-Sunflower AI Helper Daemon for macOS
-Manages Ollama and system resources
-"""
-
-import os
-import sys
-import time
-import json
-import signal
-import subprocess
-import psutil
-from pathlib import Path
-from threading import Thread, Event
-import logging
-from logging.handlers import RotatingFileHandler
-
-class SunflowerHelper:
-    """Background helper daemon for Sunflower AI"""
-    
-    def __init__(self):
-        self.setup_logging()
-        self.running = Event()
-        self.running.set()
-        self.ollama_process = None
-        self.config = self.load_config()
-        
-        # Register signal handlers
-        signal.signal(signal.SIGTERM, self.handle_signal)
-        signal.signal(signal.SIGINT, self.handle_signal)
-        
-        self.logger.info("Sunflower AI Helper Daemon starting...")
-    
-    def setup_logging(self):
-        """Setup logging configuration"""
-        log_dir = Path.home() / "Library" / "Logs" / "SunflowerAI"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.logger = logging.getLogger("SunflowerHelper")
-        self.logger.setLevel(logging.INFO)
-        
-        handler = RotatingFileHandler(
-            log_dir / "helper.log",
-            maxBytes=10485760,  # 10MB
-            backupCount=5
-        )
-        
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        self.logger.addHandler(handler)
-    
-    def load_config(self):
-        """Load daemon configuration"""
-        config_path = Path.home() / "Library" / "Application Support" / "SunflowerAI" / "config.json"
-        
-        default_config = {
-            "ollama_path": "/Applications/SunflowerAI.app/Contents/Resources/ollama/ollama",
-            "model_path": "/Applications/SunflowerAI.app/Contents/Resources/models",
-            "port": 11434,
-            "max_memory_gb": 4,
-            "auto_select_model": True,
-            "health_check_interval": 30
+        info_plist = {
+            'CFBundleDevelopmentRegion': 'en',
+            'CFBundleExecutable': 'launcher',
+            'CFBundleIdentifier': self.bundle_id,
+            'CFBundleInfoDictionaryVersion': '6.0',
+            'CFBundleName': 'Sunflower AI',
+            'CFBundlePackageType': 'APPL',
+            'CFBundleShortVersionString': self.version,
+            'CFBundleVersion': self.version,
+            'CFBundleSignature': 'SNFL',
+            'LSMinimumSystemVersion': self.min_macos_version,
+            'NSHighResolutionCapable': True,
+            'NSRequiresAquaSystemAppearance': False,
+            'CFBundleIconFile': 'sunflower.icns',
+            'NSHumanReadableCopyright': 'Copyright © 2025 Sunflower AI Systems',
+            'LSApplicationCategoryType': 'public.app-category.education',
+            'NSMainNibFile': 'MainMenu',
+            'NSPrincipalClass': 'NSApplication',
+            'NSAppTransportSecurity': {
+                'NSAllowsArbitraryLoads': False,
+                'NSAllowsLocalNetworking': True
+            },
+            'LSRequiresIPhoneOS': False,
+            'UTExportedTypeDeclarations': [],
+            'UTImportedTypeDeclarations': []
         }
         
-        if config_path.exists():
-            try:
+        plist_path = app_bundle / "Contents" / "Info.plist"
+        with open(plist_path, 'wb') as f:
+            plistlib.dump(info_plist, f)
+        
+        logger.info("  ✓ Info.plist created")
+    
+    def _create_launch_script(self, app_bundle: Path):
+        """Create launcher script"""
+        logger.info("  → Creating launcher script...")
+        
+        launcher_content = '''#!/bin/bash
+# Sunflower AI Professional System - macOS Launcher
+
+# Get the directory of the app bundle
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+RESOURCES_DIR="$(dirname "$DIR")/Resources"
+
+# Set environment variables
+export SUNFLOWER_HOME="$HOME/Library/Application Support/SunflowerAI"
+export SUNFLOWER_DATA="$SUNFLOWER_HOME/data"
+export SUNFLOWER_LOGS="$SUNFLOWER_HOME/logs"
+
+# Create directories if they don't exist
+mkdir -p "$SUNFLOWER_DATA"
+mkdir -p "$SUNFLOWER_LOGS"
+
+# Launch the main application
+exec "$DIR/SunflowerAI" "$@"
+'''
+        
+        launcher_path = app_bundle / "Contents" / "MacOS" / "launcher"
+        with open(launcher_path, 'w') as f:
+            f.write(launcher_content)
+        
+        # Make executable
+        os.chmod(launcher_path, 0o755)
+        
+        logger.info("  ✓ Launcher script created")
+    
+    def _sign_application(self, app_bundle: Path):
+        """Sign application bundle"""
+        logger.info("  → Signing application...")
+        
+        identity = self.config["signing"]["identity"]
+        
+        # Sign all binaries
+        for binary in app_bundle.rglob("*"):
+            if binary.is_file() and (binary.suffix in ['.dylib', '.so', ''] or 
+                                    binary.name in ['SunflowerAI', 'launcher']):
+                cmd = [
+                    'codesign',
+                    '--force',
+                    '--sign', identity,
+                    '--timestamp',
+                    '--options', 'runtime',
+                    '--entitlements', str(self._create_entitlements()),
+                    str(binary)
+                ]
+                subprocess.run(cmd, check=False)
+        
+        # Sign the bundle itself
+        cmd = [
+            'codesign',
+            '--force',
+            '--deep',
+            '--sign', identity,
+            '--timestamp',
+            '--options', 'runtime',
+            '--entitlements', str(self._create_entitlements()),
+            str(app_bundle)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.warning(f"Signing failed: {result.stderr}")
+        else:
+            logger.info("  ✓ Application signed")
+    
+    def _create_entitlements(self) -> Path:
+        """Create entitlements file"""
+        entitlements = {
+            'com.apple.security.cs.allow-jit': True,
+            'com.apple.security.cs.allow-unsigned-executable-memory': True,
+            'com.apple.security.cs.disable-library-validation': True,
+            'com.apple.security.device.usb': True,
+            'com.apple.security.files.user-selected.read-write': True,
+            'com.apple.security.network.client': True,
+            'com.apple.security.network.server': True
+        }
+        
+        entitlements_path = self.temp_build_dir / "entitlements.plist"
+        with open(entitlements_path, 'wb') as f:
+            plistlib.dump(entitlements, f)
+        
+        return entitlements_path
+    
+    def _create_dmg(self, app_bundle: Path) -> Path:
+        """Create DMG installer"""
+        logger.info("  → Creating DMG installer...")
+        
+        dmg_name = f"SunflowerAI-{self.version}-macOS.dmg"
+        dmg_path = self.output_dir / dmg_name
+        
+        # Create temporary DMG directory
+        dmg_dir = self.temp_build_dir / "dmg"
+        dmg_dir.mkdir(exist_ok=True)
+        
+        # Copy app bundle
+        shutil.copytree(app_bundle, dmg_dir / self.app_name)
+        
+        # Create Applications symlink
+        os.symlink('/Applications', str(dmg_dir / 'Applications'))
+        
+        # Create DMG
+        cmd = [
+            'hdiutil', 'create',
+            '-volname', f'Sunflower AI {self.version}',
+            '-srcfolder', str(dmg_dir),
+            '-ov',
+            '-format', 'UDZO',
+            str(dmg_path)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"DMG creation failed: {result.stderr}")
+            raise RuntimeError("DMG creation failed")
+        
+        logger.info(f"  ✓ DMG created: {dmg_path}")
+        return dmg_path
+    
+    def _notarize_dmg(self, dmg_path: Path):
+        """Notarize DMG with Apple"""
+        logger.info("  → Notarizing DMG...")
+        
+        username = self.config["notarization"]["username"]
+        password = self.config["notarization"]["password"]
+        team_id = self.config["signing"]["team_id"]
+        
+        # Submit for notarization
+        cmd = [
+            'xcrun', 'altool',
+            '--notarize-app',
+            '--primary-bundle-id', self.bundle_id,
+            '--username', username,
+            '--password', password,
+            '--team-id', team_id,
+            '--file', str(dmg_path),
+            '--output-format', 'json'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            response = json.loads(result.stdout)
+            request_id = response.get('notarization-upload', {}).get('RequestUUID')
+            
+            if request_id:
+                logger.info(f"  ✓ Notarization submitted: {request_id}")
+                self._wait_for_notarization(request_id)
+            else:
+                logger.warning("  ⚠ Notarization submission unclear")
+        else:
+            logger.warning(f"  ⚠ Notarization failed: {result.stderr}")
+    
+    def _wait_for_notarization(self, request_id: str):
+        """Wait for notarization to complete"""
+        username = self.config["notarization"]["username"]
+        password = self.config["notarization"]["password"]
+        
+        logger.info("  → Waiting for notarization...")
+        
+        for _ in range(60):  # Wait up to 30 minutes
+            import time
+            time.sleep(30)
+            
+            cmd = [
+                'xcrun', 'altool',
+                '--notarization-info', request_id,
+                '--username', username,
+                '--password', password,
+                '--output-format', 'json'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                response = json.loads(result.stdout)
+                status = response.get('notarization-info', {}).get('Status')
+                
+                if status == 'success':
+                    logger.info("  ✓ Notarization successful")
+                    return
+                elif status == 'invalid':
+                    logger.error("  ✗ Notarization failed")
+                    return
+        
+        logger.warning("  ⚠ Notarization timeout")
+
+
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(description='Compile Sunflower AI for macOS')
+    parser.add_argument('--project-root', type=Path, default=Path.cwd(),
+                       help='Project root directory')
+    parser.add_argument('--output-dir', type=Path, default=Path('dist/macos'),
+                       help='Output directory for compiled application')
+    parser.add_argument('--skip-signing', action='store_true',
+                       help='Skip code signing')
+    parser.add_argument('--skip-notarization', action='store_true',
+                       help='Skip notarization')
+    parser.add_argument('--skip-dmg', action='store_true',
+                       help='Skip DMG creation')
+    
+    args = parser.parse_args()
+    
+    # Initialize compiler
+    compiler = MacOSCompiler(args.project_root, args.output_dir)
+    
+    # Override config if requested
+    if args.skip_signing:
+        compiler.config["signing"]["enabled"] = False
+    if args.skip_notarization:
+        compiler.config["notarization"]["enabled"] = False
+    if args.skip_dmg:
+        compiler.config["dmg"]["create"] = False
+    
+    # Run compilation
+    success, output_path = compiler.compile()
+    
+    if success:
+        print(f"✓ Compilation successful: {output_path}")
+        return 0
+    else:
+        print("✗ Compilation failed")
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
