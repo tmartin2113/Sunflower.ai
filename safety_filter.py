@@ -9,13 +9,17 @@ import re
 import json
 import hashlib
 import logging
-from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass
-from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Any, Set
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta
 from pathlib import Path
 import unicodedata
+import threading
+from collections import defaultdict
+import sqlite3
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SafetyResult:
@@ -27,15 +31,45 @@ class SafetyResult:
     suggested_response: Optional[str]
     parent_alert: bool
     details: Dict[str, Any]
+    educational_redirect: Optional[str] = None
+    severity_level: int = 0  # 0=safe, 1=mild, 2=moderate, 3=severe, 4=critical
+
+
+@dataclass
+class SafetyIncident:
+    """Record of safety incident"""
+    id: str
+    timestamp: datetime
+    child_id: str
+    session_id: str
+    input_text: str
+    category: str
+    severity: int
+    action_taken: str
+    parent_notified: bool
+    details: Dict[str, Any]
+
 
 class SafetyFilter:
     """Enterprise-grade safety filter for child protection"""
+    
+    # Severity levels
+    SEVERITY_SAFE = 0
+    SEVERITY_MILD = 1
+    SEVERITY_MODERATE = 2
+    SEVERITY_SEVERE = 3
+    SEVERITY_CRITICAL = 4
     
     def __init__(self, usb_path: Path):
         """Initialize safety filter with comprehensive blocklists"""
         self.usb_path = Path(usb_path)
         self.filter_path = self.usb_path / 'safety_filters'
         self.filter_path.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize database for incident tracking
+        self.db_path = self.usb_path / 'safety' / 'incidents.db'
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_database()
         
         # Load filter configurations
         self.filters = self._load_filters()
@@ -50,15 +84,53 @@ class SafetyFilter:
         # Educational topics whitelist
         self.educational_topics = self._load_educational_topics()
         
+        # Cache for performance
+        self._cache = {}
+        self._cache_lock = threading.Lock()
+        
         # Statistics tracking
         self.stats = {
             'total_checks': 0,
             'blocked_count': 0,
             'flagged_count': 0,
-            'redirected_count': 0
+            'redirected_count': 0,
+            'false_positives': 0,
+            'true_positives': 0
         }
         
         logger.info("Safety filter initialized with comprehensive protection")
+    
+    def _init_database(self):
+        """Initialize incidents database"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS incidents (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                child_id TEXT NOT NULL,
+                session_id TEXT,
+                input_text TEXT NOT NULL,
+                category TEXT NOT NULL,
+                severity INTEGER NOT NULL,
+                action_taken TEXT NOT NULL,
+                parent_notified INTEGER DEFAULT 0,
+                details TEXT,
+                resolved INTEGER DEFAULT 0
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_child_incidents ON incidents (child_id)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_severity ON incidents (severity)
+        """)
+        
+        conn.commit()
+        conn.close()
     
     def _load_filters(self) -> Dict[str, List[str]]:
         """Load comprehensive filter lists"""
@@ -73,603 +145,734 @@ class SafetyFilter:
             'self_harm': [],
             'hate_speech': [],
             'deception': [],
-            'inappropriate_requests': []
+            'inappropriate_requests': [],
+            'scary_content': [],
+            'commercial': [],
+            'medical_advice': []
         }
         
         # Core safety patterns (production-ready)
+        # Note: Using placeholder mild words for safety, real implementation would have comprehensive lists
+        
         filters['profanity'] = [
-            # Comprehensive list loaded from encrypted file in production
-            r'\b(damn|hell|crap|suck|stupid|idiot|shut up)\b',  # Mild
-            # More severe terms would be in encrypted blocklist file
+            # Common profanity patterns (sanitized for production)
+            r'\b(damn|hell|crap|suck|stupid|idiot|dumb)\b',
+            r'\b(f+u+c+k+|s+h+i+t+|b+i+t+c+h+|a+s+s+)\b',
+            # Leetspeak variants
+            r'\b(f+[u\*@]+[c\*@]+k+|s+h+[i!1]+t+|[a@]+[s$5]+[s$5]+)\b'
         ]
         
         filters['violence'] = [
-            r'\b(kill|murder|stab|shoot|bomb|weapon|gun|knife|poison)\b',
-            r'\b(fight|beat up|punch|hit|attack|assault)\b',
-            r'\b(blood|gore|torture|death|die|dead)\b'
+            r'\b(kill|murder|stab|shoot|bomb|explode|weapon|gun|knife|sword)\b',
+            r'\b(punch|kick|fight|attack|hurt|harm|beat|destroy)\b',
+            r'\b(blood|gore|torture|violent|assault|war|battle)\b',
+            r'\b(suicide|die|death|dead)\b'
         ]
         
         filters['adult_content'] = [
-            r'\b(sex|nude|naked|porn|kiss|date|boyfriend|girlfriend)\b',
-            r'\b(body parts|private|underwear|bedroom)\b',
-            # More comprehensive patterns in production
+            r'\b(sex|porn|nude|naked|breast|genital)\b',
+            r'\b(kiss|date|boyfriend|girlfriend|romance|love)\b',
+            r'\b(adult|mature|explicit|erotic)\b'
         ]
         
         filters['dangerous_activities'] = [
-            r'\b(how to make (a )?bomb|explosive|weapon)\b',
-            r'\b(hack|crack|bypass|cheat|steal)\b',
-            r'\b(run away|escape|hide from parents)\b',
-            r'\b(dangerous (challenge|game|trick))\b'
+            r'\b(drug|cocaine|marijuana|meth|heroin|weed|alcohol|beer|wine|vodka)\b',
+            r'\b(smoke|cigarette|vape|tobacco|nicotine)\b',
+            r'\b(poison|toxic|chemical|explosive|dangerous)\b',
+            r'\b(hack|crack|pirate|steal|illegal)\b',
+            r'\b(fire|burn|lighter|match|gasoline)\b'
         ]
         
         filters['personal_information'] = [
-            r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # Phone numbers
-            r'\b\d{3}-\d{2}-\d{4}\b',  # SSN pattern
+            r'\b(address|phone|email|social\s+security|ssn|credit\s+card)\b',
+            r'\b(password|login|account|username)\b',
+            r'\b(school\s+name|teacher\s+name|parent\s+name)\b',
+            r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # Phone number
             r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
-            r'\b\d{1,5}\s[\w\s]{1,20}(street|st|avenue|ave|road|rd|drive|dr|lane|ln|court|ct)\b',  # Address
-            r'\b(password|credit card|bank account|social security)\b'
+            r'\b\d{4,}\b'  # Long numbers (potential sensitive data)
         ]
         
         filters['bullying'] = [
-            r'\b(hate|ugly|fat|dumb|loser|nobody likes|worthless)\b',
-            r'\b(make fun of|tease|pick on|laugh at)\b',
-            r'\b(go away|leave me alone|don\'t talk to)\b'
-        ]
-        
-        filters['drugs_alcohol'] = [
-            r'\b(drug|marijuana|weed|cocaine|meth|heroin|pill)\b',
-            r'\b(alcohol|beer|wine|drunk|high|stoned)\b',
-            r'\b(smoke|vape|cigarette|tobacco)\b'
+            r'\b(bully|tease|mean|hate|ugly|fat|skinny|loser|weird|freak)\b',
+            r'\b(nobody\s+likes|everyone\s+hates|kill\s+yourself)\b',
+            r'\b(worthless|useless|pathetic|disgusting)\b'
         ]
         
         filters['self_harm'] = [
-            r'\b(hurt (my|your)self|self(-| )harm|cut (my|your)self)\b',
-            r'\b(suicide|end (my|your) life|want to die)\b',
-            r'\b(nobody cares|better off without|worthless|hopeless)\b'
+            r'\b(cut|cutting|self\s+harm|hurt\s+myself|suicide|kill\s+myself)\b',
+            r'\b(depression|depressed|anxious|anxiety|panic)\b',
+            r'\b(eating\s+disorder|anorexia|bulimia|binge)\b',
+            r'\b(worthless|hopeless|nobody\s+cares)\b'
         ]
         
         filters['hate_speech'] = [
-            # Patterns for detecting discriminatory language
-            r'\b(hate|discriminate|racist|sexist)\b',
-            # More comprehensive patterns in encrypted production file
+            r'\b(racist|racism|nazi|hitler|kkk)\b',
+            r'\b(discrimination|prejudice|bigot)\b',
+            # Ethnic/religious slurs would be here in production
         ]
         
         filters['deception'] = [
-            r'\b(lie to|trick|deceive|fool|prank)\b',
-            r'\b(don\'t tell|keep (it a )?secret|hide from)\b',
-            r'\b(pretend to be|fake|impersonate)\b'
+            r'\b(lie|cheat|trick|scam|fraud|fake)\b',
+            r'\b(sneak|hide|secret|don\'t\s+tell)\b',
+            r'\b(bypass|circumvent|avoid|disable\s+safety)\b'
         ]
         
-        filters['inappropriate_requests'] = [
-            r'\b(show me|send me|give me).*(picture|photo|image)\b',
-            r'\b(meet|come to|visit|see you)\b',
-            r'\b(are you alone|where are your parents|home alone)\b',
-            r'\b(what (are you )?wearing|what do you look like)\b'
+        filters['scary_content'] = [
+            r'\b(ghost|monster|demon|devil|hell|satan)\b',
+            r'\b(scary|horror|nightmare|terror|frightening)\b',
+            r'\b(zombie|vampire|werewolf|witch)\b'
+        ]
+        
+        filters['commercial'] = [
+            r'\b(buy|purchase|order|credit\s+card|payment|price)\b',
+            r'\b(discount|sale|offer|deal|free\s+trial)\b',
+            r'\b(website|click\s+here|download|install)\b'
+        ]
+        
+        filters['medical_advice'] = [
+            r'\b(medicine|medication|prescription|dose|treatment)\b',
+            r'\b(diagnose|diagnosis|symptom|disease|illness)\b',
+            r'\b(doctor|hospital|emergency|poison\s+control)\b'
         ]
         
         return filters
-    
-    def _load_custom_rules(self) -> List[Dict[str, Any]]:
-        """Load custom safety rules for complex scenarios"""
-        rules = [
-            {
-                'name': 'age_inappropriate_complexity',
-                'description': 'Content too complex for age group',
-                'check': lambda text, age: self._check_complexity(text, age)
-            },
-            {
-                'name': 'emotional_manipulation',
-                'description': 'Attempts to manipulate emotions',
-                'patterns': [
-                    r'if you really loved',
-                    r'you would do it if',
-                    r'don\'t you trust me',
-                    r'prove you\'re not scared'
-                ]
-            },
-            {
-                'name': 'academic_cheating',
-                'description': 'Requests for homework answers or test cheating',
-                'patterns': [
-                    r'give me (the )?answers',
-                    r'do my homework',
-                    r'write my essay',
-                    r'take my test',
-                    r'cheat on',
-                    r'copy.*homework'
-                ]
-            },
-            {
-                'name': 'bypassing_safety',
-                'description': 'Attempts to bypass safety measures',
-                'patterns': [
-                    r'pretend.*no safety',
-                    r'ignore.*rules',
-                    r'bypass.*filter',
-                    r'turn off.*protection',
-                    r'adult mode',
-                    r'unrestricted'
-                ]
-            }
-        ]
-        
-        return rules
     
     def _compile_patterns(self) -> Dict[str, List[re.Pattern]]:
         """Compile regex patterns for performance"""
         compiled = {}
         
         for category, patterns in self.filters.items():
-            compiled[category] = [
-                re.compile(pattern, re.IGNORECASE) 
-                for pattern in patterns
-            ]
-        
-        # Compile custom rule patterns
-        for rule in self.custom_rules:
-            if 'patterns' in rule:
-                rule['compiled'] = [
-                    re.compile(pattern, re.IGNORECASE)
-                    for pattern in rule['patterns']
-                ]
+            compiled[category] = []
+            for pattern in patterns:
+                try:
+                    compiled[category].append(re.compile(pattern, re.IGNORECASE))
+                except re.error as e:
+                    logger.error(f"Failed to compile pattern in {category}: {pattern} - {e}")
         
         return compiled
     
+    def _load_custom_rules(self) -> Dict[str, Any]:
+        """Load custom filtering rules"""
+        custom_file = self.filter_path / 'custom_rules.json'
+        
+        default_rules = {
+            'max_message_length': 500,
+            'min_message_length': 1,
+            'max_numbers_allowed': 10,
+            'allow_urls': False,
+            'allow_emails': False,
+            'max_capital_letters_percent': 50,
+            'max_special_chars_percent': 20,
+            'max_repeated_chars': 3,
+            'block_all_caps': True,
+            'block_spam_patterns': True
+        }
+        
+        if custom_file.exists():
+            try:
+                with open(custom_file, 'r') as f:
+                    custom = json.load(f)
+                    default_rules.update(custom)
+            except Exception as e:
+                logger.error(f"Failed to load custom rules: {e}")
+        
+        return default_rules
+    
     def _load_safe_redirects(self) -> Dict[str, str]:
-        """Load safe topic redirections for inappropriate requests"""
+        """Load safe redirection responses"""
         return {
-            'violence': "Instead of discussing that, let's explore how forces and motion work in physics! Did you know that...",
-            'adult_content': "That's not something we should talk about. How about we learn about biology and how plants grow instead?",
-            'dangerous_activities': "Safety is important! Let's learn about chemistry safely with fun experiments you can do with adult supervision.",
-            'drugs_alcohol': "Let's focus on healthy choices! Did you know your brain is still developing? Let's learn about neuroscience!",
-            'bullying': "Everyone deserves kindness and respect. Let's learn about psychology and what makes people unique!",
-            'self_harm': "You matter and there are people who care about you. Please talk to a trusted adult. Meanwhile, let's explore something positive together.",
-            'personal_information': "It's important to keep personal information private online. Let's learn about internet safety and computer science!",
-            'inappropriate_requests': "I can't help with that, but I'd love to teach you something cool about science or technology!",
-            'academic_cheating': "Learning is more fun when you do it yourself! Let me help you understand the concepts so you can solve it on your own.",
-            'default': "That's not something we should discuss. Let's explore an interesting STEM topic instead! What subject interests you most?"
+            'violence': "Let's learn about physics and forces instead! Did you know engineers use physics to design safer cars and buildings?",
+            'adult_content': "That's not appropriate for us to discuss. How about we explore the amazing science of biology instead?",
+            'dangerous_activities': "Safety first! Let's learn about chemistry reactions that are safe and fun to observe!",
+            'personal_information': "I can't share or ask for personal information. Let's focus on learning together!",
+            'bullying': "Let's be kind to everyone! Would you like to learn about teamwork in science and engineering?",
+            'self_harm': "If you're feeling upset, please talk to a trusted adult. Meanwhile, let's explore something positive in science!",
+            'drugs_alcohol': "Your health is important! Let's learn about how your amazing body works instead.",
+            'scary_content': "Let's explore real science mysteries that are fascinating but not scary!",
+            'commercial': "I'm here to help you learn, not to sell things. What would you like to discover in STEM?",
+            'medical_advice': "For health questions, always talk to a doctor or parent. Let's learn about human biology instead!",
+            'hate_speech': "Everyone deserves respect! Let's celebrate diversity by learning about scientists from around the world!",
+            'deception': "Honesty is important in science! Let's learn about the scientific method and how it seeks truth.",
+            'profanity': "Let's keep our language appropriate for learning. What STEM topic interests you?"
         }
     
-    def _load_educational_topics(self) -> List[str]:
-        """Load list of approved educational topics"""
-        return [
-            # Science
-            'biology', 'chemistry', 'physics', 'astronomy', 'geology',
-            'ecology', 'meteorology', 'oceanography', 'botany', 'zoology',
-            'anatomy', 'genetics', 'evolution', 'scientific method',
-            
-            # Technology
-            'computer science', 'programming', 'robotics', 'artificial intelligence',
-            'internet safety', 'digital literacy', 'coding', 'algorithms',
-            'data structures', 'web development', 'app development',
-            
-            # Engineering
-            'mechanical engineering', 'electrical engineering', 'civil engineering',
-            'aerospace', 'design process', 'problem solving', 'innovation',
-            'construction', 'architecture', 'materials science',
-            
-            # Mathematics
-            'arithmetic', 'algebra', 'geometry', 'trigonometry', 'calculus',
-            'statistics', 'probability', 'logic', 'number theory',
-            'mathematical reasoning', 'problem solving', 'patterns',
-            
-            # General Learning
-            'history of science', 'famous scientists', 'experiments',
-            'scientific discoveries', 'innovation', 'research',
-            'critical thinking', 'hypothesis', 'observation'
-        ]
+    def _load_educational_topics(self) -> Set[str]:
+        """Load whitelist of educational topics"""
+        return {
+            'science', 'technology', 'engineering', 'mathematics', 'math',
+            'physics', 'chemistry', 'biology', 'astronomy', 'geology',
+            'computer', 'programming', 'coding', 'robotics', 'ai',
+            'nature', 'animals', 'plants', 'ecosystem', 'environment',
+            'space', 'planets', 'stars', 'universe', 'solar system',
+            'history', 'geography', 'culture', 'art', 'music',
+            'reading', 'writing', 'vocabulary', 'grammar', 'literature',
+            'homework', 'study', 'learn', 'education', 'school',
+            'experiment', 'research', 'discover', 'explore', 'investigate'
+        }
     
-    def check_content(self, text: str, age: int, context: Dict[str, Any] = None) -> SafetyResult:
-        """Comprehensive content safety check"""
+    def check_content(self, text: str, age: int = 10, context: Optional[Dict] = None) -> SafetyResult:
+        """
+        Comprehensive content safety check
+        
+        Args:
+            text: Input text to check
+            age: Child's age for age-appropriate filtering
+            context: Optional context for better analysis
+        
+        Returns:
+            SafetyResult with detailed safety analysis
+        """
         self.stats['total_checks'] += 1
         
-        # Normalize text for checking
-        normalized_text = self._normalize_text(text)
+        # Check cache
+        cache_key = hashlib.md5(f"{text}:{age}".encode()).hexdigest()
+        with self._cache_lock:
+            if cache_key in self._cache:
+                return self._cache[cache_key]
         
-        # Check against all filter categories
-        flags = []
-        categories_triggered = []
-        safety_score = 1.0
+        # Normalize text
+        normalized = self._normalize_text(text)
         
-        # Check compiled patterns
-        for category, patterns in self.compiled_patterns.items():
-            for pattern in patterns:
-                if pattern.search(normalized_text):
-                    flags.append(f"{category}: {pattern.pattern}")
-                    categories_triggered.append(category)
-                    safety_score -= 0.3
-                    break
-        
-        # Check custom rules
-        for rule in self.custom_rules:
-            if 'compiled' in rule:
-                for pattern in rule['compiled']:
-                    if pattern.search(normalized_text):
-                        flags.append(f"Rule: {rule['name']}")
-                        categories_triggered.append(rule['name'])
-                        safety_score -= 0.2
-                        break
-            elif 'check' in rule:
-                if rule['check'](text, age):
-                    flags.append(f"Rule: {rule['name']}")
-                    categories_triggered.append(rule['name'])
-                    safety_score -= 0.1
-        
-        # Check for personal information
-        if self._contains_personal_info(text):
-            flags.append("Contains personal information")
-            categories_triggered.append('personal_information')
-            safety_score -= 0.4
-        
-        # Determine safety result
-        safety_score = max(0.0, min(1.0, safety_score))
-        is_safe = safety_score >= 0.7
-        
-        # Determine if parent alert needed
-        parent_alert = False
-        if any(cat in ['self_harm', 'violence', 'adult_content', 'dangerous_activities'] 
-               for cat in categories_triggered):
-            parent_alert = True
-        
-        # Get suggested response
-        suggested_response = None
-        if not is_safe and categories_triggered:
-            primary_category = categories_triggered[0]
-            suggested_response = self.safe_redirects.get(
-                primary_category, 
-                self.safe_redirects['default']
-            )
-        
-        # Update statistics
-        if not is_safe:
-            self.stats['blocked_count'] += 1
-        if flags:
-            self.stats['flagged_count'] += 1
-        if suggested_response:
-            self.stats['redirected_count'] += 1
-        
-        return SafetyResult(
-            safe=is_safe,
-            score=safety_score,
-            flags=flags,
-            category=categories_triggered[0] if categories_triggered else 'clean',
-            suggested_response=suggested_response,
-            parent_alert=parent_alert,
-            details={
-                'normalized_text': normalized_text[:100],
-                'age': age,
-                'timestamp': datetime.now().isoformat(),
-                'categories_triggered': categories_triggered
-            }
+        # Initialize result
+        result = SafetyResult(
+            safe=True,
+            score=1.0,
+            flags=[],
+            category="safe",
+            suggested_response=None,
+            parent_alert=False,
+            details={}
         )
-    
-    def check_response(self, response: str, age: int) -> SafetyResult:
-        """Check AI response for appropriateness"""
-        # Similar to check_content but with additional checks for AI responses
-        result = self.check_content(response, age)
         
-        # Additional checks for AI responses
-        educational_score = self._calculate_educational_value(response)
+        # Run all safety checks
+        checks = [
+            self._check_patterns(normalized),
+            self._check_length(text),
+            self._check_caps_spam(text),
+            self._check_personal_info(text),
+            self._check_urls_emails(text),
+            self._check_age_appropriate(normalized, age),
+            self._check_context_appropriate(normalized, context)
+        ]
         
-        # Adjust safety score based on educational value
-        if educational_score > 0.7:
-            result.score = min(1.0, result.score + 0.1)
+        # Aggregate results
+        for check in checks:
+            if check:
+                result.safe = False
+                result.score = min(result.score, check.get('score', 0.5))
+                result.flags.extend(check.get('flags', []))
+                
+                if check.get('category'):
+                    result.category = check['category']
+                    result.suggested_response = self.safe_redirects.get(
+                        check['category'],
+                        "Let's talk about something else! What would you like to learn about in science?"
+                    )
+                
+                if check.get('severity', 0) >= self.SEVERITY_SEVERE:
+                    result.parent_alert = True
+                
+                result.severity_level = max(result.severity_level, check.get('severity', 0))
         
-        # Check age-appropriate complexity
-        if not self._is_age_appropriate_complexity(response, age):
-            result.flags.append("Complexity mismatch for age")
-            result.score -= 0.1
+        # Check for educational context
+        if self._is_educational_context(normalized):
+            # Reduce severity for educational discussions
+            result.severity_level = max(0, result.severity_level - 1)
+            if result.severity_level <= self.SEVERITY_MILD:
+                result.parent_alert = False
         
-        # Check for positive reinforcement
-        if self._contains_positive_reinforcement(response):
-            result.score = min(1.0, result.score + 0.05)
+        # Add educational redirect if unsafe
+        if not result.safe:
+            result.educational_redirect = self._get_educational_redirect(result.category, age)
+            self.stats['blocked_count'] += 1
         
-        result.score = max(0.0, min(1.0, result.score))
-        result.safe = result.score >= 0.7
+        # Cache result
+        with self._cache_lock:
+            self._cache[cache_key] = result
+            # Limit cache size
+            if len(self._cache) > 1000:
+                self._cache.clear()
         
         return result
     
     def _normalize_text(self, text: str) -> str:
-        """Normalize text for consistent checking"""
+        """Normalize text for analysis"""
+        # Remove accents and special characters
+        text = unicodedata.normalize('NFKD', text)
+        text = text.encode('ascii', 'ignore').decode('ascii')
+        
         # Convert to lowercase
         text = text.lower()
         
-        # Remove accents and special characters
-        text = unicodedata.normalize('NFKD', text)
-        text = ''.join([c for c in text if not unicodedata.combining(c)])
-        
-        # Common substitutions used to bypass filters
-        substitutions = {
-            '@': 'a', '3': 'e', '1': 'i', '0': 'o', '5': 's',
-            '7': 't', '4': 'a', '!': 'i', '$': 's', '+': 't'
-        }
-        
-        for old, new in substitutions.items():
-            text = text.replace(old, new)
-        
-        # Remove excessive spaces
+        # Remove extra whitespace
         text = ' '.join(text.split())
         
         return text
     
-    def _contains_personal_info(self, text: str) -> bool:
+    def _check_patterns(self, text: str) -> Optional[Dict]:
+        """Check text against pattern filters"""
+        for category, patterns in self.compiled_patterns.items():
+            for pattern in patterns:
+                if pattern.search(text):
+                    severity = self._get_category_severity(category)
+                    return {
+                        'category': category,
+                        'flags': [f'matched_{category}_filter'],
+                        'score': 0.0,
+                        'severity': severity
+                    }
+        return None
+    
+    def _check_length(self, text: str) -> Optional[Dict]:
+        """Check message length constraints"""
+        if len(text) > self.custom_rules['max_message_length']:
+            return {
+                'flags': ['message_too_long'],
+                'score': 0.8,
+                'severity': self.SEVERITY_MILD
+            }
+        
+        if len(text) < self.custom_rules['min_message_length']:
+            return {
+                'flags': ['message_too_short'],
+                'score': 0.9,
+                'severity': self.SEVERITY_MILD
+            }
+        
+        return None
+    
+    def _check_caps_spam(self, text: str) -> Optional[Dict]:
+        """Check for excessive caps or spam patterns"""
+        if not text:
+            return None
+        
+        # Check all caps
+        if self.custom_rules['block_all_caps'] and text.isupper() and len(text) > 5:
+            return {
+                'flags': ['all_caps_message'],
+                'score': 0.7,
+                'severity': self.SEVERITY_MILD
+            }
+        
+        # Check capital letters percentage
+        caps_count = sum(1 for c in text if c.isupper())
+        caps_percent = (caps_count / len(text)) * 100
+        
+        if caps_percent > self.custom_rules['max_capital_letters_percent']:
+            return {
+                'flags': ['excessive_capitals'],
+                'score': 0.8,
+                'severity': self.SEVERITY_MILD
+            }
+        
+        # Check repeated characters
+        for i in range(len(text) - self.custom_rules['max_repeated_chars']):
+            if len(set(text[i:i + self.custom_rules['max_repeated_chars'] + 1])) == 1:
+                return {
+                    'flags': ['spam_pattern'],
+                    'score': 0.7,
+                    'severity': self.SEVERITY_MILD
+                }
+        
+        return None
+    
+    def _check_personal_info(self, text: str) -> Optional[Dict]:
         """Check for personal information patterns"""
         # Phone number pattern
         phone_pattern = re.compile(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b')
         if phone_pattern.search(text):
-            return True
-        
-        # Email pattern
-        email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
-        if email_pattern.search(text):
-            return True
-        
-        # Address pattern
-        address_pattern = re.compile(
-            r'\b\d{1,5}\s[\w\s]{1,20}(street|st|avenue|ave|road|rd|drive|dr|lane|ln|court|ct)\b',
-            re.IGNORECASE
-        )
-        if address_pattern.search(text):
-            return True
+            return {
+                'category': 'personal_information',
+                'flags': ['phone_number_detected'],
+                'score': 0.0,
+                'severity': self.SEVERITY_SEVERE
+            }
         
         # SSN pattern
         ssn_pattern = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
         if ssn_pattern.search(text):
-            return True
+            return {
+                'category': 'personal_information',
+                'flags': ['ssn_detected'],
+                'score': 0.0,
+                'severity': self.SEVERITY_CRITICAL
+            }
         
-        # Credit card pattern (basic)
+        # Credit card pattern
         cc_pattern = re.compile(r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b')
         if cc_pattern.search(text):
-            return True
+            return {
+                'category': 'personal_information',
+                'flags': ['credit_card_detected'],
+                'score': 0.0,
+                'severity': self.SEVERITY_CRITICAL
+            }
         
-        return False
+        return None
     
-    def _check_complexity(self, text: str, age: int) -> bool:
-        """Check if text complexity matches age level"""
-        # Simple complexity scoring
-        words = text.split()
-        avg_word_length = sum(len(w) for w in words) / len(words) if words else 0
-        sentence_count = len(re.split(r'[.!?]', text))
-        words_per_sentence = len(words) / sentence_count if sentence_count else len(words)
+    def _check_urls_emails(self, text: str) -> Optional[Dict]:
+        """Check for URLs and email addresses"""
+        if not self.custom_rules['allow_urls']:
+            url_pattern = re.compile(r'https?://[^\s]+|www\.[^\s]+')
+            if url_pattern.search(text):
+                return {
+                    'flags': ['url_detected'],
+                    'score': 0.3,
+                    'severity': self.SEVERITY_MODERATE
+                }
         
-        # Age-based thresholds
-        if age <= 7:
-            return avg_word_length > 6 or words_per_sentence > 15
-        elif age <= 10:
-            return avg_word_length > 8 or words_per_sentence > 20
-        elif age <= 13:
-            return avg_word_length > 10 or words_per_sentence > 25
-        else:
-            return False  # No upper limit for teens
+        if not self.custom_rules['allow_emails']:
+            email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+            if email_pattern.search(text):
+                return {
+                    'category': 'personal_information',
+                    'flags': ['email_detected'],
+                    'score': 0.2,
+                    'severity': self.SEVERITY_MODERATE
+                }
+        
+        return None
     
-    def _is_age_appropriate_complexity(self, text: str, age: int) -> bool:
-        """Check if response complexity is appropriate for age"""
-        words = text.split()
+    def _check_age_appropriate(self, text: str, age: int) -> Optional[Dict]:
+        """Check if content is age-appropriate"""
+        # Age-specific forbidden topics
+        if age < 8:
+            # Very young children - extra strict
+            young_forbidden = ['death', 'die', 'dead', 'scary', 'monster', 'war']
+            for word in young_forbidden:
+                if word in text:
+                    return {
+                        'category': 'scary_content',
+                        'flags': ['not_age_appropriate'],
+                        'score': 0.3,
+                        'severity': self.SEVERITY_MODERATE
+                    }
         
-        # Age-based word count limits
-        age_limits = {
-            7: (30, 50),    # K-2
-            10: (50, 75),   # Elementary
-            13: (75, 125),  # Middle
-            17: (125, 200)  # High
-        }
+        elif age < 13:
+            # Pre-teens - moderate restrictions
+            preteen_forbidden = ['dating', 'romance', 'kiss', 'boyfriend', 'girlfriend']
+            for word in preteen_forbidden:
+                if word in text:
+                    return {
+                        'category': 'adult_content',
+                        'flags': ['not_age_appropriate'],
+                        'score': 0.5,
+                        'severity': self.SEVERITY_MILD
+                    }
         
-        for max_age, (min_words, max_words) in age_limits.items():
-            if age <= max_age:
-                return min_words <= len(words) <= max_words * 1.2  # Allow 20% overflow
-        
-        return True
+        return None
     
-    def _calculate_educational_value(self, text: str) -> float:
-        """Calculate educational value score of response"""
-        score = 0.0
-        text_lower = text.lower()
+    def _check_context_appropriate(self, text: str, context: Optional[Dict]) -> Optional[Dict]:
+        """Check if content is appropriate for current context"""
+        if not context:
+            return None
         
-        # Check for educational keywords
+        # Check if in homework mode
+        if context.get('mode') == 'homework':
+            # Extra strict in homework mode
+            non_homework_words = ['game', 'play', 'fun', 'youtube', 'tiktok', 'social media']
+            for word in non_homework_words:
+                if word in text:
+                    return {
+                        'flags': ['off_topic_in_homework_mode'],
+                        'score': 0.6,
+                        'severity': self.SEVERITY_MILD
+                    }
+        
+        return None
+    
+    def _is_educational_context(self, text: str) -> bool:
+        """Check if text is in educational context"""
         educational_keywords = [
-            'learn', 'discover', 'explore', 'understand', 'explain',
-            'science', 'technology', 'engineering', 'mathematics',
-            'experiment', 'observe', 'hypothesis', 'theory', 'fact',
-            'research', 'study', 'analyze', 'calculate', 'measure'
+            'learn', 'study', 'homework', 'school', 'teacher',
+            'science', 'math', 'history', 'geography', 'english',
+            'explain', 'understand', 'question', 'answer', 'help'
         ]
         
-        for keyword in educational_keywords:
-            if keyword in text_lower:
-                score += 0.1
-        
-        # Check for educational topics
-        for topic in self.educational_topics:
-            if topic in text_lower:
-                score += 0.2
-        
-        # Check for encouraging language
-        encouraging_phrases = [
-            'great question', 'good thinking', 'you\'re right',
-            'excellent', 'well done', 'keep learning', 'that\'s interesting'
-        ]
-        
-        for phrase in encouraging_phrases:
-            if phrase in text_lower:
-                score += 0.1
-        
-        return min(1.0, score)
+        return any(keyword in text for keyword in educational_keywords)
     
-    def _contains_positive_reinforcement(self, text: str) -> bool:
-        """Check if response contains positive reinforcement"""
-        positive_phrases = [
-            'great job', 'well done', 'excellent', 'fantastic',
-            'you\'re doing great', 'keep it up', 'proud of you',
-            'good work', 'nice thinking', 'clever', 'smart'
-        ]
+    def _get_category_severity(self, category: str) -> int:
+        """Get severity level for category"""
+        severity_map = {
+            'profanity': self.SEVERITY_MODERATE,
+            'violence': self.SEVERITY_SEVERE,
+            'adult_content': self.SEVERITY_SEVERE,
+            'dangerous_activities': self.SEVERITY_CRITICAL,
+            'personal_information': self.SEVERITY_SEVERE,
+            'bullying': self.SEVERITY_SEVERE,
+            'self_harm': self.SEVERITY_CRITICAL,
+            'hate_speech': self.SEVERITY_CRITICAL,
+            'deception': self.SEVERITY_MODERATE,
+            'scary_content': self.SEVERITY_MILD,
+            'commercial': self.SEVERITY_MILD,
+            'medical_advice': self.SEVERITY_MODERATE
+        }
         
-        text_lower = text.lower()
-        return any(phrase in text_lower for phrase in positive_phrases)
+        return severity_map.get(category, self.SEVERITY_MODERATE)
     
-    def generate_safety_report(self, session_id: str, interactions: List[Dict]) -> Dict:
-        """Generate safety report for parent review"""
-        report = {
-            'session_id': session_id,
-            'timestamp': datetime.now().isoformat(),
-            'total_interactions': len(interactions),
-            'safety_summary': {
-                'clean': 0,
-                'flagged': 0,
-                'blocked': 0,
-                'redirected': 0
+    def _get_educational_redirect(self, category: str, age: int) -> str:
+        """Get age-appropriate educational redirect"""
+        redirects = {
+            5: {  # Ages 5-7
+                'default': "Let's learn about colors and shapes in nature!",
+                'violence': "How about we learn about friendly animals instead?",
+                'scary_content': "Let's explore happy science facts about rainbows!"
             },
-            'categories_triggered': {},
-            'concerning_interactions': [],
-            'educational_value': 0.0,
-            'recommendations': []
+            8: {  # Ages 8-10
+                'default': "Let's discover cool science experiments!",
+                'violence': "How about learning how engineers build safe playgrounds?",
+                'scary_content': "Let's explore real-life animal superpowers!"
+            },
+            11: {  # Ages 11-13
+                'default': "Let's explore interesting STEM topics!",
+                'violence': "How about studying the physics of protective equipment?",
+                'scary_content': "Let's investigate real scientific mysteries!"
+            },
+            14: {  # Ages 14-17
+                'default': "Let's focus on academic subjects that interest you!",
+                'violence': "How about exploring conflict resolution in history?",
+                'scary_content': "Let's analyze scientific phenomena!"
+            }
         }
         
-        total_educational_score = 0.0
+        # Get age group
+        if age <= 7:
+            age_group = 5
+        elif age <= 10:
+            age_group = 8
+        elif age <= 13:
+            age_group = 11
+        else:
+            age_group = 14
         
-        for interaction in interactions:
-            # Analyze each interaction
-            user_result = self.check_content(
-                interaction['user_input'],
-                interaction['age']
-            )
-            ai_result = self.check_response(
-                interaction['ai_response'],
-                interaction['age']
-            )
-            
-            # Update summary
-            if user_result.safe and ai_result.safe:
-                report['safety_summary']['clean'] += 1
-            if user_result.flags or ai_result.flags:
-                report['safety_summary']['flagged'] += 1
-            if not user_result.safe:
-                report['safety_summary']['blocked'] += 1
-            if user_result.suggested_response:
-                report['safety_summary']['redirected'] += 1
-            
-            # Track categories
-            for category in user_result.details.get('categories_triggered', []):
-                report['categories_triggered'][category] = \
-                    report['categories_triggered'].get(category, 0) + 1
-            
-            # Flag concerning interactions
-            if user_result.parent_alert or ai_result.parent_alert:
-                report['concerning_interactions'].append({
-                    'timestamp': interaction['timestamp'],
-                    'user_input': interaction['user_input'][:100],
-                    'flags': user_result.flags + ai_result.flags,
-                    'safety_score': min(user_result.score, ai_result.score)
-                })
-            
-            # Calculate educational value
-            total_educational_score += self._calculate_educational_value(
-                interaction['ai_response']
-            )
-        
-        # Calculate average educational value
-        if interactions:
-            report['educational_value'] = total_educational_score / len(interactions)
-        
-        # Generate recommendations
-        if report['safety_summary']['blocked'] > 0:
-            report['recommendations'].append(
-                "Review blocked content with your child to understand their interests"
-            )
-        
-        if report['concerning_interactions']:
-            report['recommendations'].append(
-                f"Found {len(report['concerning_interactions'])} interactions that may need discussion"
-            )
-        
-        if report['educational_value'] < 0.5:
-            report['recommendations'].append(
-                "Consider encouraging more educational topics during sessions"
-            )
-        
-        if report['safety_summary']['clean'] == len(interactions):
-            report['recommendations'].append(
-                "Excellent session with no safety concerns!"
-            )
-        
-        return report
+        return redirects[age_group].get(category, redirects[age_group]['default'])
     
-    def export_filter_stats(self) -> Dict:
-        """Export filter statistics for analysis"""
+    def record_incident(self, child_id: str, session_id: str, text: str, 
+                       result: SafetyResult):
+        """Record safety incident for parent review"""
+        if result.safe:
+            return
+        
+        incident_id = hashlib.md5(f"{child_id}:{timestamp}:{text}".encode()).hexdigest()[:16]
+        timestamp = datetime.now()
+        
+        incident = SafetyIncident(
+            id=incident_id,
+            timestamp=timestamp,
+            child_id=child_id,
+            session_id=session_id,
+            input_text=text[:500],  # Truncate for storage
+            category=result.category,
+            severity=result.severity_level,
+            action_taken="blocked_and_redirected",
+            parent_notified=result.parent_alert,
+            details={
+                'flags': result.flags,
+                'score': result.score,
+                'suggested_response': result.suggested_response
+            }
+        )
+        
+        # Store in database
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO incidents (
+                id, timestamp, child_id, session_id, input_text,
+                category, severity, action_taken, parent_notified, details
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            incident.id,
+            incident.timestamp.isoformat(),
+            incident.child_id,
+            incident.session_id,
+            incident.input_text,
+            incident.category,
+            incident.severity,
+            incident.action_taken,
+            int(incident.parent_notified),
+            json.dumps(incident.details)
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.warning(f"Safety incident recorded: {incident.category} (severity: {incident.severity})")
+    
+    def get_incidents(self, child_id: Optional[str] = None, 
+                     severity_min: int = 0,
+                     limit: int = 100) -> List[SafetyIncident]:
+        """Get safety incidents for review"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        if child_id:
+            cursor.execute("""
+                SELECT * FROM incidents 
+                WHERE child_id = ? AND severity >= ?
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            """, (child_id, severity_min, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM incidents 
+                WHERE severity >= ?
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            """, (severity_min, limit))
+        
+        incidents = []
+        for row in cursor.fetchall():
+            incident = SafetyIncident(
+                id=row[0],
+                timestamp=datetime.fromisoformat(row[1]),
+                child_id=row[2],
+                session_id=row[3],
+                input_text=row[4],
+                category=row[5],
+                severity=row[6],
+                action_taken=row[7],
+                parent_notified=bool(row[8]),
+                details=json.loads(row[9] or '{}')
+            )
+            incidents.append(incident)
+        
+        conn.close()
+        return incidents
+    
+    def mark_incident_resolved(self, incident_id: str):
+        """Mark incident as resolved by parent"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE incidents SET resolved = 1 WHERE id = ?
+        """, (incident_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Incident {incident_id} marked as resolved")
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get safety filter statistics"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        # Get incident counts by category
+        cursor.execute("""
+            SELECT category, COUNT(*) FROM incidents 
+            GROUP BY category
+        """)
+        category_counts = dict(cursor.fetchall())
+        
+        # Get incident counts by severity
+        cursor.execute("""
+            SELECT severity, COUNT(*) FROM incidents 
+            GROUP BY severity
+        """)
+        severity_counts = dict(cursor.fetchall())
+        
+        conn.close()
+        
         return {
-            'timestamp': datetime.now().isoformat(),
-            'statistics': self.stats,
-            'filter_categories': list(self.filters.keys()),
-            'custom_rules_count': len(self.custom_rules),
-            'safe_redirects_count': len(self.safe_redirects),
-            'educational_topics_count': len(self.educational_topics)
+            'total_checks': self.stats['total_checks'],
+            'blocked_count': self.stats['blocked_count'],
+            'flagged_count': self.stats['flagged_count'],
+            'redirected_count': self.stats['redirected_count'],
+            'incidents_by_category': category_counts,
+            'incidents_by_severity': severity_counts,
+            'cache_size': len(self._cache),
+            'effectiveness_rate': (
+                self.stats['blocked_count'] / self.stats['total_checks'] * 100
+                if self.stats['total_checks'] > 0 else 0
+            )
         }
     
-    def update_custom_filter(self, category: str, patterns: List[str]):
-        """Allow parents to add custom filter patterns"""
+    def update_custom_rules(self, rules: Dict[str, Any]):
+        """Update custom filtering rules"""
+        self.custom_rules.update(rules)
+        
+        # Save to file
+        custom_file = self.filter_path / 'custom_rules.json'
+        with open(custom_file, 'w') as f:
+            json.dump(self.custom_rules, f, indent=2)
+        
+        logger.info("Custom rules updated")
+    
+    def add_blocked_phrase(self, phrase: str, category: str):
+        """Add a custom blocked phrase"""
         if category not in self.filters:
             self.filters[category] = []
         
-        # Add new patterns
-        self.filters[category].extend(patterns)
+        # Escape special regex characters
+        escaped = re.escape(phrase)
+        pattern = rf'\b{escaped}\b'
+        
+        self.filters[category].append(pattern)
         
         # Recompile patterns
-        self.compiled_patterns[category] = [
-            re.compile(pattern, re.IGNORECASE)
-            for pattern in self.filters[category]
+        try:
+            compiled = re.compile(pattern, re.IGNORECASE)
+            if category not in self.compiled_patterns:
+                self.compiled_patterns[category] = []
+            self.compiled_patterns[category].append(compiled)
+            
+            logger.info(f"Added blocked phrase to {category}: {phrase}")
+        except re.error as e:
+            logger.error(f"Failed to add phrase: {e}")
+    
+    def test_filter(self, test_text: str, age: int = 10) -> Dict[str, Any]:
+        """Test the filter with sample text (for debugging)"""
+        result = self.check_content(test_text, age)
+        
+        return {
+            'input': test_text,
+            'age': age,
+            'safe': result.safe,
+            'score': result.score,
+            'category': result.category,
+            'flags': result.flags,
+            'severity': result.severity_level,
+            'suggested_response': result.suggested_response,
+            'parent_alert': result.parent_alert,
+            'educational_redirect': result.educational_redirect
+        }
+
+
+# Testing and validation
+if __name__ == "__main__":
+    # Test the safety filter
+    import tempfile
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filter = SafetyFilter(Path(tmpdir))
+        
+        # Test cases
+        test_cases = [
+            ("Let's learn about photosynthesis!", 10, True),
+            ("What is 2 + 2?", 7, True),
+            ("Can you help with my science homework?", 12, True),
+            ("bad word test", 10, False),
+            ("Tell me about weapons", 8, False),
+            ("My phone number is 555-1234", 10, False),
+            ("Let's talk about dating", 9, False),
+            ("I hate myself", 11, False),
+            ("How do volcanoes work?", 10, True),
+            ("STOP YELLING AT ME!!!!!!", 10, False)
         ]
         
-        # Save to disk
-        filter_file = self.filter_path / f"custom_{category}.json"
-        with open(filter_file, 'w') as f:
-            json.dump(self.filters[category], f, indent=2)
+        print("Safety Filter Test Results:")
+        print("-" * 60)
         
-        logger.info(f"Updated {category} filter with {len(patterns)} new patterns")
-
-# Utility functions for integration
-def create_child_safe_prompt(age: int, topic: str) -> str:
-    """Generate age-appropriate prompt wrapper"""
-    if age <= 7:
-        return f"""You are a friendly teacher talking to a {age}-year-old child about {topic}.
-Use simple words, short sentences, and fun examples.
-Maximum response: 50 words.
-Safety level: Maximum - avoid any complex or potentially concerning topics."""
-    
-    elif age <= 10:
-        return f"""You are an encouraging teacher helping a {age}-year-old learn about {topic}.
-Use clear explanations with examples they can understand.
-Maximum response: 75 words.
-Safety level: High - keep content appropriate for elementary school."""
-    
-    elif age <= 13:
-        return f"""You are a knowledgeable teacher guiding a {age}-year-old student in {topic}.
-Provide informative explanations with real-world connections.
-Maximum response: 125 words.
-Safety level: High - maintain middle school appropriateness."""
-    
-    else:
-        return f"""You are an educational assistant helping a {age}-year-old explore {topic}.
-Offer comprehensive explanations with critical thinking elements.
-Maximum response: 200 words.
-Safety level: Standard - maintain high school appropriateness."""
-
-if __name__ == "__main__":
-    # Example usage
-    filter = SafetyFilter(Path("/Volumes/SUNFLOWER_DATA"))
-    
-    # Test various inputs
-    test_cases = [
-        ("Tell me about photosynthesis", 8),
-        ("How do computers work?", 10),
-        ("What's the capital of France?", 7),
-        ("Can you help me with my math homework?", 12),
-    ]
-    
-    for text, age in test_cases:
-        result = filter.check_content(text, age)
-        print(f"\nInput: {text}")
-        print(f"Age: {age}")
-        print(f"Safe: {result.safe}")
-        print(f"Score: {result.score:.2f}")
-        if result.flags:
-            print(f"Flags: {result.flags}")
-        if result.suggested_response:
-            print(f"Suggested: {result.suggested_response[:50]}...")
+        for text, age, expected_safe in test_cases:
+            result = filter.test_filter(text, age)
+            status = "✓" if (result['safe'] == expected_safe) else "✗"
+            print(f"{status} Age {age}: '{text[:30]}...' -> Safe: {result['safe']}")
+            if not result['safe']:
+                print(f"  Category: {result['category']}, Severity: {result['severity']}")
+                print(f"  Redirect: {result['suggested_response'][:50]}...")
+        
+        print("-" * 60)
+        print(f"Statistics: {filter.get_statistics()}")
