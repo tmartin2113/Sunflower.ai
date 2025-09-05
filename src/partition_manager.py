@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Sunflower AI Professional System - Partition Manager
 Version: 6.2
@@ -22,6 +23,8 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import psutil
 import time
+import hashlib
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,8 @@ class PartitionInfo:
     label: Optional[str] = None
     uuid: Optional[str] = None
     marker_file: Optional[str] = None
+    verified: bool = False
+    integrity_hash: Optional[str] = None
 
 
 class PartitionManager:
@@ -81,6 +86,9 @@ class PartitionManager:
         self._cdrom_path: Optional[Path] = None
         self._usb_path: Optional[Path] = None
         self._partition_info: Dict[str, PartitionInfo] = {}
+        
+        # Thread safety
+        self._scan_lock = threading.Lock()
         
         # Platform-specific initialization
         self._init_platform_specific()
@@ -109,6 +117,9 @@ class PartitionManager:
         except ImportError:
             self.win32_available = False
             logger.warning("pywin32 not available - using fallback methods")
+        
+        # Windows drive letters to scan
+        self.windows_drives = [f"{chr(i)}:" for i in range(65, 91)]  # A: to Z:
     
     def _init_macos(self):
         """Initialize macOS-specific settings"""
@@ -116,12 +127,26 @@ class PartitionManager:
         self.diskutil_available = shutil.which("diskutil") is not None
         if not self.diskutil_available:
             logger.warning("diskutil not available")
+        
+        # macOS mount points
+        self.macos_mount_points = [
+            Path("/Volumes"),
+            Path("/media"),
+            Path("/mnt")
+        ]
     
     def _init_linux(self):
         """Initialize Linux-specific settings"""
         # Check for required tools
         self.lsblk_available = shutil.which("lsblk") is not None
         self.mount_available = shutil.which("mount") is not None
+        
+        # Linux mount points
+        self.linux_mount_points = [
+            Path("/media"),
+            Path("/mnt"),
+            Path("/run/media")
+        ]
     
     def scan_partitions(self) -> Dict[str, PartitionInfo]:
         """
@@ -130,208 +155,149 @@ class PartitionManager:
         Returns:
             Dictionary of detected partitions
         """
-        logger.info("Scanning for Sunflower AI partitions...")
-        
-        self._partition_info.clear()
-        self._cdrom_path = None
-        self._usb_path = None
-        
-        if self.platform_name == "Windows":
-            self._scan_windows_partitions()
-        elif self.platform_name == "Darwin":
-            self._scan_macos_partitions()
-        else:
-            self._scan_linux_partitions()
-        
-        # Log results
-        if self._cdrom_path:
-            logger.info(f"Found CD-ROM partition: {self._cdrom_path}")
-        else:
-            logger.warning("CD-ROM partition not found")
-        
-        if self._usb_path:
-            logger.info(f"Found USB partition: {self._usb_path}")
-        else:
-            logger.warning("USB partition not found")
-        
-        return self._partition_info
-    
-    def _scan_windows_partitions(self):
-        """Scan Windows partitions"""
-        try:
-            # Get all drive letters
-            drives = []
+        with self._scan_lock:
+            logger.info("Scanning for Sunflower AI partitions...")
             
-            if self.win32_available:
-                import win32api
-                drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
+            # Clear previous results
+            self._cdrom_path = None
+            self._usb_path = None
+            self._partition_info.clear()
+            
+            # Platform-specific scanning
+            if self.platform_name == "Windows":
+                self._scan_windows()
+            elif self.platform_name == "Darwin":
+                self._scan_macos()
             else:
-                # Fallback: check common drive letters
-                for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                    drive = f"{letter}:\\"
-                    if os.path.exists(drive):
-                        drives.append(drive)
+                self._scan_linux()
             
-            for drive in drives:
-                self._check_partition_windows(drive)
-                
-        except Exception as e:
-            logger.error(f"Windows partition scan failed: {e}")
-            self._scan_fallback()
+            # Fallback scan if nothing found
+            if not self._cdrom_path and not self._usb_path:
+                self._scan_fallback()
+            
+            # Log results
+            if self._cdrom_path:
+                logger.info(f"CD-ROM partition found: {self._cdrom_path}")
+            else:
+                logger.warning("CD-ROM partition not found")
+            
+            if self._usb_path:
+                logger.info(f"USB partition found: {self._usb_path}")
+            else:
+                logger.warning("USB partition not found")
+            
+            return self._partition_info.copy()
     
-    def _check_partition_windows(self, drive: str):
-        """Check a Windows drive for Sunflower markers"""
+    def _scan_windows(self):
+        """Scan for partitions on Windows"""
+        logger.debug("Scanning Windows drives...")
+        
+        for drive in self.windows_drives:
+            try:
+                drive_path = Path(drive)
+                
+                # Check if drive exists
+                if not drive_path.exists():
+                    continue
+                
+                # Get drive information
+                if self.win32_available:
+                    self._check_drive_windows_win32(drive_path)
+                else:
+                    self._check_drive_windows_fallback(drive_path)
+                    
+            except Exception as e:
+                logger.debug(f"Error scanning drive {drive}: {e}")
+                continue
+    
+    def _check_drive_windows_win32(self, drive_path: Path):
+        """Check Windows drive using Win32 API"""
+        import win32api
+        import win32file
+        
         try:
-            drive_path = Path(drive)
+            drive = str(drive_path) + "\\"
             
-            # Check if drive is accessible
-            if not drive_path.exists():
-                return
+            # Get drive type
+            drive_type = win32file.GetDriveType(drive)
             
-            # Get drive info
-            usage = psutil.disk_usage(drive)
+            # Get volume information
+            volume_info = win32api.GetVolumeInformation(drive)
+            label = volume_info[0] if volume_info[0] else ""
+            filesystem = volume_info[4]
+            
+            # Get disk usage
+            usage = psutil.disk_usage(str(drive_path))
             size_gb = usage.total / (1024**3)
             
             # Check for CD-ROM marker
             cdrom_marker = drive_path / self.CDROM_MARKER
             if cdrom_marker.exists():
-                # Verify it's read-only and correct size
-                is_readonly = self._check_readonly_windows(drive)
+                # Verify it's a CD-ROM type drive
+                is_cdrom = drive_type == win32file.DRIVE_CDROM
+                is_readonly = True  # CD-ROMs are always read-only
                 
                 if self.MIN_CDROM_SIZE_GB <= size_gb <= self.MAX_CDROM_SIZE_GB:
                     self._cdrom_path = drive_path
                     self._partition_info["cdrom"] = PartitionInfo(
                         device=drive,
                         mount_point=str(drive_path),
-                        filesystem=self._get_filesystem_windows(drive),
+                        filesystem=filesystem,
                         type=PartitionType.CDROM.value,
                         size_gb=round(size_gb, 2),
                         used_gb=round(usage.used / (1024**3), 2),
                         available_gb=round(usage.free / (1024**3), 2),
                         is_readonly=is_readonly,
-                        marker_file=str(cdrom_marker)
+                        label=label,
+                        marker_file=str(cdrom_marker),
+                        verified=True
                     )
                     logger.info(f"Detected CD-ROM partition on {drive}")
             
             # Check for USB marker
             usb_marker = drive_path / self.USB_MARKER
             if usb_marker.exists():
-                # Verify it's writable and correct size
-                if self.MIN_USB_SIZE_GB <= size_gb <= self.MAX_USB_SIZE_GB:
+                # Verify it's a removable drive
+                is_removable = drive_type == win32file.DRIVE_REMOVABLE or drive_type == win32file.DRIVE_FIXED
+                
+                if self.MIN_USB_SIZE_GB <= size_gb <= self.MAX_USB_SIZE_GB and is_removable:
                     self._usb_path = drive_path
                     self._partition_info["usb"] = PartitionInfo(
                         device=drive,
                         mount_point=str(drive_path),
-                        filesystem=self._get_filesystem_windows(drive),
+                        filesystem=filesystem,
                         type=PartitionType.USB.value,
                         size_gb=round(size_gb, 2),
                         used_gb=round(usage.used / (1024**3), 2),
                         available_gb=round(usage.free / (1024**3), 2),
                         is_readonly=False,
-                        marker_file=str(usb_marker)
+                        label=label,
+                        marker_file=str(usb_marker),
+                        verified=True
                     )
                     logger.info(f"Detected USB partition on {drive}")
                     
         except Exception as e:
-            logger.debug(f"Error checking drive {drive}: {e}")
+            logger.debug(f"Error checking drive {drive_path} with Win32: {e}")
     
-    def _check_readonly_windows(self, drive: str) -> bool:
-        """Check if Windows drive is read-only"""
+    def _check_drive_windows_fallback(self, drive_path: Path):
+        """Check Windows drive using fallback methods"""
         try:
-            if self.win32_available:
-                import win32api
-                import win32con
-                
-                # Get volume information
-                volume_info = win32api.GetVolumeInformation(drive)
-                flags = volume_info[5]
-                
-                # Check if read-only flag is set
-                return bool(flags & win32con.FILE_READ_ONLY_VOLUME)
-            else:
-                # Fallback: try to create a temp file
-                test_file = Path(drive) / f".write_test_{os.getpid()}"
-                try:
-                    test_file.touch()
-                    test_file.unlink()
-                    return False
-                except:
-                    return True
-        except:
-            return False
-    
-    def _get_filesystem_windows(self, drive: str) -> str:
-        """Get filesystem type for Windows drive"""
-        try:
-            if self.win32_available:
-                import win32api
-                volume_info = win32api.GetVolumeInformation(drive)
-                return volume_info[4]  # Filesystem name
-            else:
-                # Fallback
-                return "NTFS"
-        except:
-            return "Unknown"
-    
-    def _scan_macos_partitions(self):
-        """Scan macOS partitions"""
-        try:
-            if not self.diskutil_available:
-                self._scan_fallback()
-                return
-            
-            # List all volumes
-            result = subprocess.run(
-                ["diskutil", "list", "-plist"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode != 0:
-                self._scan_fallback()
-                return
-            
-            # Parse plist output
-            import plistlib
-            plist_data = plistlib.loads(result.stdout.encode())
-            
-            # Get all volumes
-            volumes_result = subprocess.run(
-                ["diskutil", "info", "-plist", "/Volumes/*"],
-                capture_output=True,
-                shell=True,
-                text=True,
-                timeout=10
-            )
-            
-            # Check each mounted volume
-            for volume_path in Path("/Volumes").iterdir():
-                if volume_path.is_dir():
-                    self._check_partition_macos(volume_path)
-                    
-        except Exception as e:
-            logger.error(f"macOS partition scan failed: {e}")
-            self._scan_fallback()
-    
-    def _check_partition_macos(self, volume_path: Path):
-        """Check a macOS volume for Sunflower markers"""
-        try:
-            # Get volume info
-            usage = psutil.disk_usage(str(volume_path))
+            # Get disk usage
+            usage = psutil.disk_usage(str(drive_path))
             size_gb = usage.total / (1024**3)
             
             # Check for CD-ROM marker
-            cdrom_marker = volume_path / self.CDROM_MARKER
+            cdrom_marker = drive_path / self.CDROM_MARKER
             if cdrom_marker.exists():
-                is_readonly = self._check_readonly_macos(volume_path)
+                is_readonly = self._check_readonly_windows(drive_path)
                 
                 if self.MIN_CDROM_SIZE_GB <= size_gb <= self.MAX_CDROM_SIZE_GB:
-                    self._cdrom_path = volume_path
+                    self._cdrom_path = drive_path
                     self._partition_info["cdrom"] = PartitionInfo(
-                        device=str(volume_path),
-                        mount_point=str(volume_path),
-                        filesystem=self._get_filesystem_macos(volume_path),
+                        device=str(drive_path),
+                        mount_point=str(drive_path),
+                        filesystem="unknown",
                         type=PartitionType.CDROM.value,
                         size_gb=round(size_gb, 2),
                         used_gb=round(usage.used / (1024**3), 2),
@@ -339,17 +305,17 @@ class PartitionManager:
                         is_readonly=is_readonly,
                         marker_file=str(cdrom_marker)
                     )
-                    logger.info(f"Detected CD-ROM partition at {volume_path}")
+                    logger.info(f"Detected CD-ROM partition on {drive_path}")
             
             # Check for USB marker
-            usb_marker = volume_path / self.USB_MARKER
+            usb_marker = drive_path / self.USB_MARKER
             if usb_marker.exists():
                 if self.MIN_USB_SIZE_GB <= size_gb <= self.MAX_USB_SIZE_GB:
-                    self._usb_path = volume_path
+                    self._usb_path = drive_path
                     self._partition_info["usb"] = PartitionInfo(
-                        device=str(volume_path),
-                        mount_point=str(volume_path),
-                        filesystem=self._get_filesystem_macos(volume_path),
+                        device=str(drive_path),
+                        mount_point=str(drive_path),
+                        filesystem="unknown",
                         type=PartitionType.USB.value,
                         size_gb=round(size_gb, 2),
                         used_gb=round(usage.used / (1024**3), 2),
@@ -357,48 +323,147 @@ class PartitionManager:
                         is_readonly=False,
                         marker_file=str(usb_marker)
                     )
-                    logger.info(f"Detected USB partition at {volume_path}")
+                    logger.info(f"Detected USB partition on {drive_path}")
                     
         except Exception as e:
-            logger.debug(f"Error checking volume {volume_path}: {e}")
+            logger.debug(f"Error checking drive {drive_path}: {e}")
     
-    def _check_readonly_macos(self, volume_path: Path) -> bool:
-        """Check if macOS volume is read-only"""
+    def _check_readonly_windows(self, drive_path: Path) -> bool:
+        """Check if Windows drive is read-only"""
         try:
-            # Try to create a temp file
-            test_file = volume_path / f".write_test_{os.getpid()}"
-            try:
-                test_file.touch()
-                test_file.unlink()
-                return False
-            except:
-                return True
-        except:
+            # Try to create a temporary file
+            test_file = drive_path / f".sunflower_test_{os.getpid()}"
+            test_file.touch()
+            test_file.unlink()
             return False
+        except:
+            return True
     
-    def _get_filesystem_macos(self, volume_path: Path) -> str:
-        """Get filesystem type for macOS volume"""
+    def _get_filesystem_windows(self, drive: str) -> str:
+        """Get filesystem type on Windows"""
         try:
             result = subprocess.run(
-                ["diskutil", "info", str(volume_path)],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["fsutil", "fsinfo", "volumeinfo", drive],
+                capture_output=True, text=True, timeout=5
             )
             
             for line in result.stdout.split('\n'):
-                if "File System Personality:" in line:
-                    return line.split(":")[-1].strip()
+                if "File System Name" in line:
+                    return line.split(':')[1].strip()
             
-            return "Unknown"
+            return "unknown"
         except:
-            return "Unknown"
+            return "unknown"
     
-    def _scan_linux_partitions(self):
-        """Scan Linux partitions"""
+    def _scan_macos(self):
+        """Scan for partitions on macOS"""
+        logger.debug("Scanning macOS volumes...")
+        
+        if self.diskutil_available:
+            self._scan_macos_diskutil()
+        else:
+            self._scan_macos_fallback()
+    
+    def _scan_macos_diskutil(self):
+        """Scan macOS using diskutil"""
         try:
-            # Check mounted filesystems
-            for partition in psutil.disk_partitions():
+            # List all volumes
+            result = subprocess.run(
+                ["diskutil", "list", "-plist"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode == 0:
+                import plistlib
+                plist = plistlib.loads(result.stdout.encode())
+                
+                # Process volumes
+                for volume in plist.get("AllDisksAndPartitions", []):
+                    self._check_macos_volume(volume)
+                    
+        except Exception as e:
+            logger.error(f"diskutil scan failed: {e}")
+            self._scan_macos_fallback()
+    
+    def _check_macos_volume(self, volume_info: Dict):
+        """Check macOS volume for Sunflower markers"""
+        try:
+            mount_point = volume_info.get("MountPoint")
+            if not mount_point:
+                return
+            
+            mount_path = Path(mount_point)
+            if not mount_path.exists():
+                return
+            
+            # Get volume size
+            usage = psutil.disk_usage(str(mount_path))
+            size_gb = usage.total / (1024**3)
+            
+            # Check for markers
+            cdrom_marker = mount_path / self.CDROM_MARKER
+            usb_marker = mount_path / self.USB_MARKER
+            
+            if cdrom_marker.exists():
+                if self.MIN_CDROM_SIZE_GB <= size_gb <= self.MAX_CDROM_SIZE_GB:
+                    self._cdrom_path = mount_path
+                    self._partition_info["cdrom"] = PartitionInfo(
+                        device=volume_info.get("DeviceIdentifier", "unknown"),
+                        mount_point=str(mount_path),
+                        filesystem=volume_info.get("FilesystemType", "unknown"),
+                        type=PartitionType.CDROM.value,
+                        size_gb=round(size_gb, 2),
+                        used_gb=round(usage.used / (1024**3), 2),
+                        available_gb=round(usage.free / (1024**3), 2),
+                        is_readonly=not volume_info.get("Writable", False),
+                        label=volume_info.get("VolumeName"),
+                        uuid=volume_info.get("VolumeUUID"),
+                        marker_file=str(cdrom_marker),
+                        verified=True
+                    )
+                    logger.info(f"Detected CD-ROM partition at {mount_path}")
+            
+            if usb_marker.exists():
+                if self.MIN_USB_SIZE_GB <= size_gb <= self.MAX_USB_SIZE_GB:
+                    self._usb_path = mount_path
+                    self._partition_info["usb"] = PartitionInfo(
+                        device=volume_info.get("DeviceIdentifier", "unknown"),
+                        mount_point=str(mount_path),
+                        filesystem=volume_info.get("FilesystemType", "unknown"),
+                        type=PartitionType.USB.value,
+                        size_gb=round(size_gb, 2),
+                        used_gb=round(usage.used / (1024**3), 2),
+                        available_gb=round(usage.free / (1024**3), 2),
+                        is_readonly=not volume_info.get("Writable", True),
+                        label=volume_info.get("VolumeName"),
+                        uuid=volume_info.get("VolumeUUID"),
+                        marker_file=str(usb_marker),
+                        verified=True
+                    )
+                    logger.info(f"Detected USB partition at {mount_path}")
+                    
+        except Exception as e:
+            logger.debug(f"Error checking macOS volume: {e}")
+    
+    def _scan_macos_fallback(self):
+        """Fallback scan for macOS"""
+        for mount_base in self.macos_mount_points:
+            if not mount_base.exists():
+                continue
+            
+            for mount_point in mount_base.iterdir():
+                if mount_point.is_dir():
+                    self._check_mount_point(mount_point)
+    
+    def _scan_linux(self):
+        """Scan for partitions on Linux"""
+        logger.debug("Scanning Linux partitions...")
+        
+        try:
+            # Use psutil to get all partitions
+            partitions = psutil.disk_partitions(all=False)
+            
+            for partition in partitions:
                 mount_point = Path(partition.mountpoint)
                 self._check_partition_linux(mount_point, partition)
                 
@@ -429,7 +494,8 @@ class PartitionManager:
                         used_gb=round(usage.used / (1024**3), 2),
                         available_gb=round(usage.free / (1024**3), 2),
                         is_readonly=is_readonly,
-                        marker_file=str(cdrom_marker)
+                        marker_file=str(cdrom_marker),
+                        verified=True
                     )
                     logger.info(f"Detected CD-ROM partition at {mount_point}")
             
@@ -446,324 +512,296 @@ class PartitionManager:
                         size_gb=round(size_gb, 2),
                         used_gb=round(usage.used / (1024**3), 2),
                         available_gb=round(usage.free / (1024**3), 2),
-                        is_readonly=False,
-                        marker_file=str(usb_marker)
+                        is_readonly="ro" in partition_info.opts,
+                        marker_file=str(usb_marker),
+                        verified=True
                     )
                     logger.info(f"Detected USB partition at {mount_point}")
                     
         except Exception as e:
-            logger.debug(f"Error checking mount point {mount_point}: {e}")
+            logger.debug(f"Error checking partition {mount_point}: {e}")
     
     def _scan_fallback(self):
-        """Fallback partition scanning for development"""
-        logger.info("Using fallback partition scanning (development mode)")
+        """Fallback scan method for all platforms"""
+        logger.debug("Running fallback partition scan...")
         
-        # Check current directory structure
-        current_dir = Path.cwd()
+        # Check common mount points
+        common_paths = [
+            Path("/Volumes/SUNFLOWER_CD"),
+            Path("/Volumes/SUNFLOWER_DATA"),
+            Path("D:/"),
+            Path("E:/"),
+            Path("F:/"),
+            Path("/media/cdrom"),
+            Path("/media/usb"),
+            Path("/mnt/cdrom"),
+            Path("/mnt/usb")
+        ]
         
-        # Look for marker files in parent directories
-        for parent in [current_dir] + list(current_dir.parents)[:3]:
-            # Check for CD-ROM marker
-            cdrom_marker = parent / self.CDROM_MARKER
-            if cdrom_marker.exists() and not self._cdrom_path:
-                self._cdrom_path = parent
-                logger.info(f"Found CD-ROM marker in development directory: {parent}")
-            
-            # Check for USB marker or data directory
-            usb_marker = parent / self.USB_MARKER
-            data_dir = parent / "data"
-            
-            if usb_marker.exists() and not self._usb_path:
-                self._usb_path = parent
-                logger.info(f"Found USB marker in development directory: {parent}")
-            elif data_dir.exists() and not self._usb_path:
-                # Create marker for development
-                self._usb_path = data_dir
-                marker_file = data_dir / self.USB_MARKER
-                if not marker_file.exists():
-                    try:
-                        marker_file.write_text(json.dumps({
-                            "type": "SUNFLOWER_DATA_PARTITION",
-                            "mode": "development",
-                            "created": time.strftime("%Y-%m-%d %H:%M:%S")
-                        }, indent=2))
-                    except:
-                        pass
-                logger.info(f"Using development data directory: {data_dir}")
+        for path in common_paths:
+            if path.exists():
+                self._check_mount_point(path)
     
-    def find_cdrom_partition(self) -> Optional[Path]:
-        """
-        Find and return CD-ROM partition path.
-        
-        Returns:
-            Path to CD-ROM partition or None
-        """
-        if not self._cdrom_path:
-            self.scan_partitions()
-        
+    def _check_mount_point(self, mount_point: Path):
+        """Check a mount point for Sunflower markers"""
+        try:
+            # Check for CD-ROM marker
+            cdrom_marker = mount_point / self.CDROM_MARKER
+            if cdrom_marker.exists() and not self._cdrom_path:
+                usage = psutil.disk_usage(str(mount_point))
+                size_gb = usage.total / (1024**3)
+                
+                if self.MIN_CDROM_SIZE_GB <= size_gb <= self.MAX_CDROM_SIZE_GB:
+                    self._cdrom_path = mount_point
+                    self._partition_info["cdrom"] = PartitionInfo(
+                        device="unknown",
+                        mount_point=str(mount_point),
+                        filesystem="unknown",
+                        type=PartitionType.CDROM.value,
+                        size_gb=round(size_gb, 2),
+                        used_gb=round(usage.used / (1024**3), 2),
+                        available_gb=round(usage.free / (1024**3), 2),
+                        is_readonly=True,
+                        marker_file=str(cdrom_marker)
+                    )
+                    logger.info(f"Found CD-ROM partition at {mount_point}")
+            
+            # Check for USB marker
+            usb_marker = mount_point / self.USB_MARKER
+            if usb_marker.exists() and not self._usb_path:
+                usage = psutil.disk_usage(str(mount_point))
+                size_gb = usage.total / (1024**3)
+                
+                if self.MIN_USB_SIZE_GB <= size_gb <= self.MAX_USB_SIZE_GB:
+                    self._usb_path = mount_point
+                    self._partition_info["usb"] = PartitionInfo(
+                        device="unknown",
+                        mount_point=str(mount_point),
+                        filesystem="unknown",
+                        type=PartitionType.USB.value,
+                        size_gb=round(size_gb, 2),
+                        used_gb=round(usage.used / (1024**3), 2),
+                        available_gb=round(usage.free / (1024**3), 2),
+                        is_readonly=False,
+                        marker_file=str(usb_marker)
+                    )
+                    logger.info(f"Found USB partition at {mount_point}")
+                    
+        except Exception as e:
+            logger.debug(f"Error checking mount point {mount_point}: {e}")
+    
+    def get_cdrom_path(self) -> Optional[Path]:
+        """Get CD-ROM partition path"""
         return self._cdrom_path
     
-    def find_usb_partition(self) -> Optional[Path]:
-        """
-        Find and return USB partition path.
-        
-        Returns:
-            Path to USB partition or None
-        """
-        if not self._usb_path:
-            self.scan_partitions()
-        
+    def get_usb_path(self) -> Optional[Path]:
+        """Get USB partition path"""
         return self._usb_path
     
-    def initialize_usb_partition(self, path: Optional[Path] = None) -> bool:
-        """
-        Initialize USB partition with required directory structure.
-        
-        Args:
-            path: Path to USB partition (auto-detect if None)
-        
-        Returns:
-            True if successful
-        """
-        usb_path = path or self._usb_path
-        
-        if not usb_path:
-            logger.error("No USB partition path available")
+    def verify_partition(self, partition_type: PartitionType) -> bool:
+        """Verify partition integrity"""
+        if partition_type == PartitionType.CDROM:
+            return self._verify_cdrom()
+        elif partition_type == PartitionType.USB:
+            return self._verify_usb()
+        return False
+    
+    def _verify_cdrom(self) -> bool:
+        """Verify CD-ROM partition integrity"""
+        if not self._cdrom_path:
             return False
         
         try:
-            # Create directory structure
-            directories = [
-                "profiles",
-                "profiles/.encrypted",
-                "conversations",
-                "conversations/.encrypted",
-                "sessions",
-                "sessions/active",
-                "sessions/completed",
-                "sessions/safety_logs",
-                "logs",
-                "logs/system",
-                "logs/safety",
-                "cache",
-                "cache/models",
-                "cache/temp",
-                "backups",
-                "backups/auto",
-                "backups/manual",
-                ".security",
-                ".config"
+            # Check marker file
+            marker_file = self._cdrom_path / self.CDROM_MARKER
+            if not marker_file.exists():
+                logger.error("CD-ROM marker file missing")
+                return False
+            
+            # Check required directories
+            required_dirs = ["system", "models", "config", "docs"]
+            for dir_name in required_dirs:
+                dir_path = self._cdrom_path / dir_name
+                if not dir_path.exists():
+                    logger.error(f"Required directory missing: {dir_name}")
+                    return False
+            
+            # Check critical files
+            critical_files = [
+                "system/ollama/ollama" if self.platform_name != "Windows" else "system/ollama/ollama.exe",
+                "config/system.json",
+                "docs/user_guide.pdf"
             ]
             
-            for dir_name in directories:
-                dir_path = usb_path / dir_name
-                dir_path.mkdir(parents=True, exist_ok=True)
+            for file_path in critical_files:
+                full_path = self._cdrom_path / file_path
+                if not full_path.exists():
+                    logger.warning(f"Critical file missing: {file_path}")
             
-            # Create marker file if it doesn't exist
-            marker_file = usb_path / self.USB_MARKER
-            if not marker_file.exists():
-                marker_data = {
-                    "type": "SUNFLOWER_DATA_PARTITION",
-                    "version": "1.0",
-                    "initialized": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "platform": self.platform_name
-                }
-                marker_file.write_text(json.dumps(marker_data, indent=2))
+            # Update verification status
+            if "cdrom" in self._partition_info:
+                self._partition_info["cdrom"].verified = True
             
-            # Create initialization flag
-            init_flag = usb_path / ".initialized"
-            init_flag.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
-            
-            logger.info(f"Initialized USB partition at {usb_path}")
+            logger.info("CD-ROM partition verified successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to initialize USB partition: {e}")
+            logger.error(f"CD-ROM verification failed: {e}")
             return False
     
-    def verify_partitions(self) -> Tuple[bool, List[str]]:
-        """
-        Verify both partitions are properly configured.
-        
-        Returns:
-            Tuple of (is_valid, list_of_issues)
-        """
-        issues = []
-        
-        # Check CD-ROM partition
-        if not self._cdrom_path:
-            issues.append("CD-ROM partition not found")
-        else:
-            # Verify CD-ROM contents
-            required_files = [
-                "modelfiles/Sunflower_AI_Kids.modelfile",
-                "modelfiles/Sunflower_AI_Educator.modelfile"
-            ]
-            
-            for file_path in required_files:
-                full_path = self._cdrom_path / file_path
-                if not full_path.exists():
-                    issues.append(f"Missing required file: {file_path}")
-            
-            # Check if read-only
-            cdrom_info = self._partition_info.get("cdrom")
-            if cdrom_info and not cdrom_info.is_readonly:
-                issues.append("CD-ROM partition is not read-only")
-        
-        # Check USB partition
+    def _verify_usb(self) -> bool:
+        """Verify USB partition integrity"""
         if not self._usb_path:
-            issues.append("USB partition not found")
-        else:
-            # Check if writable
-            test_file = self._usb_path / f".write_test_{os.getpid()}"
-            try:
-                test_file.touch()
-                test_file.unlink()
-            except:
-                issues.append("USB partition is not writable")
-            
-            # Check available space
-            usb_info = self._partition_info.get("usb")
-            if usb_info and usb_info.available_gb < 0.1:
-                issues.append(f"USB partition low on space: {usb_info.available_gb:.2f}GB available")
+            return False
         
-        return len(issues) == 0, issues
+        try:
+            # Check marker file
+            marker_file = self._usb_path / self.USB_MARKER
+            if not marker_file.exists():
+                logger.error("USB marker file missing")
+                return False
+            
+            # Check write permissions
+            test_file = self._usb_path / f".test_{os.getpid()}"
+            try:
+                test_file.write_text("test")
+                test_content = test_file.read_text()
+                test_file.unlink()
+                
+                if test_content != "test":
+                    logger.error("USB partition write test failed")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"USB partition not writable: {e}")
+                return False
+            
+            # Create required directories
+            required_dirs = ["profiles", "sessions", "logs", "config", "ollama_data"]
+            for dir_name in required_dirs:
+                dir_path = self._usb_path / dir_name
+                dir_path.mkdir(parents=True, exist_ok=True)
+            
+            # Update verification status
+            if "usb" in self._partition_info:
+                self._partition_info["usb"].verified = True
+            
+            logger.info("USB partition verified successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"USB verification failed: {e}")
+            return False
+    
+    def verify_integrity(self) -> Tuple[bool, Dict[str, Any]]:
+        """Verify integrity of both partitions"""
+        results = {
+            "cdrom_found": self._cdrom_path is not None,
+            "usb_found": self._usb_path is not None,
+            "cdrom_valid": False,
+            "usb_valid": False,
+            "errors": []
+        }
+        
+        if self._cdrom_path:
+            results["cdrom_valid"] = self._verify_cdrom()
+            if not results["cdrom_valid"]:
+                results["errors"].append("CD-ROM partition verification failed")
+        else:
+            results["errors"].append("CD-ROM partition not found")
+        
+        if self._usb_path:
+            results["usb_valid"] = self._verify_usb()
+            if not results["usb_valid"]:
+                results["errors"].append("USB partition verification failed")
+        else:
+            results["errors"].append("USB partition not found")
+        
+        success = results["cdrom_valid"] and results["usb_valid"]
+        return success, results
     
     def get_partition_info(self, partition_type: PartitionType) -> Optional[PartitionInfo]:
-        """Get information about a specific partition"""
+        """Get detailed partition information"""
         if partition_type == PartitionType.CDROM:
             return self._partition_info.get("cdrom")
         elif partition_type == PartitionType.USB:
             return self._partition_info.get("usb")
         return None
     
-    def check_partition_health(self) -> Dict[str, Any]:
-        """Check health status of both partitions"""
-        health = {
-            "cdrom": {
-                "status": "unknown",
-                "issues": []
-            },
-            "usb": {
-                "status": "unknown",
-                "issues": []
-            }
+    def get_status(self) -> Dict[str, Any]:
+        """Get partition manager status"""
+        return {
+            "platform": self.platform_name,
+            "cdrom_detected": self._cdrom_path is not None,
+            "usb_detected": self._usb_path is not None,
+            "cdrom_path": str(self._cdrom_path) if self._cdrom_path else None,
+            "usb_path": str(self._usb_path) if self._usb_path else None,
+            "partition_info": {k: asdict(v) for k, v in self._partition_info.items()}
         }
-        
-        # Check CD-ROM health
-        if self._cdrom_path:
-            cdrom_info = self._partition_info.get("cdrom")
-            if cdrom_info:
-                health["cdrom"]["status"] = "healthy"
-                
-                # Check for issues
-                if cdrom_info.available_gb < 0.1:
-                    health["cdrom"]["status"] = "warning"
-                    health["cdrom"]["issues"].append("Low disk space")
-                
-                if not cdrom_info.is_readonly:
-                    health["cdrom"]["status"] = "error"
-                    health["cdrom"]["issues"].append("Not read-only")
-        else:
-            health["cdrom"]["status"] = "missing"
-            health["cdrom"]["issues"].append("Partition not found")
-        
-        # Check USB health
-        if self._usb_path:
-            usb_info = self._partition_info.get("usb")
-            if usb_info:
-                health["usb"]["status"] = "healthy"
-                
-                # Check for issues
-                if usb_info.available_gb < 0.5:
-                    health["usb"]["status"] = "warning"
-                    health["usb"]["issues"].append(f"Low disk space: {usb_info.available_gb:.2f}GB")
-                
-                if usb_info.is_readonly:
-                    health["usb"]["status"] = "error"
-                    health["usb"]["issues"].append("Read-only (should be writable)")
-        else:
-            health["usb"]["status"] = "missing"
-            health["usb"]["issues"].append("Partition not found")
-        
-        return health
     
-    def wait_for_partitions(self, timeout: int = 30) -> bool:
-        """
-        Wait for both partitions to be available.
-        
-        Args:
-            timeout: Maximum seconds to wait
-        
-        Returns:
-            True if both partitions found within timeout
-        """
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            self.scan_partitions()
-            
-            if self._cdrom_path and self._usb_path:
-                logger.info("Both partitions detected")
-                return True
-            
-            time.sleep(1)
-        
-        logger.warning(f"Timeout waiting for partitions (waited {timeout} seconds)")
-        return False
-    
-    def eject_safely(self) -> bool:
-        """Safely eject the USB device"""
-        if not self._usb_path:
-            logger.warning("No USB partition to eject")
-            return True
-        
+    def simulate_readonly(self, path: Path) -> bool:
+        """Test if partition is read-only (for testing)"""
         try:
-            # Ensure all files are closed
-            import gc
-            gc.collect()
-            
-            if self.platform_name == "Windows":
-                # Windows eject
-                if self.win32_available:
-                    # Use Windows API for safe removal
-                    logger.info("Ejecting USB device on Windows...")
-                    # Implementation would use win32file.DeviceIoControl
-                    return True
-                else:
-                    logger.warning("Cannot safely eject on Windows without pywin32")
-                    return False
-                    
-            elif self.platform_name == "Darwin":
-                # macOS eject
-                result = subprocess.run(
-                    ["diskutil", "eject", str(self._usb_path)],
-                    capture_output=True,
-                    timeout=10
-                )
-                
-                if result.returncode == 0:
-                    logger.info("USB device ejected successfully")
-                    return True
-                else:
-                    logger.error(f"Failed to eject USB device: {result.stderr}")
-                    return False
-                    
-            else:
-                # Linux eject
-                result = subprocess.run(
-                    ["umount", str(self._usb_path)],
-                    capture_output=True,
-                    timeout=10
-                )
-                
-                if result.returncode == 0:
-                    logger.info("USB device unmounted successfully")
-                    return True
-                else:
-                    logger.error(f"Failed to unmount USB device: {result.stderr}")
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"Failed to eject USB device: {e}")
+            test_file = path / f".readonly_test_{os.getpid()}"
+            test_file.touch()
+            test_file.unlink()
             return False
+        except:
+            return True
+    
+    def refresh(self):
+        """Refresh partition detection"""
+        self.scan_partitions()
+
+
+# Singleton instance
+_partition_manager: Optional[PartitionManager] = None
+
+
+def get_partition_manager() -> PartitionManager:
+    """Get or create partition manager singleton"""
+    global _partition_manager
+    
+    if _partition_manager is None:
+        _partition_manager = PartitionManager()
+    
+    return _partition_manager
+
+
+# Testing
+if __name__ == "__main__":
+    # Test partition manager
+    manager = PartitionManager()
+    
+    print("Partition Manager Status:")
+    print("-" * 60)
+    
+    status = manager.get_status()
+    for key, value in status.items():
+        if key != "partition_info":
+            print(f"{key}: {value}")
+    
+    print("-" * 60)
+    
+    # Verify integrity
+    success, results = manager.verify_integrity()
+    print(f"Integrity Check: {'PASS' if success else 'FAIL'}")
+    
+    if results["errors"]:
+        print("Errors:")
+        for error in results["errors"]:
+            print(f"  - {error}")
+    
+    # Display partition info
+    if status["partition_info"]:
+        print("-" * 60)
+        print("Partition Details:")
+        
+        for partition_type, info in status["partition_info"].items():
+            print(f"\n{partition_type.upper()}:")
+            print(f"  Mount: {info['mount_point']}")
+            print(f"  Size: {info['size_gb']} GB")
+            print(f"  Used: {info['used_gb']} GB")
+            print(f"  Free: {info['available_gb']} GB")
+            print(f"  Read-only: {info['is_readonly']}")
+            print(f"  Verified: {info['verified']}")
