@@ -92,263 +92,193 @@ echo %BLUE%Checking Open WebUI installation...%NC%
 python -m pip show open-webui >nul 2>&1
 if errorlevel 1 (
     echo %YELLOW%Installing Open WebUI (this may take a few minutes)...%NC%
-    python -m pip install --quiet --upgrade open-webui
+    python -m pip install open-webui --no-cache-dir --quiet
     if errorlevel 1 (
         echo %RED%❌ Failed to install Open WebUI%NC%
-        echo %YELLOW%Check your internet connection and try again%NC%
+        echo Please check your internet connection and try again
         pause
         exit /b 1
     )
+    echo %GREEN%✓ Open WebUI installed successfully%NC%
 )
-echo %GREEN%✓ Open WebUI is ready%NC%
 
-:: Check Ollama installation
+:: Check/Install Ollama
 echo %BLUE%Checking Ollama installation...%NC%
-set "OLLAMA_EXE="
-
-:: Check CD-ROM partition first
-if defined CDROM_PARTITION (
-    if exist "%CDROM_PARTITION%\ollama\ollama.exe" (
-        set "OLLAMA_EXE=%CDROM_PARTITION%\ollama\ollama.exe"
-        echo %GREEN%✓ Found Ollama on CD-ROM partition%NC%
-    )
-)
-
-:: Check system PATH if not found on CD-ROM
-if not defined OLLAMA_EXE (
-    where ollama >nul 2>&1
-    if not errorlevel 1 (
-        for /f "tokens=*" %%i in ('where ollama') do set "OLLAMA_EXE=%%i"
-        echo %GREEN%✓ Found Ollama in system PATH%NC%
-    )
-)
-
-:: Download Ollama if not found
-if not defined OLLAMA_EXE (
-    echo %YELLOW%Ollama not found. Downloading...%NC%
-    echo %CYAN%This is a one-time download (~150MB)%NC%
-    
-    :: Create temp directory for download
-    set "TEMP_DIR=%TEMP%\sunflower_temp"
-    if not exist "%TEMP_DIR%" mkdir "%TEMP_DIR%"
+where ollama >nul 2>&1
+if errorlevel 1 (
+    echo %YELLOW%Ollama not found. Installing...%NC%
     
     :: Download Ollama installer
-    powershell -Command "Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile '%TEMP_DIR%\OllamaSetup.exe'"
+    set "OLLAMA_INSTALLER=%TEMP%\OllamaSetup.exe"
     
-    if exist "%TEMP_DIR%\OllamaSetup.exe" (
-        echo %BLUE%Installing Ollama...%NC%
-        "%TEMP_DIR%\OllamaSetup.exe" /S
-        timeout /t 5 >nul
-        
-        :: Check if installation succeeded
-        where ollama >nul 2>&1
-        if not errorlevel 1 (
-            for /f "tokens=*" %%i in ('where ollama') do set "OLLAMA_EXE=%%i"
-            echo %GREEN%✓ Ollama installed successfully%NC%
-        ) else (
-            echo %RED%❌ Ollama installation failed%NC%
-            pause
-            exit /b 1
-        )
-    ) else (
+    echo Downloading Ollama installer...
+    powershell -Command "& {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        try {
+            Invoke-WebRequest -Uri 'https://ollama.ai/download/OllamaSetup.exe' -OutFile '%OLLAMA_INSTALLER%'
+            exit 0
+        } catch {
+            Write-Host 'Download failed: $_' -ForegroundColor Red
+            exit 1
+        }
+    }"
+    
+    if errorlevel 1 (
         echo %RED%❌ Failed to download Ollama%NC%
+        echo Please download manually from https://ollama.ai
         pause
         exit /b 1
     )
+    
+    :: Run installer silently
+    echo Installing Ollama...
+    "%OLLAMA_INSTALLER%" /S
+    timeout /t 10 /nobreak >nul
+    
+    :: Clean up installer
+    del "%OLLAMA_INSTALLER%" 2>nul
 )
+echo %GREEN%✓ Ollama is installed%NC%
 
 :: Start Ollama service
-echo %BLUE%Starting Ollama AI engine...%NC%
-tasklist | findstr "ollama.exe" >nul 2>&1
-if errorlevel 1 (
-    start /b "" "%OLLAMA_EXE%" serve >nul 2>&1
-    timeout /t 3 >nul
-)
+echo %BLUE%Starting Ollama service...%NC%
+start /B ollama serve >nul 2>&1
+timeout /t 3 /nobreak >nul
 
-:: Test Ollama connectivity
-curl -s http://localhost:11434/api/tags >nul 2>&1
-if errorlevel 1 (
-    echo %YELLOW%⚠ Ollama is starting up...%NC%
-    timeout /t 5 >nul
-)
-echo %GREEN%✓ Ollama is running%NC%
-
-:: Check for Sunflower models
+:: Check if models are loaded
 echo %BLUE%Checking AI models...%NC%
-set "MODELS_READY=0"
-
-:: Check if models exist on CD-ROM
-if defined CDROM_PARTITION (
-    if exist "%CDROM_PARTITION%\models\sunflower-kids.gguf" (
-        echo %BLUE%Loading Sunflower Kids model from CD-ROM...%NC%
-        copy "%CDROM_PARTITION%\models\sunflower-kids.gguf" "%OLLAMA_MODELS%\" >nul 2>&1
-        set "MODELS_READY=1"
-    )
-    if exist "%CDROM_PARTITION%\models\sunflower-educator.gguf" (
-        echo %BLUE%Loading Sunflower Educator model from CD-ROM...%NC%
-        copy "%CDROM_PARTITION%\models\sunflower-educator.gguf" "%OLLAMA_MODELS%\" >nul 2>&1
-        set "MODELS_READY=1"
-    )
-)
-
-:: Create models if modelfiles exist
-if exist "%SCRIPT_DIR%modelfiles\Sunflower_AI_Kids.modelfile" (
-    echo %BLUE%Creating Sunflower Kids model...%NC%
-    "%OLLAMA_EXE%" create sunflower-kids -f "%SCRIPT_DIR%modelfiles\Sunflower_AI_Kids.modelfile" >nul 2>&1
-    set "MODELS_READY=1"
-)
-
-if exist "%SCRIPT_DIR%modelfiles\Sunflower_AI_Educator.modelfile" (
-    echo %BLUE%Creating Sunflower Educator model...%NC%
-    "%OLLAMA_EXE%" create sunflower-educator -f "%SCRIPT_DIR%modelfiles\Sunflower_AI_Educator.modelfile" >nul 2>&1
-    set "MODELS_READY=1"
-)
-
-:: Fall back to base model if no Sunflower models
-if "%MODELS_READY%"=="0" (
-    echo %YELLOW%Sunflower models not found. Using base model...%NC%
-    "%OLLAMA_EXE%" list | findstr "llama3.2" >nul 2>&1
+ollama list 2>nul | findstr /i "llama3.2" >nul
+if errorlevel 1 (
+    echo %YELLOW%Downloading AI model (this is a one-time download)...%NC%
+    echo This will take 5-15 minutes depending on your internet speed
+    
+    :: Pull the model
+    ollama pull llama3.2:3b
     if errorlevel 1 (
-        echo %BLUE%Downloading base model (this may take 10-30 minutes)...%NC%
-        "%OLLAMA_EXE%" pull llama3.2:3b
+        echo %RED%❌ Failed to download AI model%NC%
+        echo Please check your internet connection
+        pause
+        exit /b 1
     )
+    echo %GREEN%✓ AI model downloaded successfully%NC%
 )
 
-echo %GREEN%✓ AI models are ready%NC%
+:: Configure environment variables
+set "OLLAMA_MODELS=%OLLAMA_MODELS%"
+set "OLLAMA_HOST=localhost:11434"
+set "WEBUI_SECRET_KEY=%RANDOM%%RANDOM%%RANDOM%%RANDOM%"
+set "DATA_DIR=%DATA_DIR%"
+set "WEBUI_AUTH=True"
+set "ENABLE_SIGNUP=True"
+set "DEFAULT_MODELS=llama3.2:3b"
+set "WEBUI_NAME=Sunflower AI Professional System"
 
-:: Set Open WebUI environment variables
-set "DATA_DIR=%OPENWEBUI_DATA%"
-set "WEBUI_NAME=Sunflower AI Education System"
-set "WEBUI_AUTH=true"
-set "ENABLE_SIGNUP=false"
-set "OLLAMA_BASE_URL=http://localhost:11434"
-set "HOST=127.0.0.1"
-set "PORT=8080"
-
-:: Check for existing family profile
-set "FIRST_RUN=0"
-if not exist "%PROFILES_DIR%\family.json" (
-    set "FIRST_RUN=1"
-    echo.
-    echo %CYAN%════════════════════════════════════════════════════════════%NC%
-    echo %YELLOW%                    FIRST TIME SETUP%NC%
-    echo %CYAN%════════════════════════════════════════════════════════════%NC%
-    echo.
-    echo %WHITE%Welcome to Sunflower AI!%NC%
-    echo.
-    echo %BLUE%We'll create your family profile and set up parental controls.%NC%
-    echo %BLUE%This only takes a minute and ensures a safe learning environment.%NC%
-    echo.
-)
+:: Create Open WebUI configuration
+echo %BLUE%Configuring Open WebUI...%NC%
+(
+echo {
+echo   "auth": true,
+echo   "auth_type": "local",
+echo   "enable_signup": true,
+echo   "default_models": ["llama3.2:3b"],
+echo   "ui": {
+echo     "name": "Sunflower AI",
+echo     "theme": "light",
+echo     "show_admin_details": false
+echo   },
+echo   "features": {
+echo     "enable_web_search": false,
+echo     "enable_image_generation": false,
+echo     "enable_admin_panel": true,
+echo     "enable_community_sharing": false
+echo   },
+echo   "safety": {
+echo     "content_filter": true,
+echo     "filter_level": "high",
+echo     "log_conversations": true
+echo   }
+echo }
+) > "%OPENWEBUI_DATA%\config.json"
 
 :: Start Open WebUI
-echo %BLUE%Starting Open WebUI interface...%NC%
-start /b python -m open_webui serve >"%LOG_DIR%\openwebui.log" 2>&1
-
-:: Wait for Open WebUI to start
-echo %BLUE%Waiting for system initialization...%NC%
-set "WEBUI_READY=0"
-for /L %%i in (1,1,30) do (
-    curl -s http://localhost:8080/health >nul 2>&1
-    if not errorlevel 1 (
-        set "WEBUI_READY=1"
-        goto :webui_started
-    )
-    timeout /t 1 >nul
-)
-
-:webui_started
-if "%WEBUI_READY%"=="0" (
-    echo %YELLOW%⚠ Web interface is taking longer than expected%NC%
-    echo %BLUE%It should be available soon at http://localhost:8080%NC%
-) else (
-    echo %GREEN%✓ Open WebUI is running%NC%
-)
-
-:: Create or display admin password for first run
-if "%FIRST_RUN%"=="1" (
-    echo.
-    echo %GREEN%════════════════════════════════════════════════════════════%NC%
-    echo %GREEN%          SYSTEM READY - SAVE THIS INFORMATION%NC%
-    echo %GREEN%════════════════════════════════════════════════════════════%NC%
-    echo.
-    
-    :: Run Python script to generate admin password
-    python -c "import secrets; pwd=secrets.token_urlsafe(12); print(f'Admin Password: {pwd}'); import json; json.dump({'admin_password': pwd}, open('%PROFILES_DIR%/admin_setup.json', 'w'))"
-    
-    echo.
-    echo %YELLOW%⚠ Write down the admin password above - you'll need it!%NC%
-    echo.
-)
-
-:: Open browser
+echo %BLUE%Starting Open WebUI...%NC%
 echo.
-echo %CYAN%════════════════════════════════════════════════════════════%NC%
-echo %GREEN%     🌻 SUNFLOWER AI IS READY! 🌻%NC%
-echo %CYAN%════════════════════════════════════════════════════════════%NC%
-echo.
-echo %WHITE%Opening web browser...%NC%
-echo.
-echo %BLUE%Web Interface:%NC% http://localhost:8080
-echo %BLUE%Parent Dashboard:%NC% file:///%DATA_DIR%/parent_dashboard.html
-echo %BLUE%Data Location:%NC% %DATA_DIR%
+echo %CYAN%============================================================%NC%
+echo %GREEN%           LAUNCHING SUNFLOWER AI SYSTEM%NC%
+echo %CYAN%============================================================%NC%
 echo.
 
-:: Open browser to Open WebUI
-start http://localhost:8080
-
-:: Display usage information
-echo %CYAN%Getting Started:%NC%
-echo   1. The web browser will open automatically
-echo   2. Create your parent account if this is first run
-echo   3. Add child profiles from the settings menu
-echo   4. Select a child profile to start learning
+:: Create launcher script
+set "LAUNCHER_SCRIPT=%TEMP%\launch_webui.py"
+(
+echo import os
+echo import sys
+echo import webbrowser
+echo import time
+echo import subprocess
+echo import socket
 echo.
-echo %YELLOW%Safety Features:%NC%
-echo   • All conversations are filtered for age-appropriate content
-echo   • Parent dashboard shows all activity
-echo   • No internet required after setup
-echo   • All data stays on your USB device
+echo # Configuration
+echo os.environ['DATA_DIR'] = r'%DATA_DIR%'
+echo os.environ['OLLAMA_HOST'] = 'localhost:11434'
+echo os.environ['WEBUI_SECRET_KEY'] = '%WEBUI_SECRET_KEY%'
+echo os.environ['WEBUI_AUTH'] = 'True'
+echo os.environ['ENABLE_SIGNUP'] = 'True'
+echo os.environ['DEFAULT_MODELS'] = 'llama3.2:3b'
+echo os.environ['WEBUI_NAME'] = 'Sunflower AI Professional System'
 echo.
-
-:: Keep window open
-echo %GREEN%System is running. Press Ctrl+C to stop Sunflower AI%NC%
+echo def is_port_open(host, port^):
+echo     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM^)
+echo     sock.settimeout(1^)
+echo     result = sock.connect_ex((host, port^)^)
+echo     sock.close(^)
+echo     return result == 0
 echo.
-
-:: Monitor loop
-:monitor_loop
-timeout /t 60 >nul
-
-:: Check if services are still running
-tasklist | findstr "ollama.exe" >nul 2>&1
-if errorlevel 1 (
-    echo %YELLOW%⚠ Ollama stopped - restarting...%NC%
-    start /b "" "%OLLAMA_EXE%" serve >nul 2>&1
-)
-
-curl -s http://localhost:8080/health >nul 2>&1
-if errorlevel 1 (
-    echo %YELLOW%⚠ Open WebUI stopped - restarting...%NC%
-    start /b python -m open_webui serve >"%LOG_DIR%\openwebui.log" 2>&1
-)
-
-goto :monitor_loop
-
-:: Cleanup on exit (triggered by Ctrl+C)
-:cleanup
+echo print("Starting Open WebUI..."^)
 echo.
-echo %YELLOW%Shutting down Sunflower AI...%NC%
+echo # Check if already running
+echo if is_port_open('localhost', 8080^):
+echo     print("Open WebUI is already running"^)
+echo     webbrowser.open('http://localhost:8080'^)
+echo else:
+echo     # Start Open WebUI
+echo     process = subprocess.Popen(
+echo         [sys.executable, '-m', 'open_webui', 'serve', '--port', '8080'],
+echo         stdout=subprocess.PIPE,
+echo         stderr=subprocess.PIPE,
+echo         text=True
+echo     ^)
+echo     
+echo     # Wait for startup
+echo     print("Waiting for Open WebUI to start..."^)
+echo     for i in range(30^):
+echo         if is_port_open('localhost', 8080^):
+echo             print("Open WebUI started successfully!"^)
+echo             time.sleep(2^)
+echo             webbrowser.open('http://localhost:8080'^)
+echo             break
+echo         time.sleep(1^)
+echo     
+echo     # Keep running
+echo     try:
+echo         process.wait(^)
+echo     except KeyboardInterrupt:
+echo         print("\nShutting down..."^)
+echo         process.terminate(^)
+) > "%LAUNCHER_SCRIPT%"
 
-:: Stop services
-taskkill /f /im python.exe >nul 2>&1
-taskkill /f /im ollama.exe >nul 2>&1
+:: Run launcher
+python "%LAUNCHER_SCRIPT%"
+
+:: Cleanup
+del "%LAUNCHER_SCRIPT%" 2>nul
 
 :: Log shutdown
-echo [%date% %time%] System shutdown >> "%LOG_FILE%"
+echo [%date% %time%] Sunflower AI System Stopped >> "%LOG_FILE%"
 
-echo %GREEN%✓ Sunflower AI stopped successfully%NC%
 echo.
-echo %CYAN%Thank you for using Sunflower AI!%NC%
-timeout /t 3 >nul
-exit /b 0
+echo %GREEN%Thank you for using Sunflower AI!%NC%
+pause
 
+endlocal
+exit /b 0
