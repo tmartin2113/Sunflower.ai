@@ -120,77 +120,96 @@ class ConfigurationManager:
     """
     
     def __init__(self, cdrom_path: Optional[Path] = None, usb_path: Optional[Path] = None):
-        """Initialize configuration manager"""
-        self.cdrom_path = cdrom_path
-        self.usb_path = usb_path
+        """
+        Initialize configuration manager
+        
+        Args:
+            cdrom_path: Path to CD-ROM partition
+            usb_path: Path to USB partition
+        """
+        self.cdrom_path = Path(cdrom_path) if cdrom_path else self._detect_cdrom()
+        self.usb_path = Path(usb_path) if usb_path else self._detect_usb()
         
         # Configuration storage
-        self._configs: Dict[ConfigType, Dict] = {}
-        self._config_lock = threading.RLock()
+        self._configs = {}
+        self._env_vars = {}
+        self._lock = threading.RLock()
         
-        # Environment variables
-        self._env_vars: Dict[str, str] = {}
+        # Configuration paths
+        self.system_config_path = self.cdrom_path / "config" if self.cdrom_path else Path("config")
+        self.user_config_path = self.usb_path / "config" if self.usb_path else Path("user_config")
+        self.model_config_path = self.cdrom_path / "modelfiles" if self.cdrom_path else Path("modelfiles")
+        self.safety_config_path = self.usb_path / "safety" if self.usb_path else Path("safety")
         
-        # Initialize paths
-        self._initialize_paths()
+        # Create necessary directories
+        self.user_config_path.mkdir(parents=True, exist_ok=True)
+        self.safety_config_path.mkdir(parents=True, exist_ok=True)
         
-        # Load all configurations
+        # Load configurations
         self._load_all_configs()
         
-        logger.info(f"Configuration manager initialized - CD-ROM: {cdrom_path}, USB: {usb_path}")
+        logger.info("Configuration manager initialized")
     
-    def _initialize_paths(self):
-        """Initialize configuration paths"""
-        # System config paths (CD-ROM)
-        if self.cdrom_path:
-            self.system_config_path = self.cdrom_path / "config"
-            self.model_config_path = self.cdrom_path / "models" / "config"
-            self.safety_config_path = self.cdrom_path / "safety"
-        else:
-            self.system_config_path = Path(__file__).parent.parent / "config"
-            self.model_config_path = Path(__file__).parent.parent / "models" / "config"
-            self.safety_config_path = Path(__file__).parent.parent / "safety"
+    def _detect_cdrom(self) -> Optional[Path]:
+        """Detect CD-ROM partition"""
+        if platform.system() == "Windows":
+            import string
+            for drive in string.ascii_uppercase:
+                drive_path = Path(f"{drive}:\\")
+                marker_file = drive_path / "sunflower_cd.id"
+                if marker_file.exists():
+                    logger.info(f"Found CD-ROM partition at {drive_path}")
+                    return drive_path
         
-        # User config paths (USB)
-        if self.usb_path:
-            self.user_config_path = self.usb_path / "config"
-            self.family_config_path = self.usb_path / "families"
-        else:
-            # Development fallback
-            dev_path = Path(__file__).parent.parent / "data"
-            if not dev_path.exists():
-                dev_path.mkdir(parents=True, exist_ok=True)
-            self.user_config_path = dev_path / "config"
-            self.family_config_path = dev_path / "families"
+        elif platform.system() == "Darwin":  # macOS
+            volumes = Path("/Volumes")
+            for volume in volumes.iterdir():
+                marker_file = volume / "sunflower_cd.id"
+                if marker_file.exists():
+                    logger.info(f"Found CD-ROM partition at {volume}")
+                    return volume
         
-        # Ensure user directories exist
-        self.user_config_path.mkdir(parents=True, exist_ok=True)
-        self.family_config_path.mkdir(parents=True, exist_ok=True)
+        return None
+    
+    def _detect_usb(self) -> Optional[Path]:
+        """Detect USB partition"""
+        if platform.system() == "Windows":
+            import string
+            for drive in string.ascii_uppercase:
+                drive_path = Path(f"{drive}:\\")
+                marker_file = drive_path / "sunflower_data.id"
+                if marker_file.exists():
+                    logger.info(f"Found USB partition at {drive_path}")
+                    return drive_path
+        
+        elif platform.system() == "Darwin":  # macOS
+            volumes = Path("/Volumes")
+            for volume in volumes.iterdir():
+                marker_file = volume / "sunflower_data.id"
+                if marker_file.exists():
+                    logger.info(f"Found USB partition at {volume}")
+                    return volume
+        
+        return None
     
     def _load_all_configs(self):
         """Load all configuration files"""
-        # Load system configuration from CD-ROM
-        if self.cdrom_path:
-            self._load_system_config()
-            self._load_safety_config()
-            self._load_model_config()
-        
-        # Load user configuration from USB
-        if self.usb_path:
-            self._load_user_config()
-            self._load_family_config()
-        
-        # Detect and load hardware configuration
-        self._load_hardware_config()
-        
-        # Load network configuration
-        self._load_network_config()
-        
-        # Load security configuration
-        self._load_security_config()
+        with self._lock:
+            try:
+                self._load_system_config()
+                self._load_environment_vars()
+                self._load_safety_config()
+                self._load_model_config()
+                self._load_network_config()
+                self._load_security_config()
+                self._load_user_preferences()
+                logger.info("All configurations loaded successfully")
+            except Exception as e:
+                logger.error(f"Error loading configurations: {e}")
+                self._load_defaults()
     
     def _load_system_config(self):
-        """Load read-only system configuration from CD-ROM"""
+        """Load system configuration"""
         config_file = self.system_config_path / "system.json"
         
         if config_file.exists():
@@ -203,46 +222,50 @@ class ConfigurationManager:
                 self._load_default_system_config()
         else:
             self._load_default_system_config()
-        
-        # Load environment variables
-        env_file = self.system_config_path / "default.env"
-        if env_file.exists():
-            self._load_env_file(env_file)
     
     def _load_default_system_config(self):
         """Load default system configuration"""
         self._configs[ConfigType.SYSTEM] = {
+            "app_name": "Sunflower AI Professional System",
             "version": "6.2.0",
-            "name": "Sunflower AI Professional System",
-            "build_date": "2025-01-15",
-            "platform": platform.system(),
-            "architecture": platform.machine(),
-            "min_ram_gb": 4,
-            "min_disk_gb": 8,
-            "supported_platforms": ["Windows", "Darwin"],
-            "model_variants": ["llama3.2:7b", "llama3.2:3b", "llama3.2:1b", "llama3.2:1b-q4_0"],
-            "features": {
-                "voice_interaction": False,
-                "multi_language": False,
-                "cloud_sync": False,
-                "api_access": False
-            }
+            "platform": platform.system().lower(),
+            "min_python_version": "3.8",
+            "required_ram_gb": 4,
+            "recommended_ram_gb": 8,
+            "install_date": datetime.now().isoformat(),
+            "update_channel": "stable",
+            "telemetry_enabled": False,
+            "offline_mode": True
         }
     
-    def _load_env_file(self, env_file: Path):
-        """Load environment variables from .env file"""
+    def _load_environment_vars(self):
+        """Load environment variables"""
+        env_file = self.user_config_path / ".env"
+        
+        if not env_file.exists():
+            # Create default .env file
+            default_env = """# Sunflower AI Environment Configuration
+OLLAMA_HOST=localhost
+OLLAMA_PORT=11434
+WEBUI_HOST=localhost
+WEBUI_PORT=8080
+LOG_LEVEL=INFO
+DEBUG_MODE=False
+SAFETY_FILTER=high
+DEFAULT_MODEL=llama3.2:3b
+"""
+            env_file.write_text(default_env)
+        
         try:
             with open(env_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip().strip('"\'')
-                        os.environ[key] = value
-                        self._env_vars[key] = value
+                    if line and not line.startswith('#'):
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            self._env_vars[key.strip()] = value.strip()
             
-            logger.info(f"Loaded {len(self._env_vars)} environment variables from: {env_file}")
+            logger.info(f"Loaded {len(self._env_vars)} environment variables")
         except Exception as e:
             logger.error(f"Failed to load environment file: {e}")
     
@@ -300,12 +323,12 @@ class ConfigurationManager:
             self._load_default_model_config()
     
     def _load_default_model_config(self):
-        """Load default model configurations"""
+        """Load default model configuration"""
         self._configs[ConfigType.MODEL] = {
-            "sunflower-kids": ModelConfig(
-                name="sunflower-kids",
-                base_model="llama3.2:3b",
-                size_gb=3.0,
+            'sunflower_kids': ModelConfig(
+                name='sunflower_kids',
+                base_model='llama3.2:3b',
+                size_gb=2.0,
                 min_ram_gb=4,
                 recommended_ram_gb=8,
                 context_size=4096,
@@ -313,14 +336,16 @@ class ConfigurationManager:
                 top_p=0.9,
                 top_k=40,
                 repeat_penalty=1.1,
-                max_tokens=150,
+                max_tokens=500,
                 gpu_layers=-1,
-                threads=4
+                threads=4,
+                use_mmap=True,
+                use_mlock=False
             ),
-            "sunflower-educator": ModelConfig(
-                name="sunflower-educator",
-                base_model="llama3.2:7b",
-                size_gb=7.0,
+            'sunflower_educator': ModelConfig(
+                name='sunflower_educator',
+                base_model='llama3.2:7b',
+                size_gb=4.0,
                 min_ram_gb=8,
                 recommended_ram_gb=16,
                 context_size=8192,
@@ -328,377 +353,447 @@ class ConfigurationManager:
                 top_p=0.95,
                 top_k=50,
                 repeat_penalty=1.05,
-                max_tokens=500,
+                max_tokens=1000,
                 gpu_layers=-1,
-                threads=8
+                threads=8,
+                use_mmap=True,
+                use_mlock=False
+            ),
+            'sunflower_minimal': ModelConfig(
+                name='sunflower_minimal',
+                base_model='llama3.2:1b',
+                size_gb=0.7,
+                min_ram_gb=2,
+                recommended_ram_gb=4,
+                context_size=2048,
+                temperature=0.7,
+                top_p=0.9,
+                top_k=40,
+                repeat_penalty=1.1,
+                max_tokens=300,
+                gpu_layers=-1,
+                threads=2,
+                use_mmap=True,
+                use_mlock=False
             )
         }
     
-    def _load_user_config(self):
-        """Load user configuration from USB"""
-        config_file = self.user_config_path / "user_config.json"
-        
-        if config_file.exists():
-            try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    self._configs[ConfigType.USER] = json.load(f)
-                logger.info(f"Loaded user config: {config_file}")
-            except Exception as e:
-                logger.error(f"Failed to load user config: {e}")
-                self._configs[ConfigType.USER] = {}
-        else:
-            self._configs[ConfigType.USER] = {}
-    
-    def _load_family_config(self):
-        """Load family configuration"""
-        config_file = self.family_config_path / "family_config.json"
-        
-        if config_file.exists():
-            try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    self._configs[ConfigType.FAMILY] = json.load(f)
-                logger.info(f"Loaded family config: {config_file}")
-            except Exception as e:
-                logger.error(f"Failed to load family config: {e}")
-                self._configs[ConfigType.FAMILY] = {}
-        else:
-            self._configs[ConfigType.FAMILY] = {}
-    
-    def _load_hardware_config(self):
-        """Load hardware configuration by detecting system capabilities"""
-        try:
-            import psutil
-            
-            hardware_config = {
-                "platform": platform.system(),
-                "platform_version": platform.version(),
-                "architecture": platform.machine(),
-                "processor": platform.processor(),
-                "cpu_count": psutil.cpu_count(logical=False),
-                "cpu_threads": psutil.cpu_count(logical=True),
-                "cpu_freq_mhz": psutil.cpu_freq().current if psutil.cpu_freq() else 0,
-                "ram_total_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-                "ram_available_gb": round(psutil.virtual_memory().available / (1024**3), 1),
-                "disk_total_gb": round(psutil.disk_usage('/').total / (1024**3), 1),
-                "disk_free_gb": round(psutil.disk_usage('/').free / (1024**3), 1),
-                "gpu_available": self._detect_gpu(),
-                "performance_tier": self._determine_performance_tier()
-            }
-            
-            self._configs[ConfigType.HARDWARE] = hardware_config
-            logger.info(f"Hardware detected: {hardware_config['performance_tier']} tier")
-            
-        except Exception as e:
-            logger.error(f"Failed to detect hardware: {e}")
-            self._configs[ConfigType.HARDWARE] = {
-                "platform": platform.system(),
-                "performance_tier": "standard"
-            }
-    
-    def _detect_gpu(self) -> bool:
-        """Detect if GPU is available"""
-        try:
-            if platform.system() == "Windows":
-                import subprocess
-                result = subprocess.run(
-                    ["wmic", "path", "win32_VideoController", "get", "name"],
-                    capture_output=True, text=True, timeout=5
-                )
-                return "NVIDIA" in result.stdout or "AMD" in result.stdout or "Intel" in result.stdout
-            
-            elif platform.system() == "Darwin":
-                import subprocess
-                result = subprocess.run(
-                    ["system_profiler", "SPDisplaysDataType"],
-                    capture_output=True, text=True, timeout=5
-                )
-                return "GPU" in result.stdout or "Metal" in result.stdout
-            
-            else:
-                # Linux
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["lspci"], capture_output=True, text=True, timeout=5
-                    )
-                    return "VGA" in result.stdout or "3D" in result.stdout
-                except:
-                    return False
-                    
-        except Exception as e:
-            logger.debug(f"GPU detection failed: {e}")
-            return False
-    
-    def _determine_performance_tier(self) -> str:
-        """Determine system performance tier"""
-        try:
-            import psutil
-            
-            ram_gb = psutil.virtual_memory().total / (1024**3)
-            cpu_threads = psutil.cpu_count(logical=True)
-            
-            if ram_gb >= 16 and cpu_threads >= 8:
-                return "ultra"
-            elif ram_gb >= 8 and cpu_threads >= 4:
-                return "high"
-            elif ram_gb >= 4 and cpu_threads >= 2:
-                return "standard"
-            else:
-                return "minimum"
-                
-        except:
-            return "standard"
-    
     def _load_network_config(self):
         """Load network configuration"""
-        config_file = self.user_config_path / "network.yaml"
+        config_file = self.user_config_path / "network.json"
         
         if config_file.exists():
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
-                    config_data = yaml.safe_load(f)
+                    config_data = json.load(f)
                     self._configs[ConfigType.NETWORK] = NetworkConfig(**config_data)
                 logger.info(f"Loaded network config: {config_file}")
             except Exception as e:
                 logger.error(f"Failed to load network config: {e}")
-                self._configs[ConfigType.NETWORK] = NetworkConfig()
+                self._load_default_network_config()
         else:
-            self._configs[ConfigType.NETWORK] = NetworkConfig()
+            self._load_default_network_config()
+    
+    def _load_default_network_config(self):
+        """Load default network configuration"""
+        self._configs[ConfigType.NETWORK] = NetworkConfig(
+            ollama_host="localhost",
+            ollama_port=11434,
+            webui_host="localhost",
+            webui_port=8080,
+            api_timeout=30,
+            max_retries=3,
+            offline_mode=False,
+            proxy_enabled=False
+        )
     
     def _load_security_config(self):
         """Load security configuration"""
-        config_file = self.system_config_path / "security.yaml"
+        config_file = self.user_config_path / "security.json"
         
         if config_file.exists():
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
-                    config_data = yaml.safe_load(f)
+                    config_data = json.load(f)
                     self._configs[ConfigType.SECURITY] = SecurityConfig(**config_data)
                 logger.info(f"Loaded security config: {config_file}")
             except Exception as e:
                 logger.error(f"Failed to load security config: {e}")
-                self._configs[ConfigType.SECURITY] = SecurityConfig()
+                self._load_default_security_config()
         else:
-            self._configs[ConfigType.SECURITY] = SecurityConfig()
+            self._load_default_security_config()
     
-    def get_config(self, config_type: ConfigType) -> Any:
-        """Get configuration by type"""
-        with self._config_lock:
-            return self._configs.get(config_type)
+    def _load_default_security_config(self):
+        """Load default security configuration"""
+        self._configs[ConfigType.SECURITY] = SecurityConfig(
+            require_authentication=True,
+            encryption_enabled=True,
+            session_timeout_minutes=60,
+            max_login_attempts=5,
+            lockout_duration_minutes=30,
+            require_parent_pin=True,
+            pin_length=6,
+            two_factor_enabled=False,
+            audit_logging=True,
+            secure_erase=True
+        )
     
-    def get_value(self, config_type: ConfigType, key: str, default: Any = None) -> Any:
-        """Get specific configuration value"""
-        with self._config_lock:
+    def _load_user_preferences(self):
+        """Load user preferences"""
+        prefs_file = self.user_config_path / "preferences.json"
+        
+        if prefs_file.exists():
+            try:
+                with open(prefs_file, 'r', encoding='utf-8') as f:
+                    self._configs[ConfigType.USER] = json.load(f)
+                logger.info(f"Loaded user preferences: {prefs_file}")
+            except Exception as e:
+                logger.error(f"Failed to load user preferences: {e}")
+                self._load_default_user_preferences()
+        else:
+            self._load_default_user_preferences()
+    
+    def _load_default_user_preferences(self):
+        """Load default user preferences"""
+        self._configs[ConfigType.USER] = {
+            "theme": "light",
+            "language": "en",
+            "font_size": "medium",
+            "auto_save": True,
+            "notifications": True,
+            "sound_effects": True,
+            "animation_speed": "normal",
+            "session_timeout": 60,
+            "auto_logout": True
+        }
+    
+    def _load_defaults(self):
+        """Load all default configurations"""
+        self._load_default_system_config()
+        self._load_default_safety_config()
+        self._load_default_model_config()
+        self._load_default_network_config()
+        self._load_default_security_config()
+        self._load_default_user_preferences()
+        logger.info("Loaded default configurations")
+    
+    def get(self, config_type: ConfigType, key: Optional[str] = None) -> Any:
+        """
+        Get configuration value
+        
+        Args:
+            config_type: Type of configuration
+            key: Optional specific key within configuration
+            
+        Returns:
+            Configuration value or entire config object
+        """
+        with self._lock:
             config = self._configs.get(config_type)
-            if config:
-                if isinstance(config, dict):
-                    return config.get(key, default)
-                elif hasattr(config, key):
-                    return getattr(config, key, default)
-            return default
+            
+            if key and isinstance(config, dict):
+                return config.get(key)
+            
+            return config
     
-    def set_value(self, config_type: ConfigType, key: str, value: Any):
-        """Set configuration value"""
-        with self._config_lock:
+    def set(self, config_type: ConfigType, key: str, value: Any):
+        """
+        Set configuration value
+        
+        Args:
+            config_type: Type of configuration
+            key: Configuration key
+            value: New value
+        """
+        with self._lock:
             if config_type not in self._configs:
                 self._configs[config_type] = {}
             
-            config = self._configs[config_type]
-            if isinstance(config, dict):
-                config[key] = value
-            elif hasattr(config, key):
-                setattr(config, key, value)
-            
-            # Save if it's a user config
-            if config_type in [ConfigType.USER, ConfigType.FAMILY]:
-                self._save_user_config()
+            if isinstance(self._configs[config_type], dict):
+                self._configs[config_type][key] = value
+                self._save_config(config_type)
+            else:
+                logger.error(f"Cannot set key on non-dict config type: {config_type}")
     
-    def _save_user_config(self):
-        """Save user configuration to USB"""
-        if not self.user_config_path:
-            return
+    def update(self, config_type: ConfigType, updates: Dict[str, Any]):
+        """
+        Update multiple configuration values
         
+        Args:
+            config_type: Type of configuration
+            updates: Dictionary of updates
+        """
+        with self._lock:
+            if config_type not in self._configs:
+                self._configs[config_type] = {}
+            
+            if isinstance(self._configs[config_type], dict):
+                self._configs[config_type].update(updates)
+                self._save_config(config_type)
+            else:
+                logger.error(f"Cannot update non-dict config type: {config_type}")
+    
+    def _save_config(self, config_type: ConfigType):
+        """Save configuration to disk"""
         try:
-            # Save user config
-            if ConfigType.USER in self._configs:
-                user_file = self.user_config_path / "user_config.json"
-                with open(user_file, 'w', encoding='utf-8') as f:
-                    json.dump(self._configs[ConfigType.USER], f, indent=2)
+            # Determine save path based on config type
+            if config_type == ConfigType.SYSTEM:
+                # System config is read-only on CD-ROM
+                logger.warning("Cannot save system config to CD-ROM")
+                return
             
-            # Save family config
-            if ConfigType.FAMILY in self._configs:
-                family_file = self.family_config_path / "family_config.json"
-                with open(family_file, 'w', encoding='utf-8') as f:
-                    json.dump(self._configs[ConfigType.FAMILY], f, indent=2)
+            elif config_type == ConfigType.SAFETY:
+                save_path = self.safety_config_path / "safety_config.yaml"
+                config = self._configs[config_type]
+                
+                if isinstance(config, SafetyConfig):
+                    config_dict = asdict(config)
+                else:
+                    config_dict = config
+                
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config_dict, f, default_flow_style=False)
             
-            logger.info("User configuration saved")
+            elif config_type == ConfigType.MODEL:
+                save_path = self.user_config_path / "models.json"
+                config = self._configs[config_type]
+                
+                config_dict = {}
+                for name, model_config in config.items():
+                    if isinstance(model_config, ModelConfig):
+                        config_dict[name] = asdict(model_config)
+                    else:
+                        config_dict[name] = model_config
+                
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_dict, f, indent=2)
+            
+            elif config_type == ConfigType.NETWORK:
+                save_path = self.user_config_path / "network.json"
+                config = self._configs[config_type]
+                
+                if isinstance(config, NetworkConfig):
+                    config_dict = asdict(config)
+                else:
+                    config_dict = config
+                
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_dict, f, indent=2)
+            
+            elif config_type == ConfigType.SECURITY:
+                save_path = self.user_config_path / "security.json"
+                config = self._configs[config_type]
+                
+                if isinstance(config, SecurityConfig):
+                    config_dict = asdict(config)
+                else:
+                    config_dict = config
+                
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_dict, f, indent=2)
+            
+            elif config_type == ConfigType.USER:
+                save_path = self.user_config_path / "preferences.json"
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    json.dump(self._configs[config_type], f, indent=2)
+            
+            logger.info(f"Saved {config_type.value} configuration to {save_path}")
             
         except Exception as e:
-            logger.error(f"Failed to save user config: {e}")
+            logger.error(f"Failed to save {config_type.value} configuration: {e}")
     
-    def get_model_config(self, model_name: str) -> Optional[ModelConfig]:
-        """Get configuration for specific model"""
-        models = self.get_config(ConfigType.MODEL)
-        if models and model_name in models:
-            return models[model_name]
-        return None
-    
-    def get_optimal_model(self) -> str:
-        """Get optimal model based on hardware"""
-        hardware = self.get_config(ConfigType.HARDWARE)
-        if not hardware:
-            return "llama3.2:1b"
-        
-        tier = hardware.get("performance_tier", "standard")
-        
-        tier_models = {
-            "ultra": "llama3.2:7b",
-            "high": "llama3.2:3b",
-            "standard": "llama3.2:1b",
-            "minimum": "llama3.2:1b-q4_0"
-        }
-        
-        return tier_models.get(tier, "llama3.2:1b")
-    
-    def get_safety_config(self) -> SafetyConfig:
-        """Get safety configuration"""
-        config = self.get_config(ConfigType.SAFETY)
-        if not config:
-            config = SafetyConfig()
-            self._configs[ConfigType.SAFETY] = config
-        return config
-    
-    def update_safety_config(self, **kwargs):
-        """Update safety configuration"""
-        config = self.get_safety_config()
-        
-        for key, value in kwargs.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-        
-        # Save to user config
-        if self.user_config_path:
-            config_file = self.user_config_path / "safety_overrides.yaml"
-            with open(config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(asdict(config), f)
-            
-            logger.info("Safety configuration updated")
-    
-    def get_env_var(self, key: str, default: str = "") -> str:
+    def get_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Get environment variable"""
         return self._env_vars.get(key, os.environ.get(key, default))
     
-    def validate_configuration(self) -> Tuple[bool, List[str]]:
-        """Validate all configurations"""
-        errors = []
+    def set_env(self, key: str, value: str):
+        """Set environment variable"""
+        self._env_vars[key] = value
+        os.environ[key] = value
         
-        # Check system requirements
-        hardware = self.get_config(ConfigType.HARDWARE)
-        system = self.get_config(ConfigType.SYSTEM)
+        # Save to .env file
+        env_file = self.user_config_path / ".env"
+        lines = []
         
-        if hardware and system:
+        if env_file.exists():
+            with open(env_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        
+        # Update or add the key
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith(f"{key}="):
+                lines[i] = f"{key}={value}\n"
+                found = True
+                break
+        
+        if not found:
+            lines.append(f"{key}={value}\n")
+        
+        with open(env_file, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+    
+    def validate_hardware(self) -> Tuple[bool, List[str]]:
+        """
+        Validate hardware requirements
+        
+        Returns:
+            Tuple of (meets_requirements, list_of_issues)
+        """
+        issues = []
+        
+        try:
+            import psutil
+            
             # Check RAM
-            ram_gb = hardware.get("ram_total_gb", 0)
-            min_ram = system.get("min_ram_gb", 4)
-            if ram_gb < min_ram:
-                errors.append(f"Insufficient RAM: {ram_gb}GB < {min_ram}GB required")
+            total_ram_gb = psutil.virtual_memory().total / (1024**3)
+            required_ram = self._configs[ConfigType.SYSTEM].get('required_ram_gb', 4)
+            
+            if total_ram_gb < required_ram:
+                issues.append(f"Insufficient RAM: {total_ram_gb:.1f}GB < {required_ram}GB required")
             
             # Check disk space
-            disk_gb = hardware.get("disk_free_gb", 0)
-            min_disk = system.get("min_disk_gb", 8)
-            if disk_gb < min_disk:
-                errors.append(f"Insufficient disk space: {disk_gb}GB < {min_disk}GB required")
+            if self.usb_path:
+                disk_usage = psutil.disk_usage(str(self.usb_path))
+                free_gb = disk_usage.free / (1024**3)
+                
+                if free_gb < 1:
+                    issues.append(f"Low disk space on USB: {free_gb:.1f}GB free")
             
-            # Check platform
-            platform_name = hardware.get("platform", "")
-            supported = system.get("supported_platforms", [])
-            if platform_name not in supported:
-                errors.append(f"Unsupported platform: {platform_name}")
+            # Check CPU cores
+            cpu_count = psutil.cpu_count(logical=False)
+            if cpu_count < 2:
+                issues.append(f"Low CPU core count: {cpu_count} cores")
+            
+        except ImportError:
+            logger.warning("psutil not available for hardware validation")
+        except Exception as e:
+            logger.error(f"Hardware validation error: {e}")
+            issues.append(f"Hardware validation error: {e}")
         
-        # Check model availability
-        models = self.get_config(ConfigType.MODEL)
-        if not models:
-            errors.append("No model configurations found")
+        meets_requirements = len(issues) == 0
+        return meets_requirements, issues
+    
+    def get_optimal_model(self) -> str:
+        """
+        Get optimal model based on hardware capabilities
         
-        # Check safety config
-        safety = self.get_config(ConfigType.SAFETY)
-        if not safety or not safety.enabled:
-            errors.append("Safety filter is disabled - not recommended for children")
-        
-        # Check network config
-        network = self.get_config(ConfigType.NETWORK)
-        if not network:
-            errors.append("Network configuration missing")
-        
-        valid = len(errors) == 0
-        return valid, errors
+        Returns:
+            Model name suitable for current hardware
+        """
+        try:
+            import psutil
+            
+            total_ram_gb = psutil.virtual_memory().total / (1024**3)
+            
+            models = self._configs.get(ConfigType.MODEL, {})
+            
+            # Find best model for available RAM
+            suitable_models = []
+            for name, config in models.items():
+                if isinstance(config, ModelConfig):
+                    if total_ram_gb >= config.min_ram_gb:
+                        suitable_models.append((name, config.recommended_ram_gb))
+                elif isinstance(config, dict):
+                    min_ram = config.get('min_ram_gb', 4)
+                    rec_ram = config.get('recommended_ram_gb', 8)
+                    if total_ram_gb >= min_ram:
+                        suitable_models.append((name, rec_ram))
+            
+            if suitable_models:
+                # Sort by recommended RAM (descending) and return best fit
+                suitable_models.sort(key=lambda x: x[1], reverse=True)
+                
+                for name, rec_ram in suitable_models:
+                    if total_ram_gb >= rec_ram:
+                        return name
+                
+                # Return the model with lowest requirements if none ideal
+                return suitable_models[-1][0]
+            
+            # Default to minimal model
+            return 'sunflower_minimal'
+            
+        except Exception as e:
+            logger.error(f"Error selecting optimal model: {e}")
+            return 'sunflower_minimal'
     
     def export_config(self, output_path: Path):
-        """Export all configurations to file"""
-        export_data = {}
+        """Export all configuration to file"""
+        export_data = {
+            'version': self._configs[ConfigType.SYSTEM].get('version', 'unknown'),
+            'export_date': datetime.now().isoformat(),
+            'configurations': {}
+        }
         
-        with self._config_lock:
-            for config_type, config in self._configs.items():
-                if isinstance(config, (ModelConfig, SafetyConfig, NetworkConfig, SecurityConfig)):
-                    export_data[config_type.value] = asdict(config)
-                else:
-                    export_data[config_type.value] = config
+        with self._lock:
+            for config_type in ConfigType:
+                config = self._configs.get(config_type)
+                
+                if config:
+                    if hasattr(config, '__dict__'):
+                        export_data['configurations'][config_type.value] = asdict(config)
+                    else:
+                        export_data['configurations'][config_type.value] = config
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(export_data, f, indent=2, default=str)
         
-        logger.info(f"Configuration exported to: {output_path}")
+        logger.info(f"Exported configuration to {output_path}")
     
-    def reset_to_defaults(self, config_type: Optional[ConfigType] = None):
-        """Reset configuration to defaults"""
-        if config_type:
-            # Reset specific config type
-            if config_type == ConfigType.SAFETY:
-                self._load_default_safety_config()
-            elif config_type == ConfigType.MODEL:
-                self._load_default_model_config()
-            elif config_type == ConfigType.SYSTEM:
-                self._load_default_system_config()
+    def import_config(self, input_path: Path):
+        """Import configuration from file"""
+        try:
+            with open(input_path, 'r', encoding='utf-8') as f:
+                import_data = json.load(f)
             
-            logger.info(f"Reset {config_type.value} configuration to defaults")
-        else:
-            # Reset all configurations
-            self._load_default_system_config()
-            self._load_default_safety_config()
-            self._load_default_model_config()
-            self._configs[ConfigType.USER] = {}
-            self._configs[ConfigType.FAMILY] = {}
+            configurations = import_data.get('configurations', {})
             
-            logger.info("All configurations reset to defaults")
-        
-        # Save changes
-        self._save_user_config()
-    
-    def get_status(self) -> Dict[str, Any]:
-        """Get configuration status"""
-        return {
-            "loaded_configs": list(self._configs.keys()),
-            "env_vars_count": len(self._env_vars),
-            "cdrom_path": str(self.cdrom_path) if self.cdrom_path else None,
-            "usb_path": str(self.usb_path) if self.usb_path else None,
-            "hardware_tier": self.get_value(ConfigType.HARDWARE, "performance_tier", "unknown"),
-            "optimal_model": self.get_optimal_model(),
-            "safety_enabled": self.get_safety_config().enabled,
-            "validation": self.validate_configuration()
-        }
+            with self._lock:
+                for config_type_str, config_data in configurations.items():
+                    try:
+                        config_type = ConfigType(config_type_str)
+                        
+                        # Don't import system config
+                        if config_type == ConfigType.SYSTEM:
+                            continue
+                        
+                        self._configs[config_type] = config_data
+                        self._save_config(config_type)
+                        
+                    except ValueError:
+                        logger.warning(f"Unknown config type: {config_type_str}")
+            
+            logger.info(f"Imported configuration from {input_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to import configuration: {e}")
+            raise
 
 
 # Singleton instance
-_config_manager: Optional[ConfigurationManager] = None
+_config_manager = None
+_config_lock = threading.Lock()
 
 
 def get_config_manager(cdrom_path: Optional[Path] = None, 
                        usb_path: Optional[Path] = None) -> ConfigurationManager:
-    """Get or create configuration manager singleton"""
+    """
+    Get singleton configuration manager instance
+    
+    Args:
+        cdrom_path: Optional CD-ROM path
+        usb_path: Optional USB path
+        
+    Returns:
+        ConfigurationManager instance
+    """
     global _config_manager
     
     if _config_manager is None:
-        _config_manager = ConfigurationManager(cdrom_path, usb_path)
+        with _config_lock:
+            if _config_manager is None:
+                _config_manager = ConfigurationManager(cdrom_path, usb_path)
     
     return _config_manager
 
@@ -707,28 +802,35 @@ def get_config_manager(cdrom_path: Optional[Path] = None,
 if __name__ == "__main__":
     import tempfile
     
+    # Test with temporary directories
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create test configuration manager
-        config_mgr = ConfigurationManager(
-            cdrom_path=Path(tmpdir) / "cdrom",
-            usb_path=Path(tmpdir) / "usb"
-        )
+        tmp_path = Path(tmpdir)
         
-        # Test configuration
-        print("Configuration Status:")
-        print("-" * 60)
+        # Create test structure
+        cdrom = tmp_path / "cdrom"
+        usb = tmp_path / "usb"
+        cdrom.mkdir()
+        usb.mkdir()
         
-        status = config_mgr.get_status()
-        for key, value in status.items():
-            print(f"{key}: {value}")
+        # Create marker files
+        (cdrom / "sunflower_cd.id").touch()
+        (usb / "sunflower_data.id").touch()
         
-        print("-" * 60)
+        # Initialize config manager
+        config = ConfigurationManager(cdrom, usb)
         
-        # Validate
-        valid, errors = config_mgr.validate_configuration()
-        if valid:
-            print("✓ Configuration is valid")
-        else:
-            print("✗ Configuration errors:")
-            for error in errors:
-                print(f"  - {error}")
+        # Test getting configurations
+        print("System Config:", config.get(ConfigType.SYSTEM))
+        print("Safety Config:", config.get(ConfigType.SAFETY))
+        print("Optimal Model:", config.get_optimal_model())
+        
+        # Test hardware validation
+        meets_req, issues = config.validate_hardware()
+        print(f"Hardware OK: {meets_req}")
+        if issues:
+            print("Issues:", issues)
+        
+        # Test export
+        export_file = tmp_path / "config_export.json"
+        config.export_config(export_file)
+        print(f"Configuration exported to {export_file}")
