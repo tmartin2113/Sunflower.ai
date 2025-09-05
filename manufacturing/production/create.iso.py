@@ -460,7 +460,7 @@ DriverPath=windows\\drivers
         
         logger.info(f"Running: {' '.join(cmd)}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise PartitionError(
                 f"ISO creation failed: {result.stderr}",

@@ -217,8 +217,10 @@ class SunflowerLauncher:
             # Show launch button
             self.button_frame.pack(pady=(0, 20))
             
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError, ImportError) as e:
             self.show_error(f"Initialization failed: {str(e)}")
+        except Exception as e:
+            self.show_error(f"Unexpected initialization error: {str(e)}")
             
     def detect_partitions(self):
         """Detect CD-ROM and USB partitions"""
@@ -260,7 +262,7 @@ class SunflowerLauncher:
             version = result.stdout.strip()
             self.log_status(f"Python detected: {version}", "success")
             return True
-        except:
+        except (subprocess.SubprocessError, OSError):
             return False
             
     def check_open_webui(self):
@@ -271,7 +273,7 @@ class SunflowerLauncher:
             if result.returncode == 0:
                 self.log_status("Open WebUI is installed", "success")
                 return True
-        except:
+        except (subprocess.SubprocessError, OSError):
             pass
         self.log_status("Open WebUI not found", "warning")
         return False
@@ -286,7 +288,7 @@ class SunflowerLauncher:
             if result.returncode == 0:
                 self.log_status("Open WebUI installed successfully", "success")
                 return True
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             self.log_status(f"Installation error: {str(e)}", "error")
         return False
         
@@ -304,7 +306,7 @@ class SunflowerLauncher:
             if result.returncode == 0:
                 self.log_status("Ollama is installed", "success")
                 return True
-        except:
+        except (subprocess.SubprocessError, OSError):
             pass
         self.log_status("Ollama not found", "warning")
         return False

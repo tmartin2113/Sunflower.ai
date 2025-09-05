@@ -132,11 +132,20 @@ class OpenWebUIIntegration:
             import win32api
             drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
             for drive in drives:
-                drive_type = win32api.GetDriveType(drive)
-                if drive_type == 5:  # CD-ROM
+                # Check if it's a CD-ROM by trying to access it and checking if it's read-only
+                try:
                     marker_file = Path(drive) / 'SUNFLOWER_SYSTEM.marker'
                     if marker_file.exists():
-                        return Path(drive)
+                        # Additional check: CD-ROM drives are typically read-only
+                        test_file = Path(drive) / 'test_write.tmp'
+                        try:
+                            test_file.write_text('test')
+                            test_file.unlink()  # Clean up
+                        except (PermissionError, OSError):
+                            # This is likely a CD-ROM drive
+                            return Path(drive)
+                except (PermissionError, OSError):
+                    continue
         elif self.platform == "Darwin":  # macOS
             volumes = Path('/Volumes')
             for volume in volumes.iterdir():
@@ -153,11 +162,20 @@ class OpenWebUIIntegration:
             import win32api
             drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
             for drive in drives:
-                drive_type = win32api.GetDriveType(drive)
-                if drive_type == 2:  # Removable
+                # Check for USB marker file and writable access
+                try:
                     marker_file = Path(drive) / 'SUNFLOWER_DATA.marker'
                     if marker_file.exists():
-                        return Path(drive)
+                        # Test if we can write to this drive (USB drives are typically writable)
+                        test_file = Path(drive) / 'test_write.tmp'
+                        try:
+                            test_file.write_text('test')
+                            test_file.unlink()  # Clean up
+                            return Path(drive)  # This is writable, likely USB
+                        except (PermissionError, OSError):
+                            continue
+                except (PermissionError, OSError):
+                    continue
         elif self.platform == "Darwin":  # macOS
             volumes = Path('/Volumes')
             for volume in volumes.iterdir():
@@ -315,7 +333,7 @@ class OpenWebUIIntegration:
                     loaded_config = json.load(f)
                     # Merge with defaults for any missing keys
                     return {**default_config, **loaded_config}
-            except Exception as e:
+            except (json.JSONDecodeError, OSError) as e:
                 logger.error(f"Error loading config: {e}")
                 return default_config
         else:
@@ -493,7 +511,7 @@ class OpenWebUIIntegration:
                     # This is handled by the safety filter module
                     
                     time.sleep(10)  # Check every 10 seconds
-                except Exception as e:
+                except (OSError, RuntimeError) as e:
                     logger.error(f"Monitoring error: {e}")
         
         self.monitoring_thread = threading.Thread(target=monitor, daemon=True)
@@ -704,13 +722,13 @@ class OpenWebUIIntegration:
                     if response.status_code == 200:
                         logger.info("Open WebUI launched successfully")
                         return True
-                except:
+                except (requests.RequestException, OSError):
                     time.sleep(1)
             
             logger.error("Open WebUI failed to start within timeout")
             return False
             
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             logger.error(f"Failed to launch Open WebUI: {e}")
             return False
     
@@ -727,7 +745,7 @@ class OpenWebUIIntegration:
                 self.openwebui_process.wait(timeout=10)
             
             logger.info("Sunflower AI system shutdown complete")
-        except Exception as e:
+        except (subprocess.SubprocessError, OSError) as e:
             logger.error(f"Error during shutdown: {e}")
 
 # Production entry point

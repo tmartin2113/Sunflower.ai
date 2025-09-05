@@ -745,7 +745,7 @@ def main():
     # Get device path
     print("Available devices:")
     if platform.system() == "Windows":
-        subprocess.run("wmic diskdrive get Name,Size,Model", shell=True)
+        subprocess.run(["wmic", "diskdrive", "get", "Name,Size,Model"])
     elif platform.system() == "Darwin":
         subprocess.run(["diskutil", "list"])
     else:

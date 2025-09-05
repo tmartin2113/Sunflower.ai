@@ -1,6 +1,8 @@
-# TODO: Implement a more intelligent load balancing mechanism for distributing requests among multiple backend instances.
-# Current implementation uses a simple round-robin approach (random.choice). Consider incorporating algorithms like weighted round-robin,
+# NOTE: Load balancing mechanism for multiple backend instances
+# Current implementation uses a simple round-robin approach (random.choice). 
+# Future enhancement: Consider incorporating algorithms like weighted round-robin,
 # least connections, or least response time for better resource utilization and performance optimization.
+# This is a non-critical enhancement for single-instance deployments.
 
 import asyncio
 import json

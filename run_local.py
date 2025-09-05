@@ -123,8 +123,26 @@ class SunflowerLocalRunner:
         
         elif self.platform == "Linux":
             logger.info("Installing Ollama for Linux...")
-            cmd = "curl -fsSL https://ollama.ai/install.sh | sh"
-            subprocess.run(cmd, shell=True, check=False)
+            # Download and execute install script securely
+            try:
+                import tempfile
+                import urllib.request
+                
+                # Download install script
+                with tempfile.NamedTemporaryFile(mode='w+', suffix='.sh', delete=False) as f:
+                    script_path = f.name
+                
+                urllib.request.urlretrieve("https://ollama.ai/install.sh", script_path)
+                
+                # Make executable and run
+                os.chmod(script_path, 0o755)
+                subprocess.run(["/bin/bash", script_path], check=False)
+                
+                # Clean up
+                os.unlink(script_path)
+            except Exception as e:
+                logger.error(f"Failed to install Ollama: {e}")
+                logger.info("Please install Ollama manually from: https://ollama.ai/download")
         
         elif self.platform == "Windows":
             logger.info("Please download Ollama from: https://ollama.ai/download/windows")

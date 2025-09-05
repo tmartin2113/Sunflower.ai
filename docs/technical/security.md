@@ -462,7 +462,9 @@ class OfflineEnforcement:
         ]
         
         for rule in rules:
-            subprocess.run(rule, shell=True, check=False)
+            # Split command into list to avoid shell injection
+            cmd_parts = rule.split()
+            subprocess.run(cmd_parts, check=False)
     
     def monitor_network_attempts(self):
         """Log any network connection attempts"""

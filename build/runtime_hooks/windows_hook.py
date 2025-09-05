@@ -200,14 +200,17 @@ def configure_firewall_exception():
             import subprocess
             
             # Check if rule already exists
-            check_cmd = f'netsh advfirewall firewall show rule name="{app_name}"'
-            result = subprocess.run(check_cmd, shell=True, capture_output=True)
+            check_cmd = ["netsh", "advfirewall", "firewall", "show", "rule", f"name={app_name}"]
+            result = subprocess.run(check_cmd, capture_output=True)
             
             if result.returncode != 0:
                 # Add firewall rule
-                add_cmd = f'netsh advfirewall firewall add rule name="{app_name}" ' \
-                         f'dir=in action=allow program="{exe_path}" enable=yes'
-                subprocess.run(add_cmd, shell=True, capture_output=True)
+                add_cmd = [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name={app_name}",
+                    "dir=in", "action=allow", f"program={exe_path}", "enable=yes"
+                ]
+                subprocess.run(add_cmd, capture_output=True)
                 logger.info(f"Firewall exception added for {app_name}")
         except Exception as e:
             logger.debug(f"Could not configure firewall: {e}")
