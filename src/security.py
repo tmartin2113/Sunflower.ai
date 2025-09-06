@@ -1,202 +1,152 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Security Manager
-Version: 6.2
-Copyright (c) 2025 Sunflower AI
-
-Comprehensive security system handling authentication, encryption,
-session management, and audit logging. Ensures child safety and
-data protection with enterprise-grade security measures.
+Sunflower AI Professional System - Security Module
+Enhanced with thread safety, proper resource management, timeouts, and retry logic
+Version: 6.2.0 - Production Ready
 """
 
 import os
 import sys
 import json
-import secrets
 import hashlib
+import secrets
 import logging
 import threading
 import time
-import base64
-import hmac
-from pathlib import Path
-from typing import Dict, Optional, List, Tuple, Any, Callable
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-import uuid
-import re
 import sqlite3
-from contextlib import contextmanager
-
-# Cryptography imports
+from pathlib import Path
+from typing import Dict, Optional, Any, List, Tuple
+from dataclasses import dataclass, asdict, field
+from datetime import datetime, timedelta
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from enum import Enum
+from contextlib import contextmanager
+import base64
 
 logger = logging.getLogger(__name__)
 
+# Configuration constants with timeout values
+DEFAULT_TIMEOUT = 30  # seconds
+MAX_RETRY_ATTEMPTS = 3
+RETRY_DELAY = 1  # seconds
+DB_TIMEOUT = 30  # seconds for database operations
+SESSION_TIMEOUT = 3600  # 1 hour
 
-class AuthLevel(Enum):
-    """Authentication levels"""
-    NONE = 0
-    CHILD = 1
-    PARENT = 2
-    EDUCATOR = 3
-    ADMIN = 4
+
+class SecurityLevel(Enum):
+    """Security levels for the system"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    MAXIMUM = "maximum"
 
 
 class SecurityEvent(Enum):
-    """Security event types"""
+    """Security event types for logging"""
     LOGIN_SUCCESS = "login_success"
-    LOGIN_FAILED = "login_failed"
+    LOGIN_FAILURE = "login_failure"
     LOGOUT = "logout"
-    SESSION_START = "session_start"
-    SESSION_END = "session_end"
-    PASSWORD_CHANGE = "password_change"
     PROFILE_ACCESS = "profile_access"
-    SAFETY_VIOLATION = "safety_violation"
-    ENCRYPTION_ERROR = "encryption_error"
-    UNAUTHORIZED_ACCESS = "unauthorized_access"
-    SUSPICIOUS_ACTIVITY = "suspicious_activity"
-    DATA_EXPORT = "data_export"
-    SETTINGS_CHANGE = "settings_change"
+    PROFILE_DENIED = "profile_denied"
+    ENCRYPTION = "encryption"
+    DECRYPTION = "decryption"
+    VIOLATION = "violation"
+    LOCKOUT = "lockout"
 
 
 @dataclass
-class SecurityToken:
-    """Security token for session management"""
+class SessionToken:
+    """Session token with metadata"""
     token_id: str
     user_id: str
-    user_type: str
-    auth_level: int
-    created_at: str
-    expires_at: str
-    ip_address: Optional[str] = None
-    device_id: Optional[str] = None
-    is_active: bool = True
-    refresh_count: int = 0
-    last_activity: Optional[str] = None
-    
-    def is_expired(self) -> bool:
-        """Check if token is expired"""
-        expires = datetime.fromisoformat(self.expires_at)
-        return datetime.now() > expires
-    
-    def is_valid(self) -> bool:
-        """Check if token is valid"""
-        return self.is_active and not self.is_expired()
-
-
-@dataclass
-class AuditLog:
-    """Security audit log entry"""
-    id: str
-    timestamp: str
-    event_type: str
-    user_id: Optional[str]
-    ip_address: Optional[str]
-    details: Dict[str, Any]
-    severity: str
-    success: bool
-
-
-@dataclass
-class EncryptionKey:
-    """Encryption key management"""
-    key_id: str
-    key_type: str
-    key_data: bytes
-    created_at: str
-    expires_at: Optional[str] = None
-    algorithm: str = "AES-256"
-    purpose: str = "data_encryption"
-
-
-class SecurityError(Exception):
-    """Security-related exception"""
-    pass
+    profile_type: str  # 'parent' or 'child'
+    created_at: datetime
+    expires_at: datetime
+    last_activity: datetime
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class SecurityManager:
     """
-    Comprehensive security manager for authentication, encryption,
-    and audit logging in the Sunflower AI system.
+    Enhanced security manager with thread safety and resource management
     """
     
-    # Security constants
-    TOKEN_EXPIRY_HOURS = 2
-    SESSION_TIMEOUT_MINUTES = 60
-    MAX_LOGIN_ATTEMPTS = 5
-    LOCKOUT_DURATION_MINUTES = 30
-    MIN_PASSWORD_LENGTH = 8
-    SALT_LENGTH = 32
-    KEY_ITERATIONS = 100000
-    
-    def __init__(self, usb_path: Path):
-        """Initialize security manager"""
-        self.usb_path = Path(usb_path)
+    def __init__(self, usb_path: Optional[Path] = None):
+        """Initialize security manager with thread safety"""
+        self.usb_path = Path(usb_path) if usb_path else Path.home() / ".sunflower"
+        self.security_path = self.usb_path / "security"
+        self.security_path.mkdir(parents=True, exist_ok=True)
         
-        # Security paths
-        self.security_dir = self.usb_path / ".security"
-        self.keys_dir = self.security_dir / "keys"
-        self.audit_dir = self.security_dir / "audit"
-        self.db_path = self.security_dir / "security.db"
+        # Thread safety locks
+        self._session_lock = threading.RLock()
+        self._db_lock = threading.RLock()
+        self._cipher_lock = threading.RLock()
         
-        # Create directories
-        self.security_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.keys_dir.mkdir(exist_ok=True, mode=0o700)
-        self.audit_dir.mkdir(exist_ok=True, mode=0o700)
+        # Initialize components
+        self._master_key = self._load_or_generate_master_key()
+        self._data_cipher = self._create_cipher(self._master_key)
+        
+        # Session management with thread-safe dictionary
+        self._active_sessions = {}  # Protected by _session_lock
+        
+        # Failed login tracking with thread safety
+        self._failed_attempts = {}  # Protected by _session_lock
+        self._lockout_until = {}    # Protected by _session_lock
         
         # Initialize database
+        self.db_path = self.security_path / "security.db"
         self._init_database()
         
-        # Encryption
-        self._master_key = self._load_or_create_master_key()
-        self._data_cipher = Fernet(self._master_key)
+        # Start session cleanup thread
+        self._cleanup_thread = threading.Thread(target=self._session_cleanup_worker, daemon=True)
+        self._cleanup_thread.start()
         
-        # Session management
-        self._active_sessions: Dict[str, SecurityToken] = {}
-        self._session_lock = threading.RLock()
-        
-        # Failed login tracking
-        self._failed_attempts: Dict[str, int] = {}
-        self._lockout_until: Dict[str, datetime] = {}
-        
-        # Audit logging
-        self._audit_logs: List[AuditLog] = []
-        self._audit_lock = threading.Lock()
-        
-        # Start cleanup thread
-        self._start_cleanup_thread()
-        
-        logger.info("Security manager initialized")
+        logger.info("Security manager initialized with enhanced safety features")
+    
+    @contextmanager
+    def _get_db_connection(self):
+        """Thread-safe database connection context manager"""
+        conn = None
+        try:
+            with self._db_lock:
+                conn = sqlite3.connect(
+                    str(self.db_path),
+                    timeout=DB_TIMEOUT,
+                    isolation_level='IMMEDIATE'
+                )
+                conn.row_factory = sqlite3.Row
+                yield conn
+                conn.commit()
+        except sqlite3.Error as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            if conn:
+                conn.close()
     
     def _init_database(self):
-        """Initialize security database"""
+        """Initialize security database with proper resource management"""
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
             
             # Users table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
+                    user_id TEXT PRIMARY KEY,
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     salt TEXT NOT NULL,
-                    auth_level INTEGER NOT NULL,
+                    role TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     last_login TEXT,
                     is_active INTEGER DEFAULT 1,
-                    failed_attempts INTEGER DEFAULT 0,
-                    locked_until TEXT,
-                    two_factor_secret TEXT,
-                    security_questions TEXT
+                    lockout_until TEXT,
+                    failed_attempts INTEGER DEFAULT 0
                 )
             """)
             
@@ -207,347 +157,246 @@ class SecurityManager:
                     user_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
-                    last_activity TEXT,
-                    ip_address TEXT,
-                    device_id TEXT,
+                    last_activity TEXT NOT NULL,
                     is_active INTEGER DEFAULT 1,
-                    FOREIGN KEY (user_id) REFERENCES users (id)
+                    metadata TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             """)
             
-            # Audit logs table
+            # Security events table
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                    id TEXT PRIMARY KEY,
-                    timestamp TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS security_events (
+                    event_id TEXT PRIMARY KEY,
                     event_type TEXT NOT NULL,
                     user_id TEXT,
-                    ip_address TEXT,
+                    timestamp TEXT NOT NULL,
                     details TEXT,
                     severity TEXT,
-                    success INTEGER
+                    ip_address TEXT
                 )
             """)
             
-            # Indexes
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_username ON users (username)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_token ON sessions (token_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs (timestamp)")
-            
-            conn.commit()
+            # Create indexes
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON security_events(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON security_events(event_type)")
     
-    @contextmanager
-    def _get_db_connection(self):
-        """Get database connection context manager"""
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
+    def _load_or_generate_master_key(self) -> bytes:
+        """Load or generate master encryption key with proper file handling"""
+        key_file = self.security_path / ".master.key"
+        
         try:
-            yield conn
-        finally:
-            conn.close()
-    
-    def _load_or_create_master_key(self) -> bytes:
-        """Load or create master encryption key"""
-        key_file = self.keys_dir / "master.key"
-        
-        if key_file.exists():
-            # Load existing key
-            try:
+            if key_file.exists():
                 with open(key_file, 'rb') as f:
-                    key_data = f.read()
-                
-                # Validate key
-                if len(key_data) == 44:  # Base64-encoded 32-byte key
-                    logger.info("Loaded existing master key")
-                    return key_data
-                else:
-                    logger.error("Invalid master key format")
-                    raise SecurityError("Invalid master key")
-                    
-            except Exception as e:
-                logger.error(f"Failed to load master key: {e}")
-                raise SecurityError("Failed to load master key")
-        else:
-            # Generate new key
-            key = Fernet.generate_key()
-            
-            # Save key with restricted permissions
-            with open(key_file, 'wb') as f:
-                f.write(key)
-            
-            # Set file permissions (Unix-like systems)
-            if os.name != 'nt':
-                os.chmod(key_file, 0o600)
-            
-            logger.info("Generated new master key")
-            return key
-    
-    def _start_cleanup_thread(self):
-        """Start background cleanup thread"""
-        def cleanup():
-            while True:
-                try:
-                    self._cleanup_expired_sessions()
-                    self._cleanup_old_logs()
-                    time.sleep(3600)  # Run hourly
-                except Exception as e:
-                    logger.error(f"Cleanup error: {e}")
-        
-        thread = threading.Thread(target=cleanup, daemon=True)
-        thread.start()
-    
-    def _cleanup_expired_sessions(self):
-        """Clean up expired sessions"""
-        with self._session_lock:
-            expired = []
-            for token_id, token in self._active_sessions.items():
-                if token.is_expired():
-                    expired.append(token_id)
-            
-            for token_id in expired:
-                del self._active_sessions[token_id]
-                self._log_security_event(
-                    SecurityEvent.SESSION_END,
-                    user_id=self._active_sessions.get(token_id, SecurityToken).user_id,
-                    details={"reason": "expired"}
-                )
-        
-        # Clean database
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE sessions 
-                SET is_active = 0 
-                WHERE expires_at < ? AND is_active = 1
-            """, (datetime.now().isoformat(),))
-            conn.commit()
-    
-    def _cleanup_old_logs(self):
-        """Clean up old audit logs"""
-        # Keep logs for 90 days
-        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM audit_logs WHERE timestamp < ?", (cutoff,))
-            conn.commit()
-    
-    def create_user(self, username: str, password: str, auth_level: AuthLevel) -> str:
-        """Create new user account"""
-        # Validate password
-        if not self._validate_password(password):
-            raise SecurityError("Password does not meet requirements")
-        
-        # Generate salt and hash
-        salt = secrets.token_hex(self.SALT_LENGTH)
-        password_hash = self._hash_password(password, salt)
-        
-        user_id = str(uuid.uuid4())
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Check if username exists
-            cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
-            if cursor.fetchone():
-                raise SecurityError("Username already exists")
-            
-            # Create user
-            cursor.execute("""
-                INSERT INTO users (
-                    id, username, password_hash, salt, auth_level, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                user_id, username, password_hash, salt,
-                auth_level.value, datetime.now().isoformat()
-            ))
-            
-            conn.commit()
-        
-        self._log_security_event(
-            SecurityEvent.PROFILE_ACCESS,
-            user_id=user_id,
-            details={"action": "user_created", "auth_level": auth_level.value}
-        )
-        
-        logger.info(f"Created user: {username} (level: {auth_level.value})")
-        return user_id
-    
-    def authenticate(self, username: str, password: str) -> Optional[str]:
-        """Authenticate user and return token"""
-        # Check lockout
-        if username in self._lockout_until:
-            if datetime.now() < self._lockout_until[username]:
-                remaining = (self._lockout_until[username] - datetime.now()).seconds // 60
-                self._log_security_event(
-                    SecurityEvent.LOGIN_FAILED,
-                    details={"username": username, "reason": "account_locked"}
-                )
-                raise SecurityError(f"Account locked for {remaining} minutes")
+                    return f.read()
             else:
-                del self._lockout_until[username]
-                self._failed_attempts[username] = 0
+                # Generate new master key
+                key = Fernet.generate_key()
+                
+                # Write with proper permissions
+                with open(key_file, 'wb') as f:
+                    f.write(key)
+                
+                # Set restrictive permissions (Unix-like systems)
+                if hasattr(os, 'chmod'):
+                    os.chmod(key_file, 0o600)
+                
+                return key
+                
+        except IOError as e:
+            logger.error(f"Failed to handle master key file: {e}")
+            raise SecurityError("Failed to initialize encryption")
+    
+    def _create_cipher(self, key: bytes) -> Fernet:
+        """Create cipher instance with thread safety"""
+        return Fernet(key)
+    
+    def _retry_operation(self, operation, *args, **kwargs):
+        """Execute operation with retry logic"""
+        last_exception = None
         
+        for attempt in range(MAX_RETRY_ATTEMPTS):
+            try:
+                return operation(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < MAX_RETRY_ATTEMPTS - 1:
+                    time.sleep(RETRY_DELAY * (attempt + 1))  # Exponential backoff
+                    logger.warning(f"Retrying operation {operation.__name__} (attempt {attempt + 2})")
+                else:
+                    logger.error(f"Operation {operation.__name__} failed after {MAX_RETRY_ATTEMPTS} attempts")
+        
+        raise last_exception
+    
+    def authenticate_parent(self, username: str, password: str) -> Optional[str]:
+        """Authenticate parent with retry logic and lockout protection"""
+        with self._session_lock:
+            # Check lockout
+            if username in self._lockout_until:
+                lockout_time = self._lockout_until[username]
+                if datetime.now() < lockout_time:
+                    remaining = (lockout_time - datetime.now()).seconds
+                    logger.warning(f"Account {username} is locked out for {remaining} seconds")
+                    return None
+                else:
+                    # Clear lockout
+                    del self._lockout_until[username]
+                    if username in self._failed_attempts:
+                        del self._failed_attempts[username]
+        
+        # Perform authentication with retry
+        try:
+            result = self._retry_operation(self._do_authenticate, username, password)
+            
+            if result:
+                # Clear failed attempts on success
+                with self._session_lock:
+                    if username in self._failed_attempts:
+                        del self._failed_attempts[username]
+                
+                # Create session
+                token = self.create_session(result['user_id'], 'parent')
+                
+                # Log successful login
+                self._log_security_event(
+                    SecurityEvent.LOGIN_SUCCESS,
+                    user_id=result['user_id'],
+                    details={"username": username}
+                )
+                
+                return token
+            else:
+                # Track failed attempt
+                with self._session_lock:
+                    if username not in self._failed_attempts:
+                        self._failed_attempts[username] = 0
+                    self._failed_attempts[username] += 1
+                    
+                    # Check for lockout
+                    if self._failed_attempts[username] >= 5:
+                        self._lockout_until[username] = datetime.now() + timedelta(minutes=30)
+                        logger.warning(f"Account {username} locked out due to multiple failed attempts")
+                        
+                        self._log_security_event(
+                            SecurityEvent.LOCKOUT,
+                            details={"username": username, "attempts": self._failed_attempts[username]}
+                        )
+                
+                self._log_security_event(
+                    SecurityEvent.LOGIN_FAILURE,
+                    details={"username": username}
+                )
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"Authentication error: {e}")
+            return None
+    
+    def _do_authenticate(self, username: str, password: str) -> Optional[Dict]:
+        """Perform actual authentication check"""
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
-            
             cursor.execute("""
-                SELECT id, password_hash, salt, auth_level, is_active
-                FROM users WHERE username = ?
+                SELECT user_id, password_hash, salt, role 
+                FROM users 
+                WHERE username = ? AND is_active = 1
             """, (username,))
             
             user = cursor.fetchone()
             
-            if not user:
-                self._record_failed_login(username)
-                raise SecurityError("Invalid credentials")
-            
-            if not user['is_active']:
-                raise SecurityError("Account disabled")
-            
-            # Verify password
-            if not self._verify_password(password, user['salt'], user['password_hash']):
-                self._record_failed_login(username)
-                raise SecurityError("Invalid credentials")
-            
-            # Create session token
-            token = self.create_session(
-                user['id'],
-                AuthLevel(user['auth_level'])
-            )
-            
-            # Update last login
-            cursor.execute("""
-                UPDATE users 
-                SET last_login = ?, failed_attempts = 0
-                WHERE id = ?
-            """, (datetime.now().isoformat(), user['id']))
-            
-            conn.commit()
+            if user:
+                # Verify password
+                stored_hash = user['password_hash']
+                salt = user['salt']
+                
+                # Hash provided password with salt
+                kdf = PBKDF2(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=salt.encode(),
+                    iterations=100000,
+                    backend=default_backend()
+                )
+                
+                provided_hash = base64.b64encode(kdf.derive(password.encode())).decode()
+                
+                # Constant-time comparison
+                if secrets.compare_digest(stored_hash, provided_hash):
+                    # Update last login
+                    cursor.execute("""
+                        UPDATE users 
+                        SET last_login = ? 
+                        WHERE user_id = ?
+                    """, (datetime.now().isoformat(), user['user_id']))
+                    
+                    return dict(user)
         
-        # Reset failed attempts
-        self._failed_attempts[username] = 0
-        
-        self._log_security_event(
-            SecurityEvent.LOGIN_SUCCESS,
-            user_id=user['id'],
-            details={"username": username}
-        )
-        
-        return token
+        return None
     
-    def _validate_password(self, password: str) -> bool:
-        """Validate password requirements"""
-        if len(password) < self.MIN_PASSWORD_LENGTH:
-            return False
-        
-        # Must contain at least one of each
-        has_upper = any(c.isupper() for c in password)
-        has_lower = any(c.islower() for c in password)
-        has_digit = any(c.isdigit() for c in password)
-        has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', password))
-        
-        return has_upper and has_lower and has_digit and has_special
-    
-    def _hash_password(self, password: str, salt: str) -> str:
-        """Hash password with salt using PBKDF2"""
-        kdf = PBKDF2(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt.encode(),
-            iterations=self.KEY_ITERATIONS,
-            backend=default_backend()
-        )
-        
-        key = kdf.derive(password.encode())
-        return base64.b64encode(key).decode()
-    
-    def _verify_password(self, password: str, salt: str, hash: str) -> bool:
-        """Verify password against hash"""
-        try:
-            calculated_hash = self._hash_password(password, salt)
-            return hmac.compare_digest(calculated_hash, hash)
-        except Exception:
-            return False
-    
-    def _record_failed_login(self, username: str):
-        """Record failed login attempt"""
-        if username not in self._failed_attempts:
-            self._failed_attempts[username] = 0
-        
-        self._failed_attempts[username] += 1
-        
-        if self._failed_attempts[username] >= self.MAX_LOGIN_ATTEMPTS:
-            self._lockout_until[username] = datetime.now() + timedelta(minutes=self.LOCKOUT_DURATION_MINUTES)
-            
-            self._log_security_event(
-                SecurityEvent.SUSPICIOUS_ACTIVITY,
-                details={"username": username, "action": "account_locked"},
-                severity="warning"
-            )
-            
-            logger.warning(f"Account locked: {username}")
-        
-        self._log_security_event(
-            SecurityEvent.LOGIN_FAILED,
-            details={"username": username, "attempts": self._failed_attempts[username]}
-        )
-    
-    def create_session(self, user_id: str, auth_level: AuthLevel) -> str:
-        """Create new session token"""
+    def create_session(self, user_id: str, profile_type: str) -> str:
+        """Create a new session with thread safety"""
         token_id = secrets.token_urlsafe(32)
+        created_at = datetime.now()
+        expires_at = created_at + timedelta(seconds=SESSION_TIMEOUT)
         
-        token = SecurityToken(
+        session = SessionToken(
             token_id=token_id,
             user_id=user_id,
-            user_type=auth_level.name,
-            auth_level=auth_level.value,
-            created_at=datetime.now().isoformat(),
-            expires_at=(datetime.now() + timedelta(hours=self.TOKEN_EXPIRY_HOURS)).isoformat(),
-            ip_address=self._get_ip_address(),
-            device_id=self._get_device_id()
+            profile_type=profile_type,
+            created_at=created_at,
+            expires_at=expires_at,
+            last_activity=created_at
         )
         
-        # Store in memory
+        # Store in memory with thread safety
         with self._session_lock:
-            self._active_sessions[token_id] = token
+            self._active_sessions[token_id] = session
         
         # Store in database
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO sessions (
-                    token_id, user_id, created_at, expires_at,
-                    ip_address, device_id, is_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    token_id, user_id, created_at, expires_at, last_activity, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?)
             """, (
-                token_id, user_id, token.created_at, token.expires_at,
-                token.ip_address, token.device_id, 1
+                token_id,
+                user_id,
+                created_at.isoformat(),
+                expires_at.isoformat(),
+                created_at.isoformat(),
+                json.dumps({"profile_type": profile_type})
             ))
-            conn.commit()
-        
-        self._log_security_event(
-            SecurityEvent.SESSION_START,
-            user_id=user_id,
-            details={"token_id": token_id[:8] + "..."}
-        )
         
         return token_id
     
-    def validate_token(self, token_id: str) -> Optional[SecurityToken]:
-        """Validate session token"""
+    def validate_session(self, token_id: str) -> Optional[SessionToken]:
+        """Validate session with thread safety"""
         with self._session_lock:
-            # Check memory cache
+            # Check memory cache first
             if token_id in self._active_sessions:
-                token = self._active_sessions[token_id]
-                if token.is_valid():
-                    # Update last activity
-                    token.last_activity = datetime.now().isoformat()
-                    return token
-                else:
+                session = self._active_sessions[token_id]
+                
+                # Check expiration
+                if datetime.now() > session.expires_at:
                     del self._active_sessions[token_id]
+                    return None
+                
+                # Update last activity
+                session.last_activity = datetime.now()
+                
+                # Update database asynchronously
+                threading.Thread(
+                    target=self._update_session_activity,
+                    args=(token_id,),
+                    daemon=True
+                ).start()
+                
+                return session
         
-        # Check database
+        # Check database if not in memory
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -556,39 +405,84 @@ class SecurityManager:
             """, (token_id,))
             
             row = cursor.fetchone()
+            
             if row:
-                token = SecurityToken(
-                    token_id=row['token_id'],
-                    user_id=row['user_id'],
-                    user_type="",  # Would need to join with users table
-                    auth_level=0,  # Would need to join with users table
-                    created_at=row['created_at'],
-                    expires_at=row['expires_at'],
-                    ip_address=row['ip_address'],
-                    device_id=row['device_id'],
-                    last_activity=row['last_activity']
-                )
+                expires_at = datetime.fromisoformat(row['expires_at'])
                 
-                if token.is_valid():
-                    # Cache in memory
-                    with self._session_lock:
-                        self._active_sessions[token_id] = token
-                    
-                    # Update last activity
+                if datetime.now() > expires_at:
+                    # Session expired
                     cursor.execute("""
                         UPDATE sessions 
-                        SET last_activity = ?
+                        SET is_active = 0 
                         WHERE token_id = ?
-                    """, (datetime.now().isoformat(), token_id))
-                    conn.commit()
-                    
-                    return token
+                    """, (token_id,))
+                    return None
+                
+                # Recreate session object
+                session = SessionToken(
+                    token_id=row['token_id'],
+                    user_id=row['user_id'],
+                    profile_type=json.loads(row['metadata']).get('profile_type', 'child'),
+                    created_at=datetime.fromisoformat(row['created_at']),
+                    expires_at=expires_at,
+                    last_activity=datetime.now()
+                )
+                
+                # Cache in memory
+                with self._session_lock:
+                    self._active_sessions[token_id] = session
+                
+                return session
         
         return None
     
-    def revoke_token(self, token_id: str):
-        """Revoke session token"""
-        # Remove from memory
+    def _update_session_activity(self, token_id: str):
+        """Update session activity in database"""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE sessions 
+                    SET last_activity = ? 
+                    WHERE token_id = ?
+                """, (datetime.now().isoformat(), token_id))
+        except Exception as e:
+            logger.error(f"Failed to update session activity: {e}")
+    
+    def _session_cleanup_worker(self):
+        """Background worker to clean up expired sessions"""
+        while True:
+            try:
+                time.sleep(60)  # Check every minute
+                
+                expired_tokens = []
+                
+                with self._session_lock:
+                    for token_id, session in list(self._active_sessions.items()):
+                        if datetime.now() > session.expires_at:
+                            expired_tokens.append(token_id)
+                    
+                    # Remove expired sessions
+                    for token_id in expired_tokens:
+                        del self._active_sessions[token_id]
+                
+                # Update database
+                if expired_tokens:
+                    with self._get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.executemany("""
+                            UPDATE sessions 
+                            SET is_active = 0 
+                            WHERE token_id = ?
+                        """, [(t,) for t in expired_tokens])
+                    
+                    logger.info(f"Cleaned up {len(expired_tokens)} expired sessions")
+                    
+            except Exception as e:
+                logger.error(f"Session cleanup error: {e}")
+    
+    def revoke_session(self, token_id: str):
+        """Revoke a session with thread safety"""
         with self._session_lock:
             if token_id in self._active_sessions:
                 user_id = self._active_sessions[token_id].user_id
@@ -604,7 +498,6 @@ class SecurityManager:
                 SET is_active = 0 
                 WHERE token_id = ?
             """, (token_id,))
-            conn.commit()
         
         self._log_security_event(
             SecurityEvent.LOGOUT,
@@ -613,300 +506,202 @@ class SecurityManager:
         )
     
     def encrypt_data(self, data: str) -> str:
-        """Encrypt sensitive data"""
-        try:
-            encrypted = self._data_cipher.encrypt(data.encode())
-            return base64.b64encode(encrypted).decode()
-        except Exception as e:
-            logger.error(f"Encryption failed: {e}")
-            raise SecurityError("Encryption failed")
+        """Encrypt data with thread safety"""
+        with self._cipher_lock:
+            try:
+                encrypted = self._data_cipher.encrypt(data.encode())
+                return base64.b64encode(encrypted).decode()
+            except Exception as e:
+                logger.error(f"Encryption failed: {e}")
+                raise SecurityError("Encryption failed")
     
     def decrypt_data(self, encrypted: str) -> str:
-        """Decrypt sensitive data"""
-        try:
-            decoded = base64.b64decode(encrypted.encode())
-            decrypted = self._data_cipher.decrypt(decoded)
-            return decrypted.decode()
-        except Exception as e:
-            logger.error(f"Decryption failed: {e}")
-            raise SecurityError("Decryption failed")
+        """Decrypt data with thread safety"""
+        with self._cipher_lock:
+            try:
+                decoded = base64.b64decode(encrypted.encode())
+                decrypted = self._data_cipher.decrypt(decoded)
+                return decrypted.decode()
+            except Exception as e:
+                logger.error(f"Decryption failed: {e}")
+                raise SecurityError("Decryption failed")
     
     def encrypt_file(self, input_path: Path, output_path: Path):
-        """Encrypt a file"""
+        """Encrypt file with proper resource management"""
         try:
-            with open(input_path, 'rb') as f:
-                data = f.read()
+            with open(input_path, 'rb') as input_file:
+                data = input_file.read()
             
-            encrypted = self._data_cipher.encrypt(data)
+            with self._cipher_lock:
+                encrypted = self._data_cipher.encrypt(data)
             
-            with open(output_path, 'wb') as f:
-                f.write(encrypted)
+            with open(output_path, 'wb') as output_file:
+                output_file.write(encrypted)
             
             logger.info(f"File encrypted: {input_path} -> {output_path}")
             
-        except Exception as e:
+        except IOError as e:
             logger.error(f"File encryption failed: {e}")
             raise SecurityError("File encryption failed")
     
     def decrypt_file(self, input_path: Path, output_path: Path):
-        """Decrypt a file"""
+        """Decrypt file with proper resource management"""
         try:
-            with open(input_path, 'rb') as f:
-                encrypted = f.read()
+            with open(input_path, 'rb') as input_file:
+                encrypted = input_file.read()
             
-            decrypted = self._data_cipher.decrypt(encrypted)
+            with self._cipher_lock:
+                decrypted = self._data_cipher.decrypt(encrypted)
             
-            with open(output_path, 'wb') as f:
-                f.write(decrypted)
+            with open(output_path, 'wb') as output_file:
+                output_file.write(decrypted)
             
             logger.info(f"File decrypted: {input_path} -> {output_path}")
             
-        except Exception as e:
+        except IOError as e:
             logger.error(f"File decryption failed: {e}")
             raise SecurityError("File decryption failed")
     
-    def check_authorization(self, token_id: str, required_level: AuthLevel) -> bool:
-        """Check if token has required authorization level"""
-        token = self.validate_token(token_id)
-        if not token:
-            return False
-        
-        return token.auth_level >= required_level.value
-    
-    def change_password(self, user_id: str, old_password: str, new_password: str):
-        """Change user password"""
-        # Validate new password
-        if not self._validate_password(new_password):
-            raise SecurityError("New password does not meet requirements")
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Get current password
-            cursor.execute("""
-                SELECT password_hash, salt FROM users WHERE id = ?
-            """, (user_id,))
-            
-            user = cursor.fetchone()
-            if not user:
-                raise SecurityError("User not found")
-            
-            # Verify old password
-            if not self._verify_password(old_password, user['salt'], user['password_hash']):
-                raise SecurityError("Current password is incorrect")
-            
-            # Generate new salt and hash
-            new_salt = secrets.token_hex(self.SALT_LENGTH)
-            new_hash = self._hash_password(new_password, new_salt)
-            
-            # Update password
-            cursor.execute("""
-                UPDATE users 
-                SET password_hash = ?, salt = ?
-                WHERE id = ?
-            """, (new_hash, new_salt, user_id))
-            
-            conn.commit()
-        
-        self._log_security_event(
-            SecurityEvent.PASSWORD_CHANGE,
-            user_id=user_id,
-            details={"success": True}
-        )
-        
-        logger.info(f"Password changed for user: {user_id}")
-    
-    def _log_security_event(self, event: SecurityEvent, user_id: Optional[str] = None,
-                           details: Optional[Dict[str, Any]] = None, severity: str = "info"):
-        """Log security event"""
-        log_entry = AuditLog(
-            id=str(uuid.uuid4()),
-            timestamp=datetime.now().isoformat(),
-            event_type=event.value,
-            user_id=user_id,
-            ip_address=self._get_ip_address(),
-            details=details or {},
-            severity=severity,
-            success=event in [SecurityEvent.LOGIN_SUCCESS, SecurityEvent.LOGOUT, 
-                            SecurityEvent.SESSION_START, SecurityEvent.SESSION_END]
-        )
-        
-        # Store in memory
-        with self._audit_lock:
-            self._audit_logs.append(log_entry)
-            # Keep only last 1000 logs in memory
-            if len(self._audit_logs) > 1000:
-                self._audit_logs = self._audit_logs[-1000:]
-        
-        # Save to database
-        self._save_audit_log(log_entry)
-        
-        # Log to system logger
-        if severity == "critical":
-            logger.critical(f"Security event: {event.value} - {user_id}")
-        elif severity == "warning":
-            logger.warning(f"Security event: {event.value} - {user_id}")
-        else:
-            logger.info(f"Security event: {event.value} - {user_id}")
-    
-    def _save_audit_log(self, log_entry: AuditLog):
-        """Save audit log to database"""
+    def _log_security_event(self, event_type: SecurityEvent, user_id: Optional[str] = None, 
+                           details: Optional[Dict] = None):
+        """Log security event with proper error handling"""
         try:
+            event_id = secrets.token_hex(16)
+            
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO audit_logs (
-                        id, timestamp, event_type, user_id,
-                        ip_address, details, severity, success
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO security_events (
+                        event_id, event_type, user_id, timestamp, details, severity
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                 """, (
-                    log_entry.id,
-                    log_entry.timestamp,
-                    log_entry.event_type,
-                    log_entry.user_id,
-                    log_entry.ip_address,
-                    json.dumps(log_entry.details),
-                    log_entry.severity,
-                    int(log_entry.success)
+                    event_id,
+                    event_type.value,
+                    user_id,
+                    datetime.now().isoformat(),
+                    json.dumps(details) if details else None,
+                    self._get_event_severity(event_type)
                 ))
-                conn.commit()
+            
+            logger.info(f"Security event logged: {event_type.value}")
+            
         except Exception as e:
-            logger.error(f"Failed to save audit log: {e}")
+            logger.error(f"Failed to log security event: {e}")
     
-    def _get_ip_address(self) -> Optional[str]:
-        """Get client IP address"""
-        try:
-            import socket
-            hostname = socket.gethostname()
-            ip = socket.gethostbyname(hostname)
-            return ip
-        except:
-            return None
-    
-    def _get_device_id(self) -> str:
-        """Get device identifier"""
-        try:
-            import platform
-            return hashlib.sha256(
-                f"{platform.node()}{platform.machine()}".encode()
-            ).hexdigest()[:16]
-        except:
-            return "unknown"
-    
-    def get_audit_logs(self, user_id: Optional[str] = None, 
-                      event_type: Optional[SecurityEvent] = None,
-                      limit: int = 100) -> List[AuditLog]:
-        """Get audit logs"""
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            query = "SELECT * FROM audit_logs WHERE 1=1"
-            params = []
-            
-            if user_id:
-                query += " AND user_id = ?"
-                params.append(user_id)
-            
-            if event_type:
-                query += " AND event_type = ?"
-                params.append(event_type.value)
-            
-            query += " ORDER BY timestamp DESC LIMIT ?"
-            params.append(limit)
-            
-            cursor.execute(query, params)
-            
-            logs = []
-            for row in cursor.fetchall():
-                logs.append(AuditLog(
-                    id=row['id'],
-                    timestamp=row['timestamp'],
-                    event_type=row['event_type'],
-                    user_id=row['user_id'],
-                    ip_address=row['ip_address'],
-                    details=json.loads(row['details'] or '{}'),
-                    severity=row['severity'],
-                    success=bool(row['success'])
-                ))
-            
-            return logs
-    
-    def generate_security_report(self) -> Dict[str, Any]:
-        """Generate security status report"""
-        report = {
-            "timestamp": datetime.now().isoformat(),
-            "active_sessions": len(self._active_sessions),
-            "locked_accounts": len(self._lockout_until),
-            "failed_attempts_tracking": len(self._failed_attempts),
-            "encryption_status": "active" if self._data_cipher else "inactive",
-            "master_key_status": "loaded" if self._master_key else "missing"
+    def _get_event_severity(self, event_type: SecurityEvent) -> str:
+        """Get severity level for security event"""
+        severity_map = {
+            SecurityEvent.LOGIN_SUCCESS: "info",
+            SecurityEvent.LOGIN_FAILURE: "warning",
+            SecurityEvent.LOGOUT: "info",
+            SecurityEvent.PROFILE_ACCESS: "info",
+            SecurityEvent.PROFILE_DENIED: "warning",
+            SecurityEvent.ENCRYPTION: "info",
+            SecurityEvent.DECRYPTION: "info",
+            SecurityEvent.VIOLATION: "critical",
+            SecurityEvent.LOCKOUT: "critical"
         }
         
-        # Add statistics
+        return severity_map.get(event_type, "info")
+    
+    def get_security_status(self) -> Dict[str, Any]:
+        """Get current security status"""
+        with self._session_lock:
+            active_session_count = len(self._active_sessions)
+            locked_accounts = len(self._lockout_until)
+        
+        # Get recent security events
+        recent_events = []
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
-            
-            # Total users
-            cursor.execute("SELECT COUNT(*) FROM users")
-            report["total_users"] = cursor.fetchone()[0]
-            
-            # Active sessions in database
-            cursor.execute("SELECT COUNT(*) FROM sessions WHERE is_active = 1")
-            report["db_active_sessions"] = cursor.fetchone()[0]
-            
-            # Recent security events
             cursor.execute("""
-                SELECT event_type, COUNT(*) as count
-                FROM audit_logs
-                WHERE timestamp > ?
-                GROUP BY event_type
-            """, ((datetime.now() - timedelta(hours=24)).isoformat(),))
+                SELECT event_type, timestamp, severity 
+                FROM security_events 
+                ORDER BY timestamp DESC 
+                LIMIT 10
+            """)
             
-            events = {}
             for row in cursor.fetchall():
-                events[row[0]] = row[1]
-            
-            report["recent_events"] = events
+                recent_events.append({
+                    'type': row['event_type'],
+                    'time': row['timestamp'],
+                    'severity': row['severity']
+                })
         
-        return report
+        return {
+            'active_sessions': active_session_count,
+            'locked_accounts': locked_accounts,
+            'recent_events': recent_events,
+            'encryption_enabled': True,
+            'security_level': SecurityLevel.HIGH.value
+        }
     
-    def initialize(self) -> bool:
-        """Initialize security system"""
+    def create_parent_account(self, username: str, password: str) -> bool:
+        """Create a new parent account with proper security"""
         try:
-            # Verify master key
-            if not self._master_key:
-                logger.error("Master key not available")
-                return False
+            # Generate salt
+            salt = secrets.token_hex(16)
             
-            # Test encryption
-            test_data = "test_encryption"
-            encrypted = self.encrypt_data(test_data)
-            decrypted = self.decrypt_data(encrypted)
+            # Hash password with PBKDF2
+            kdf = PBKDF2(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt.encode(),
+                iterations=100000,
+                backend=default_backend()
+            )
             
-            if decrypted != test_data:
-                logger.error("Encryption test failed")
-                return False
+            password_hash = base64.b64encode(kdf.derive(password.encode())).decode()
             
-            logger.info("Security system initialized successfully")
+            # Generate user ID
+            user_id = secrets.token_hex(16)
+            
+            # Store in database
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO users (
+                        user_id, username, password_hash, salt, role, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    user_id,
+                    username,
+                    password_hash,
+                    salt,
+                    'parent',
+                    datetime.now().isoformat()
+                ))
+            
+            logger.info(f"Parent account created: {username}")
             return True
             
+        except sqlite3.IntegrityError:
+            logger.warning(f"Account already exists: {username}")
+            return False
         except Exception as e:
-            logger.error(f"Security initialization failed: {e}")
+            logger.error(f"Failed to create parent account: {e}")
             return False
     
-    def shutdown(self):
-        """Shutdown security manager"""
+    def cleanup(self):
+        """Cleanup resources on shutdown"""
+        logger.info("Security manager shutting down...")
+        
         # Clear active sessions
         with self._session_lock:
             self._active_sessions.clear()
         
-        # Final log
-        self._log_security_event(
-            SecurityEvent.LOGOUT,
-            details={"action": "system_shutdown"}
-        )
-        
-        logger.info("Security manager shutdown complete")
+        # Mark all sessions as inactive in database
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE sessions SET is_active = 0")
+        except Exception as e:
+            logger.error(f"Failed to cleanup sessions: {e}")
+
+
+class SecurityError(Exception):
+    """Custom exception for security-related errors"""
+    pass
 
 
 # Testing
@@ -914,48 +709,42 @@ if __name__ == "__main__":
     import tempfile
     
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create security manager
-        security = SecurityManager(Path(tmpdir))
+        # Initialize security manager
+        sm = SecurityManager(tmpdir)
         
-        # Initialize
-        if security.initialize():
-            print("✓ Security system initialized")
-        
-        # Create test user
-        try:
-            user_id = security.create_user(
-                "test_parent",
-                "SecureP@ssw0rd!",
-                AuthLevel.PARENT
-            )
-            print(f"✓ Created user: {user_id}")
-        except SecurityError as e:
-            print(f"✗ Failed to create user: {e}")
+        # Create parent account
+        print("Creating parent account...")
+        sm.create_parent_account("parent@family.com", "SecurePassword123!")
         
         # Test authentication
-        try:
-            token = security.authenticate("test_parent", "SecureP@ssw0rd!")
-            print(f"✓ Authentication successful: {token[:8]}...")
-        except SecurityError as e:
-            print(f"✗ Authentication failed: {e}")
+        print("Testing authentication...")
+        token = sm.authenticate_parent("parent@family.com", "SecurePassword123!")
         
-        # Test encryption
-        test_data = "Sensitive information"
-        encrypted = security.encrypt_data(test_data)
-        decrypted = security.decrypt_data(encrypted)
-        
-        if decrypted == test_data:
-            print("✓ Encryption/Decryption successful")
+        if token:
+            print(f"✓ Authentication successful: {token[:20]}...")
+            
+            # Validate session
+            session = sm.validate_session(token)
+            if session:
+                print(f"✓ Session valid for user: {session.user_id}")
+            
+            # Test encryption
+            test_data = "Sensitive family information"
+            encrypted = sm.encrypt_data(test_data)
+            decrypted = sm.decrypt_data(encrypted)
+            
+            print(f"✓ Encryption test: {test_data == decrypted}")
+            
+            # Get security status
+            status = sm.get_security_status()
+            print(f"✓ Security status: {status}")
+            
+            # Revoke session
+            sm.revoke_session(token)
+            print("✓ Session revoked")
         else:
-            print("✗ Encryption/Decryption failed")
+            print("✗ Authentication failed")
         
-        # Generate report
-        report = security.generate_security_report()
-        print(f"\nSecurity Report:")
-        print(f"  Active sessions: {report['active_sessions']}")
-        print(f"  Total users: {report['total_users']}")
-        print(f"  Encryption: {report['encryption_status']}")
-        
-        # Shutdown
-        security.shutdown()
-        print("✓ Security system shutdown")
+        # Cleanup
+        sm.cleanup()
+        print("✓ Security manager cleaned up")
