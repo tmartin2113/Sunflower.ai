@@ -16,14 +16,13 @@ import threading
 from dataclasses import dataclass, asdict
 from enum import Enum
 
+# Import standardized path configuration
+from config.path_config import get_usb_path, ensure_paths_available
+
 # Configure production logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/sunflower_usb/logs/pipeline.log', mode='a'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -60,16 +59,37 @@ class PipelineContext:
 class PipelineOrchestrator:
     """Central orchestrator for all pipeline operations"""
     
-    def __init__(self, usb_path: str = "/sunflower_usb"):
+    def __init__(self):
         """Initialize pipeline orchestrator with partitioned device paths"""
-        self.usb_path = Path(usb_path)
+        # Ensure paths are available
+        if not ensure_paths_available():
+            raise RuntimeError(
+                "Unable to access Sunflower AI partitions. Please ensure the device "
+                "is properly connected and both partitions are mounted."
+            )
+        
+        # Get USB path dynamically
+        self.usb_path = get_usb_path()
+        if not self.usb_path:
+            raise RuntimeError("USB partition not detected")
+        
+        # Set up logging to USB partition
+        log_dir = get_usb_path('logs')
+        if log_dir:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / 'pipeline.log'
+            
+            # Add file handler to logger
+            file_handler = logging.FileHandler(log_file, mode='a')
+            file_handler.setFormatter(
+                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            )
+            logger.addHandler(file_handler)
+        
         self.pipelines = {}
         self.active_sessions = {}
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=4)
-        
-        # Verify USB partition is mounted and writable
-        self._verify_usb_partition()
         
         # Initialize pipeline components
         self._initialize_pipelines()
@@ -78,37 +98,6 @@ class PipelineOrchestrator:
         self.config = self._load_configuration()
         
         logger.info("Pipeline orchestrator initialized successfully")
-    
-    def _verify_usb_partition(self) -> None:
-        """Verify USB partition is accessible and create necessary directories"""
-        try:
-            if not self.usb_path.exists():
-                raise RuntimeError(f"USB partition not found at {self.usb_path}")
-            
-            # Create required directories
-            directories = [
-                self.usb_path / "profiles",
-                self.usb_path / "conversations",
-                self.usb_path / "progress",
-                self.usb_path / "logs",
-                self.usb_path / "achievements",
-                self.usb_path / "parent_dashboard"
-            ]
-            
-            for directory in directories:
-                directory.mkdir(parents=True, exist_ok=True)
-                
-            # Test write permissions
-            test_file = self.usb_path / ".write_test"
-            test_file.write_text("test")
-            test_file.unlink()
-            
-        except Exception as e:
-            logger.critical(f"USB partition verification failed: {e}")
-            raise RuntimeError(
-                "Unable to access the USB storage. Please ensure the Sunflower device "
-                "is properly connected and try again."
-            )
     
     def _initialize_pipelines(self) -> None:
         """Initialize all pipeline components"""
@@ -141,7 +130,7 @@ class PipelineOrchestrator:
     
     def _load_configuration(self) -> Dict[str, Any]:
         """Load pipeline configuration from USB partition"""
-        config_path = self.usb_path / "config" / "pipeline_config.json"
+        config_path = get_usb_path('config') / "pipeline_config.json"
         
         default_config = {
             "safety_level": "maximum",
@@ -160,7 +149,7 @@ class PipelineOrchestrator:
         }
         
         try:
-            if config_path.exists():
+            if config_path and config_path.exists():
                 with open(config_path, 'r') as f:
                     loaded_config = json.load(f)
                     default_config.update(loaded_config)
@@ -195,87 +184,86 @@ class PipelineOrchestrator:
                     
                     if not is_safe:
                         self.active_sessions[context.session_id] = PipelineStatus.SAFETY_BLOCKED
-                        return self._generate_safety_response(context), pipeline_results
-                
+                        return context.model_response, pipeline_results
                 else:
                     # Process through pipeline
-                    result = pipeline.process(context)
-                    
-                    if isinstance(result, tuple):
-                        context, pipeline_data = result
-                        pipeline_results[pipeline_name] = pipeline_data
-                    else:
-                        context = result
-                        pipeline_results[pipeline_name] = {"processed": True}
+                    context = pipeline.process(context)
+                    pipeline_results[pipeline_name] = {"processed": True}
             
-            # Mark session as completed
-            self.active_sessions[context.session_id] = PipelineStatus.COMPLETED
+            # Update session status
+            with self.lock:
+                self.active_sessions[context.session_id] = PipelineStatus.COMPLETED
             
-            # Return final response and metadata
-            return context.model_response or "Processing completed", pipeline_results
+            return context.model_response, pipeline_results
             
         except Exception as e:
             logger.error(f"Pipeline processing error: {e}")
-            self.active_sessions[context.session_id] = PipelineStatus.ERROR
-            
-            return (
-                "I encountered an issue processing your request. Let's try again with a different question!",
-                {"error": str(e)}
-            )
+            with self.lock:
+                self.active_sessions[context.session_id] = PipelineStatus.ERROR
+            raise
     
-    def _generate_safety_response(self, context: PipelineContext) -> str:
-        """Generate age-appropriate safety response when content is blocked"""
-        age = context.child_age
+    def get_session_status(self, session_id: str) -> Optional[PipelineStatus]:
+        """Get current status of a session"""
+        with self.lock:
+            return self.active_sessions.get(session_id)
+    
+    def cleanup_session(self, session_id: str):
+        """Clean up session data"""
+        with self.lock:
+            if session_id in self.active_sessions:
+                del self.active_sessions[session_id]
+    
+    def get_pipeline_stats(self) -> Dict[str, Any]:
+        """Get statistics for all pipelines"""
+        stats = {
+            'active_sessions': len(self.active_sessions),
+            'pipelines_loaded': len(self.pipelines),
+            'pipeline_names': list(self.pipelines.keys()),
+            'config': self.config
+        }
         
-        if age < 8:
-            return "That's an interesting question! Let's explore something fun about science instead. What would you like to learn about animals, space, or how things work?"
-        elif age < 12:
-            return "That topic isn't available in our STEM learning system. How about we explore something exciting like robotics, chemistry experiments, or coding instead?"
-        else:
-            return "That content falls outside our STEM education focus. I can help you with science, technology, engineering, or mathematics topics. What subject interests you most?"
+        # Get stats from each pipeline
+        for name, pipeline in self.pipelines.items():
+            if hasattr(pipeline, 'get_stats'):
+                stats[f'{name}_stats'] = pipeline.get_stats()
+        
+        return stats
     
-    def get_pipeline_status(self, session_id: str) -> PipelineStatus:
-        """Get current status of a pipeline session"""
-        return self.active_sessions.get(session_id, PipelineStatus.IDLE)
-    
-    def shutdown(self) -> None:
-        """Gracefully shutdown pipeline orchestrator"""
-        try:
-            # Wait for active sessions to complete
-            active_count = sum(1 for s in self.active_sessions.values() 
-                             if s == PipelineStatus.PROCESSING)
-            
-            if active_count > 0:
-                logger.info(f"Waiting for {active_count} active sessions to complete")
-            
-            # Shutdown executor
-            self.executor.shutdown(wait=True, timeout=10)
-            
-            # Close all pipelines
-            for name, pipeline in self.pipelines.items():
-                if hasattr(pipeline, 'close'):
-                    pipeline.close()
-            
-            logger.info("Pipeline orchestrator shutdown complete")
-            
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+    def shutdown(self):
+        """Gracefully shutdown the orchestrator"""
+        logger.info("Shutting down pipeline orchestrator")
+        
+        # Clean up all sessions
+        with self.lock:
+            self.active_sessions.clear()
+        
+        # Shutdown executor
+        self.executor.shutdown(wait=True)
+        
+        # Clean up pipelines
+        for pipeline in self.pipelines.values():
+            if hasattr(pipeline, 'shutdown'):
+                pipeline.shutdown()
+        
+        logger.info("Pipeline orchestrator shutdown complete")
 
-# Export main components
-__all__ = [
-    'PipelineOrchestrator',
-    'PipelineContext', 
-    'PipelineStatus'
-]
 
-# Initialize global orchestrator instance
+# Global orchestrator instance
 _orchestrator_instance = None
 
-def get_orchestrator(usb_path: str = "/sunflower_usb") -> PipelineOrchestrator:
-    """Get or create global orchestrator instance"""
+def get_orchestrator() -> PipelineOrchestrator:
+    """Get or create the global orchestrator instance"""
     global _orchestrator_instance
     
     if _orchestrator_instance is None:
-        _orchestrator_instance = PipelineOrchestrator(usb_path)
+        _orchestrator_instance = PipelineOrchestrator()
     
     return _orchestrator_instance
+
+def shutdown_orchestrator():
+    """Shutdown the global orchestrator"""
+    global _orchestrator_instance
+    
+    if _orchestrator_instance:
+        _orchestrator_instance.shutdown()
+        _orchestrator_instance = None
