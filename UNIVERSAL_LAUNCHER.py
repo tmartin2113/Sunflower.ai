@@ -15,12 +15,17 @@ from pathlib import Path
 import webbrowser
 import json
 import time
-import subprocess
 import threading
 import socket
 import logging
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
+
+# Add config directory to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+# Import standardized path configuration
+from config.path_config import get_path_config, ensure_paths_available, get_usb_path, get_cdrom_path
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +41,24 @@ class SunflowerLauncher:
     def __init__(self):
         self.system = platform.system()
         self.root_dir = Path(__file__).parent.resolve()
-        self.data_dir = None
+        
+        # Initialize path configuration
+        self.path_config = get_path_config()
+        
+        # Verify partitions are available
+        if not ensure_paths_available():
+            self._show_partition_error()
+            sys.exit(1)
+        
+        # Get partition paths
+        self.cdrom_path = self.path_config.cdrom_path
+        self.usb_path = self.path_config.usb_path
+        self.data_dir = get_usb_path('profiles')
+        
+        # Ensure data directory exists
+        if self.data_dir:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        
         self.setup_complete = False
         self.ollama_process = None
         self.webui_process = None
@@ -48,8 +70,8 @@ class SunflowerLauncher:
         self.root.resizable(False, False)
         
         # Set icon if available
-        icon_path = self.root_dir / "resources" / "sunflower.ico"
-        if icon_path.exists():
+        icon_path = get_cdrom_path('resources') / "sunflower.ico"
+        if icon_path and icon_path.exists():
             if self.system == "Windows":
                 self.root.iconbitmap(str(icon_path))
             elif self.system == "Darwin":
@@ -72,6 +94,24 @@ class SunflowerLauncher:
         
         # Bind cleanup on close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def _show_partition_error(self):
+        """Show error dialog when partitions are not detected"""
+        error_msg = (
+            "Sunflower AI partitions not detected!\n\n"
+            "Please ensure:\n"
+            "1. The Sunflower USB device is properly connected\n"
+            "2. Both partitions (CD-ROM and USB) are mounted\n"
+            "3. You have the necessary permissions\n\n"
+            f"Looking for:\n"
+            f"- CD-ROM marker: {self.path_config.CDROM_MARKER_FILE}\n"
+            f"- USB marker: {self.path_config.USB_MARKER_FILE}"
+        )
+        
+        if self.system == "Windows":
+            error_msg += "\n\nOn Windows, try running as Administrator."
+        
+        messagebox.showerror("Partition Detection Failed", error_msg)
     
     def setup_styles(self):
         """Configure modern UI styling"""
@@ -168,10 +208,9 @@ class SunflowerLauncher:
         self.status_frame = tk.Frame(self.content_frame, bg=self.colors['bg'])
         self.status_frame.pack(fill=tk.X, pady=10)
         
-        # Status label
         self.status_label = tk.Label(
             self.status_frame,
-            text="Initializing system...",
+            text="🔄 Initializing system...",
             font=('Segoe UI', 11),
             bg=self.colors['bg'],
             fg=self.colors['text']
@@ -180,252 +219,179 @@ class SunflowerLauncher:
         
         # Progress bar
         self.progress = ttk.Progressbar(
-            self.status_frame,
+            self.content_frame,
             style='Custom.Horizontal.TProgressbar',
             mode='indeterminate',
             length=400
         )
-        self.progress.pack(pady=10)
+        self.progress.pack(pady=20)
         self.progress.start(10)
         
         # Info frame (hidden initially)
         self.info_frame = tk.Frame(self.content_frame, bg=self.colors['bg'])
         
-        # Buttons frame (hidden initially)
+        # Button frame (hidden initially)
         self.button_frame = tk.Frame(self.content_frame, bg=self.colors['bg'])
         
-        # Footer frame
-        footer_frame = tk.Frame(self.root, bg=self.colors['border'], height=50)
-        footer_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        footer_frame.pack_propagate(False)
+        # Path info at bottom
+        path_info_frame = tk.Frame(self.root, bg=self.colors['bg'])
+        path_info_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=10)
         
-        # Footer text
-        footer_label = tk.Label(
-            footer_frame,
-            text=f"Version 6.2.0 | {self.system} | © 2025 Sunflower AI",
+        path_label = tk.Label(
+            path_info_frame,
+            text=f"CD-ROM: {self.cdrom_path} | USB: {self.usb_path}",
             font=('Segoe UI', 9),
-            bg=self.colors['border'],
+            bg=self.colors['bg'],
             fg=self.colors['text_light']
         )
-        footer_label.pack(pady=15)
+        path_label.pack()
+    
+    def update_status(self, message: str, color: str = None):
+        """Update status message"""
+        self.status_label.config(text=message)
+        if color:
+            self.status_label.config(fg=self.colors.get(color, self.colors['text']))
     
     def initialize_system(self):
-        """Initialize the system in background"""
+        """Initialize the Sunflower AI system"""
         try:
-            # Step 1: Detect partitions
-            self.update_status("Detecting device partitions...")
-            self.detect_partitions()
+            # Step 1: Verify paths
+            self.update_status("✅ Partitions detected")
+            time.sleep(0.5)
             
-            # Step 2: Check Python
-            self.update_status("Checking Python installation...")
-            if not self.check_python():
-                self.show_error("Python 3.8+ required", "Please install Python from python.org")
-                return
+            # Step 2: Check for Ollama
+            self.update_status("🔍 Checking for Ollama...")
+            ollama_path = self.find_ollama()
             
-            # Step 3: Check/Install dependencies
-            self.update_status("Checking dependencies...")
-            self.check_dependencies()
+            if not ollama_path:
+                self.update_status("⚠️ Ollama not found - downloading required", 'warning')
+                self.setup_required = True
+            else:
+                self.update_status("✅ Ollama found")
             
-            # Step 4: Check Ollama
-            self.update_status("Checking Ollama installation...")
-            if not self.check_ollama():
-                self.update_status("Installing Ollama...")
-                self.install_ollama()
+            # Step 3: Check for models
+            self.update_status("🔍 Checking AI models...")
+            models_available = self.check_models()
             
-            # Step 5: Check models
-            self.update_status("Checking AI models...")
-            self.check_models()
+            if not models_available:
+                self.update_status("⚠️ Models need to be downloaded", 'warning')
+                self.setup_required = True
+            else:
+                self.update_status("✅ Models available")
             
-            # Step 6: Initialize configuration
-            self.update_status("Loading configuration...")
-            self.load_configuration()
+            # Step 4: Load configuration
+            self.update_status("📋 Loading configuration...")
+            self.config = self.load_config()
+            self.update_status("✅ Configuration loaded")
             
-            # Mark setup complete
+            # Step 5: Check profiles
+            self.update_status("👨‍👩‍👧‍👦 Checking family profiles...")
+            profiles_exist = self.check_profiles()
+            
+            if not profiles_exist:
+                self.update_status("ℹ️ No profiles found - setup required", 'info')
+                self.first_run = True
+            else:
+                self.update_status("✅ Profiles found")
+                self.first_run = False
+            
+            # Complete initialization
             self.setup_complete = True
-            
-            # Show ready UI
             self.root.after(0, self.show_ready_ui)
             
         except Exception as e:
-            logger.error(f"Initialization failed: {e}")
-            self.root.after(0, lambda: self.show_error("Initialization Failed", str(e)))
+            logger.error(f"Initialization error: {e}")
+            self.update_status(f"❌ Error: {str(e)}", 'warning')
+            self.root.after(0, lambda: messagebox.showerror("Initialization Error", str(e)))
     
-    def detect_partitions(self):
-        """Detect CD-ROM and USB partitions"""
-        if self.system == "Windows":
-            import string
-            
-            # Find CD-ROM partition
-            for drive in string.ascii_uppercase:
-                drive_path = Path(f"{drive}:\\")
-                if (drive_path / "sunflower_cd.id").exists():
-                    self.cdrom_path = drive_path
-                    logger.info(f"Found CD-ROM partition: {drive_path}")
-                    break
-            
-            # Find USB partition
-            for drive in string.ascii_uppercase:
-                drive_path = Path(f"{drive}:\\")
-                if (drive_path / "sunflower_data.id").exists():
-                    self.usb_path = drive_path
-                    self.data_dir = drive_path / "sunflower_data"
-                    logger.info(f"Found USB partition: {drive_path}")
-                    break
-                    
-        elif self.system == "Darwin":  # macOS
-            volumes = Path("/Volumes")
-            
-            # Find CD-ROM partition
-            for volume in volumes.iterdir():
-                if (volume / "sunflower_cd.id").exists():
-                    self.cdrom_path = volume
-                    logger.info(f"Found CD-ROM partition: {volume}")
-                    break
-            
-            # Find USB partition
-            for volume in volumes.iterdir():
-                if (volume / "sunflower_data.id").exists():
-                    self.usb_path = volume
-                    self.data_dir = volume / "sunflower_data"
-                    logger.info(f"Found USB partition: {volume}")
-                    break
+    def find_ollama(self) -> Optional[Path]:
+        """Find Ollama executable"""
+        # Check CD-ROM partition
+        ollama_dir = get_cdrom_path('ollama')
         
-        # Fallback to local directory
-        if not self.data_dir:
-            self.data_dir = self.root_dir / "data"
-            logger.warning("Using local data directory")
+        if ollama_dir:
+            if self.system == "Windows":
+                ollama_exe = ollama_dir / "ollama.exe"
+            else:
+                ollama_exe = ollama_dir / "ollama"
+            
+            if ollama_exe.exists():
+                return ollama_exe
         
-        # Create data directory structure
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        (self.data_dir / "profiles").mkdir(exist_ok=True)
-        (self.data_dir / "logs").mkdir(exist_ok=True)
-        (self.data_dir / "ollama" / "models").mkdir(parents=True, exist_ok=True)
-        (self.data_dir / "openwebui" / "data").mkdir(parents=True, exist_ok=True)
-    
-    def check_python(self) -> bool:
-        """Check Python version"""
-        version = sys.version_info
-        return version.major >= 3 and version.minor >= 8
-    
-    def check_dependencies(self):
-        """Check and install required Python packages"""
-        required_packages = [
-            'open-webui',
-            'requests',
-            'psutil',
-            'cryptography'
-        ]
+        # Check system PATH
+        ollama_cmd = "ollama.exe" if self.system == "Windows" else "ollama"
         
-        for package in required_packages:
-            try:
-                __import__(package.replace('-', '_'))
-                logger.info(f"Package {package} is installed")
-            except ImportError:
-                logger.info(f"Installing {package}...")
-                self.update_status(f"Installing {package}...")
-                subprocess.run(
-                    [sys.executable, '-m', 'pip', 'install', package, '--quiet'],
-                    check=False,
-                    capture_output=True
-                )
-    
-    def check_ollama(self) -> bool:
-        """Check if Ollama is installed"""
         try:
             result = subprocess.run(
-                ['ollama', '--version'],
+                [ollama_cmd, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-    
-    def install_ollama(self):
-        """Install Ollama based on platform"""
-        if self.system == "Windows":
-            # Download and install Ollama for Windows
-            installer_url = "https://ollama.ai/download/OllamaSetup.exe"
-            installer_path = Path.home() / "Downloads" / "OllamaSetup.exe"
-            
-            # Download installer
-            import urllib.request
-            urllib.request.urlretrieve(installer_url, installer_path)
-            
-            # Run installer
-            subprocess.run([str(installer_path), '/S'], check=False)
-            
-        elif self.system == "Darwin":
-            # Install Ollama for macOS
-            subprocess.run(['brew', 'install', 'ollama'], check=False)
+            if result.returncode == 0:
+                return Path(ollama_cmd)
+        except:
+            pass
         
-        elif self.system == "Linux":
-            # Install Ollama for Linux
-            subprocess.run(
-                ['curl', '-fsSL', 'https://ollama.ai/install.sh', '|', 'sh'],
-                shell=True,
-                check=False
-            )
+        return None
     
-    def check_models(self):
-        """Check and pull required models"""
-        try:
-            # Start Ollama service
-            self.start_ollama_service()
-            time.sleep(3)  # Wait for service to start
-            
-            # Check for models
-            result = subprocess.run(
-                ['ollama', 'list'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if 'llama3.2:3b' not in result.stdout:
-                self.update_status("Downloading AI model (this may take a while)...")
-                subprocess.run(['ollama', 'pull', 'llama3.2:3b'], check=False)
-                
-        except Exception as e:
-            logger.error(f"Model check failed: {e}")
+    def check_models(self) -> bool:
+        """Check if required models are available"""
+        models_dir = get_cdrom_path('models')
+        
+        if models_dir and models_dir.exists():
+            # Check for any .gguf files
+            gguf_files = list(models_dir.glob("*.gguf"))
+            return len(gguf_files) > 0
+        
+        return False
     
-    def start_ollama_service(self):
-        """Start Ollama service in background"""
-        if not self.ollama_process:
-            self.ollama_process = subprocess.Popen(
-                ['ollama', 'serve'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            logger.info("Ollama service started")
+    def check_profiles(self) -> bool:
+        """Check if family profiles exist"""
+        profiles_dir = get_usb_path('profiles')
+        
+        if profiles_dir and profiles_dir.exists():
+            # Check for family configuration
+            family_config = profiles_dir / "family.json"
+            return family_config.exists()
+        
+        return False
     
-    def load_configuration(self):
+    def load_config(self) -> Dict:
         """Load system configuration"""
-        config_file = self.data_dir / "config" / "system.json"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_path = get_usb_path('config') / "system_config.json"
         
-        if config_file.exists():
-            with open(config_file, 'r') as f:
-                self.config = json.load(f)
-        else:
-            # Create default configuration
-            self.config = {
-                'version': '6.2.0',
-                'first_run': True,
-                'theme': 'light',
-                'safety_level': 'high',
-                'default_model': 'llama3.2:3b',
-                'webui_port': 8080,
-                'ollama_port': 11434
-            }
-            
-            with open(config_file, 'w') as f:
-                json.dump(self.config, f, indent=2)
+        default_config = {
+            'first_run': True,
+            'safety_level': 'maximum',
+            'ollama_port': 11434,
+            'webui_port': 8080,
+            'default_model': 'llama3.2:3b',
+            'theme': 'light'
+        }
+        
+        if config_path and config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    loaded_config = json.load(f)
+                    default_config.update(loaded_config)
+            except Exception as e:
+                logger.warning(f"Failed to load config: {e}")
+        
+        return default_config
     
-    def update_status(self, message: str):
-        """Update status label in UI thread"""
-        self.root.after(0, lambda: self.status_label.config(text=message))
+    def save_config(self):
+        """Save system configuration"""
+        config_dir = get_usb_path('config')
+        if config_dir:
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "system_config.json"
+            
+            try:
+                with open(config_path, 'w') as f:
+                    json.dump(self.config, f, indent=2)
+            except Exception as e:
+                logger.error(f"Failed to save config: {e}")
     
     def show_ready_ui(self):
         """Show the ready UI with action buttons"""
@@ -446,7 +412,8 @@ class SunflowerLauncher:
         info_text = f"""
 System Information:
 • Platform: {self.system}
-• Data Directory: {self.data_dir}
+• CD-ROM Path: {self.cdrom_path}
+• USB Path: {self.usb_path}
 • Model: {self.config['default_model']}
 • Safety Level: {self.config['safety_level'].upper()}
 • Web UI Port: {self.config['webui_port']}
@@ -493,167 +460,73 @@ System Information:
     
     def launch_application(self):
         """Launch the main application"""
-        self.update_status("Starting Open WebUI...")
+        self.update_status("Starting Sunflower AI...")
         
-        # Start Web UI in background
-        def start_webui():
+        # Launch the appropriate interface based on configuration
+        launcher_script = get_cdrom_path('launchers') / 'launcher_common.py'
+        
+        if launcher_script and launcher_script.exists():
             try:
-                # Set environment variables
-                os.environ['DATA_DIR'] = str(self.data_dir)
-                os.environ['OLLAMA_HOST'] = f"localhost:{self.config['ollama_port']}"
-                os.environ['WEBUI_SECRET_KEY'] = 'sunflower-secret-key-2025'
-                os.environ['WEBUI_AUTH'] = 'True'
-                os.environ['DEFAULT_MODELS'] = self.config['default_model']
-                
-                # Start Open WebUI
-                self.webui_process = subprocess.Popen(
-                    [sys.executable, '-m', 'open_webui', 'serve', 
-                     '--port', str(self.config['webui_port'])],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                subprocess.Popen(
+                    [sys.executable, str(launcher_script),
+                     '--cdrom-path', str(self.cdrom_path),
+                     '--usb-path', str(self.usb_path)],
+                    cwd=str(self.cdrom_path)
                 )
-                
-                # Wait for startup
-                time.sleep(5)
-                
-                # Check if port is open
-                for _ in range(30):
-                    if self.is_port_open('localhost', self.config['webui_port']):
-                        # Open browser
-                        self.root.after(0, lambda: webbrowser.open(
-                            f"http://localhost:{self.config['webui_port']}"
-                        ))
-                        self.root.after(0, lambda: self.update_status("✅ Sunflower AI is running"))
-                        break
-                    time.sleep(1)
-                    
+                time.sleep(2)
+                self.root.destroy()
             except Exception as e:
-                logger.error(f"Failed to start Web UI: {e}")
-                self.root.after(0, lambda: self.show_error("Launch Failed", str(e)))
-        
-        # Start in thread
-        thread = threading.Thread(target=start_webui, daemon=True)
-        thread.start()
-    
-    def is_port_open(self, host: str, port: int) -> bool:
-        """Check if a port is open"""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return result == 0
+                messagebox.showerror("Launch Error", f"Failed to launch application: {e}")
+        else:
+            # Fallback to web interface
+            webbrowser.open(f"http://localhost:{self.config['webui_port']}")
     
     def open_settings(self):
-        """Open settings window"""
+        """Open settings dialog"""
         settings_window = tk.Toplevel(self.root)
         settings_window.title("Settings")
-        settings_window.geometry("500x400")
-        settings_window.configure(bg=self.colors['bg'])
+        settings_window.geometry("400x300")
         
-        # Settings content
-        settings_label = tk.Label(
+        # Add settings UI here
+        label = tk.Label(
             settings_window,
-            text="⚙️ Settings",
-            font=('Segoe UI', 16, 'bold'),
-            bg=self.colors['bg'],
-            fg=self.colors['text']
+            text="Settings coming soon!",
+            font=('Segoe UI', 12)
         )
-        settings_label.pack(pady=20)
-        
-        # Add settings options here
-        settings_text = """
-Safety Level: [High ▼]
-Default Model: [llama3.2:3b ▼]
-Theme: [Light ▼]
-Auto-Start: [✓]
-        """
-        
-        settings_content = tk.Label(
-            settings_window,
-            text=settings_text,
-            font=('Segoe UI', 11),
-            bg=self.colors['bg'],
-            fg=self.colors['text']
-        )
-        settings_content.pack(pady=20)
-        
-        # Close button
-        close_btn = ttk.Button(
-            settings_window,
-            text="Close",
-            command=settings_window.destroy
-        )
-        close_btn.pack(pady=20)
+        label.pack(pady=50)
     
     def open_documentation(self):
         """Open documentation"""
-        docs_path = self.root_dir / "docs" / "index.html"
-        if docs_path.exists():
+        docs_path = get_cdrom_path('documentation') / 'user_manual.html'
+        
+        if docs_path and docs_path.exists():
             webbrowser.open(f"file://{docs_path}")
         else:
-            webbrowser.open("https://sunflowerai.com/docs")
-    
-    def show_error(self, title: str, message: str):
-        """Show error dialog"""
-        messagebox.showerror(title, message)
-        self.status_label.config(
-            text=f"❌ {title}",
-            fg=self.colors['warning']
-        )
-        self.progress.stop()
-        self.progress.pack_forget()
+            messagebox.showinfo("Documentation", "Documentation will be available in the docs folder.")
     
     def on_closing(self):
         """Handle window closing"""
-        # Stop services
         if self.ollama_process:
             self.ollama_process.terminate()
-            logger.info("Stopped Ollama service")
-        
         if self.webui_process:
             self.webui_process.terminate()
-            logger.info("Stopped Web UI")
         
-        # Save configuration
-        if hasattr(self, 'config') and self.data_dir:
-            config_file = self.data_dir / "config" / "system.json"
-            with open(config_file, 'w') as f:
-                json.dump(self.config, f, indent=2)
-        
-        # Destroy window
+        self.save_config()
         self.root.destroy()
     
     def run(self):
         """Run the launcher"""
-        # Center window on screen
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Start main loop
         self.root.mainloop()
 
 
 def main():
     """Main entry point"""
     try:
-        # Create and run launcher
         launcher = SunflowerLauncher()
         launcher.run()
-        
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        
-        # Show error dialog
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            "Sunflower AI Launch Error",
-            f"Failed to start Sunflower AI:\n\n{e}\n\nPlease check the logs for details."
-        )
+        messagebox.showerror("Fatal Error", str(e))
         sys.exit(1)
 
 
