@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Partitioned Device Creation Tool
-Creates dual-partition devices with CD-ROM (read-only) and USB (writeable) sections
-Version: 6.2 | Platform: Windows/macOS | Architecture: Partitioned Device
+Sunflower AI Professional System - USB Device Creation
+Creates the dual-partition USB device for Sunflower AI distribution
+Version: 6.2.0 - Production Ready
 """
 
 import os
@@ -13,286 +13,136 @@ import shutil
 import hashlib
 import platform
 import subprocess
-import tempfile
-import threading
-import logging
+import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, asdict
-from enum import Enum
-import secrets
-import struct
+from typing import Dict, List, Optional, Tuple
+import logging
 
-# Configure production logging
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import standardized path configuration
+from config.path_config import PathConfiguration
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('device_creation.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger('SunflowerDeviceCreator')
+logger = logging.getLogger(__name__)
 
 
-class PartitionType(Enum):
-    """Partition types for device creation"""
-    CDROM = "cdrom"
-    USB = "usb"
-    HYBRID = "hybrid"
-
-
-class DeviceStatus(Enum):
-    """Device creation status codes"""
-    NOT_STARTED = "not_started"
-    PREPARING = "preparing"
-    CREATING_PARTITIONS = "creating_partitions"
-    COPYING_SYSTEM = "copying_system"
-    CONFIGURING = "configuring"
-    VERIFYING = "verifying"
-    COMPLETE = "complete"
-    ERROR = "error"
-
-
-@dataclass
-class DeviceConfiguration:
-    """Configuration for partitioned device creation"""
-    device_path: str
-    cdrom_size_mb: int = 4096  # 4GB CD-ROM partition
-    usb_size_mb: int = 1024     # 1GB USB partition
-    volume_label: str = "SUNFLOWER_AI"
-    device_id: str = ""
-    creation_date: str = ""
-    platform_type: str = ""
-    model_variants: List[str] = None
-    encryption_key: str = ""
+class USBDeviceCreator:
+    """Creates Sunflower AI dual-partition USB devices"""
     
-    def __post_init__(self):
-        if not self.device_id:
-            self.device_id = self._generate_device_id()
-        if not self.creation_date:
-            self.creation_date = datetime.now().isoformat()
-        if not self.platform_type:
-            self.platform_type = platform.system().lower()
-        if self.model_variants is None:
-            self.model_variants = ["llama3.2:7b", "llama3.2:3b", "llama3.2:1b", "llama3.2:1b-q4_0"]
-        if not self.encryption_key:
-            self.encryption_key = secrets.token_hex(32)
+    def __init__(self, config: Dict):
+        """Initialize USB device creator with configuration"""
+        self.config = config
+        self.platform = platform.system()
+        self.source_dir = Path(__file__).parent.parent
+        self.temp_dir = Path("/tmp/sunflower_usb_build") if self.platform != "Windows" else Path("C:/temp/sunflower_usb_build")
+        self.errors = []
+        self.progress = 0.0
+        self.current_operation = ""
+        
+        # Initialize path configuration
+        self.path_config = PathConfiguration(auto_detect=False)
+        
+        # Validate configuration
+        self._validate_config()
+    
+    def _validate_config(self):
+        """Validate the provided configuration"""
+        required_fields = ['device_path', 'device_size_gb', 'batch_id']
+        
+        for field in required_fields:
+            if field not in self.config:
+                raise ValueError(f"Missing required configuration field: {field}")
+        
+        # Set defaults
+        self.config.setdefault('cdrom_size_gb', 4)
+        self.config.setdefault('usb_size_gb', 1)
+        self.config.setdefault('device_id', self._generate_device_id())
+        self.config.setdefault('encryption_key', self._generate_encryption_key())
+        self.config.setdefault('creation_date', datetime.now().isoformat())
     
     def _generate_device_id(self) -> str:
         """Generate unique device identifier"""
-        timestamp = int(time.time() * 1000)
-        random_component = secrets.token_hex(8)
-        return f"SUNFLOWER-{timestamp}-{random_component}".upper()
-
-
-class PartitionedDeviceCreator:
-    """Creates partitioned devices for Sunflower AI distribution"""
+        import uuid
+        return f"SAI-{self.config['batch_id']}-{uuid.uuid4().hex[:8].upper()}"
     
-    def __init__(self, config: DeviceConfiguration):
-        self.config = config
-        self.status = DeviceStatus.NOT_STARTED
-        self.progress = 0.0
-        self.current_operation = ""
-        self.errors: List[str] = []
-        self.checksums: Dict[str, str] = {}
-        self.manifest: Dict[str, Any] = {}
-        
-        # Platform-specific command mapping
-        self.platform = platform.system().lower()
-        self.commands = self._get_platform_commands()
-        
-        # Paths for content
-        self.source_dir = Path("../build")
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="sunflower_"))
-        
-    def _get_platform_commands(self) -> Dict[str, str]:
-        """Get platform-specific commands for device operations"""
-        if self.platform == "windows":
-            return {
-                "list_disks": "wmic diskdrive get Name,Size,Model",
-                "partition": "diskpart",
-                "format_cdrom": "format {device} /FS:CDFS /V:{label} /Q",
-                "format_usb": "format {device} /FS:exFAT /V:{label}_DATA /Q",
-                "mount": "mountvol {device} {path}",
-                "unmount": "mountvol {path} /D",
-                "verify": "chkdsk {device} /F"
-            }
-        elif self.platform == "darwin":  # macOS
-            return {
-                "list_disks": "diskutil list",
-                "partition": "diskutil",
-                "format_cdrom": "diskutil eraseVolume UDRO {label} {device}",
-                "format_usb": "diskutil eraseVolume ExFAT {label}_DATA {device}",
-                "mount": "diskutil mount {device}",
-                "unmount": "diskutil unmount {device}",
-                "verify": "diskutil verifyVolume {device}"
-            }
-        else:  # Linux
-            return {
-                "list_disks": "lsblk -o NAME,SIZE,MODEL",
-                "partition": "parted",
-                "format_cdrom": "mkisofs -o {device} -V {label} -r",
-                "format_usb": "mkfs.exfat -n {label}_DATA {device}",
-                "mount": "mount {device} {path}",
-                "unmount": "umount {device}",
-                "verify": "fsck {device}"
-            }
+    def _generate_encryption_key(self) -> str:
+        """Generate device-specific encryption key"""
+        import secrets
+        return secrets.token_hex(32)
     
     def create_device(self) -> bool:
-        """Main method to create partitioned device"""
+        """Main method to create the USB device"""
         try:
-            logger.info(f"Starting device creation for: {self.config.device_path}")
-            self.status = DeviceStatus.PREPARING
+            logger.info(f"Starting USB device creation for batch {self.config['batch_id']}")
             
-            # Verify device is available and suitable
-            if not self._verify_device():
-                return False
+            # Step 1: Prepare temporary build directory
+            self.current_operation = "Preparing build environment"
+            self._prepare_build_environment()
+            self.progress = 10.0
             
-            # Create partition layout
-            self.status = DeviceStatus.CREATING_PARTITIONS
+            # Step 2: Partition the device
+            self.current_operation = "Creating partitions"
             if not self._create_partitions():
                 return False
+            self.progress = 25.0
             
-            # Copy system files to CD-ROM partition
-            self.status = DeviceStatus.COPYING_SYSTEM
+            # Step 3: Format partitions
+            self.current_operation = "Formatting partitions"
+            if not self._format_partitions():
+                return False
+            self.progress = 40.0
+            
+            # Step 4: Copy system files to CD-ROM partition
+            self.current_operation = "Installing system files"
             if not self._copy_system_files():
                 return False
+            self.progress = 70.0
             
-            # Configure USB partition
-            self.status = DeviceStatus.CONFIGURING
+            # Step 5: Configure USB partition
+            self.current_operation = "Configuring user partition"
             if not self._configure_usb_partition():
                 return False
+            self.progress = 85.0
             
-            # Verify integrity
-            self.status = DeviceStatus.VERIFYING
-            if not self._verify_integrity():
+            # Step 6: Verify and finalize
+            self.current_operation = "Verifying device"
+            if not self._verify_device():
                 return False
-            
-            # Create manifest
-            self._create_manifest()
-            
-            self.status = DeviceStatus.COMPLETE
             self.progress = 100.0
-            logger.info("Device creation completed successfully")
+            
+            logger.info("USB device created successfully")
             return True
             
         except Exception as e:
-            self.status = DeviceStatus.ERROR
             self.errors.append(str(e))
-            logger.error(f"Device creation failed: {e}", exc_info=True)
-            return False
-        finally:
-            self._cleanup()
-    
-    def _verify_device(self) -> bool:
-        """Verify target device is suitable for partitioning"""
-        try:
-            self.current_operation = "Verifying device availability"
-            
-            # Check if device exists
-            if not os.path.exists(self.config.device_path):
-                self.errors.append(f"Device not found: {self.config.device_path}")
-                return False
-            
-            # Get device size
-            device_size = self._get_device_size()
-            required_size = (self.config.cdrom_size_mb + self.config.usb_size_mb) * 1024 * 1024
-            
-            if device_size < required_size:
-                self.errors.append(f"Device too small. Required: {required_size/(1024**3):.1f}GB, Available: {device_size/(1024**3):.1f}GB")
-                return False
-            
-            # Confirm device is removable (safety check)
-            if not self._is_removable_device():
-                response = input(f"WARNING: {self.config.device_path} may not be a removable device. Continue? (yes/no): ")
-                if response.lower() != 'yes':
-                    self.errors.append("User cancelled operation on non-removable device")
-                    return False
-            
-            self.progress = 10.0
-            return True
-            
-        except Exception as e:
-            self.errors.append(f"Device verification failed: {e}")
+            logger.error(f"Device creation failed: {e}")
             return False
     
-    def _get_device_size(self) -> int:
-        """Get device size in bytes"""
-        if self.platform == "windows":
-            import win32file
-            import win32api
-            
-            handle = win32file.CreateFile(
-                self.config.device_path,
-                win32file.GENERIC_READ,
-                win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
-                None,
-                win32file.OPEN_EXISTING,
-                0,
-                None
-            )
-            
-            try:
-                info = win32file.GetDriveGeometry(handle)
-                size = info[0] * info[1] * info[2] * info[3]
-                return size
-            finally:
-                win32file.CloseHandle(handle)
-                
-        elif self.platform == "darwin":
-            result = subprocess.run(
-                ["diskutil", "info", self.config.device_path],
-                capture_output=True,
-                text=True
-            )
-            for line in result.stdout.split('\n'):
-                if 'Total Size' in line:
-                    # Parse size from format: "Total Size: 8.0 GB (8012390400 Bytes)"
-                    size_str = line.split('(')[1].split(' ')[0]
-                    return int(size_str)
-        else:
-            with open(self.config.device_path, 'rb') as f:
-                f.seek(0, 2)  # Seek to end
-                return f.tell()
+    def _prepare_build_environment(self):
+        """Prepare temporary build directory"""
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
         
-        return 0
-    
-    def _is_removable_device(self) -> bool:
-        """Check if device is removable (USB/external)"""
-        if self.platform == "windows":
-            import win32file
-            drive_type = win32file.GetDriveType(self.config.device_path[:3])
-            return drive_type == win32file.DRIVE_REMOVABLE
-            
-        elif self.platform == "darwin":
-            result = subprocess.run(
-                ["diskutil", "info", self.config.device_path],
-                capture_output=True,
-                text=True
-            )
-            return "Removable Media: Yes" in result.stdout
-            
-        else:
-            # Linux: Check if device is USB
-            device_name = Path(self.config.device_path).name
-            removable_path = f"/sys/block/{device_name}/removable"
-            if os.path.exists(removable_path):
-                with open(removable_path, 'r') as f:
-                    return f.read().strip() == "1"
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
         
-        return False
+        # Create subdirectories for staging
+        (self.temp_dir / "cdrom").mkdir()
+        (self.temp_dir / "usb").mkdir()
+        
+        logger.info(f"Build environment prepared at {self.temp_dir}")
     
     def _create_partitions(self) -> bool:
-        """Create CD-ROM and USB partitions on device"""
+        """Create dual partitions on the USB device"""
         try:
-            self.current_operation = "Creating partition layout"
-            logger.info(f"Creating partitions: CD-ROM={self.config.cdrom_size_mb}MB, USB={self.config.usb_size_mb}MB")
-            
-            if self.platform == "windows":
+            if self.platform == "Windows":
                 return self._create_partitions_windows()
-            elif self.platform == "darwin":
+            elif self.platform == "Darwin":
                 return self._create_partitions_macos()
             else:
                 return self._create_partitions_linux()
@@ -303,83 +153,105 @@ class PartitionedDeviceCreator:
     
     def _create_partitions_windows(self) -> bool:
         """Create partitions on Windows using diskpart"""
-        script_content = f"""
+        diskpart_script = f"""
 select disk {self._get_disk_number()}
 clean
-convert mbr
-create partition primary size={self.config.cdrom_size_mb}
-format fs=cdfs label="{self.config.volume_label}" quick
-assign letter=X
+create partition primary size={self.config['cdrom_size_gb'] * 1024}
+format fs=ntfs label="{self.path_config.CDROM_PARTITION_NAME}" quick
+assign
 create partition primary
-format fs=exfat label="{self.config.volume_label}_DATA" quick
-assign letter=Y
+format fs=fat32 label="{self.path_config.USB_PARTITION_NAME}" quick
+assign
 exit
 """
         
-        script_path = self.temp_dir / "partition_script.txt"
-        script_path.write_text(script_content)
+        script_path = self.temp_dir / "diskpart_script.txt"
+        script_path.write_text(diskpart_script)
         
         result = subprocess.run(
             ["diskpart", "/s", str(script_path)],
             capture_output=True,
-            text=True,
-            shell=True
+            text=True
         )
         
-        if result.returncode != 0:
-            self.errors.append(f"Diskpart failed: {result.stderr}")
-            return False
-        
-        self.progress = 30.0
-        return True
+        return result.returncode == 0
     
     def _create_partitions_macos(self) -> bool:
         """Create partitions on macOS using diskutil"""
+        device = self.config['device_path']
+        
         # Unmount device first
-        subprocess.run(["diskutil", "unmountDisk", self.config.device_path])
+        subprocess.run(["diskutil", "unmountDisk", device])
         
-        # Create partition scheme
+        # Create partitions
+        cdrom_size = f"{self.config['cdrom_size_gb']}G"
+        
         result = subprocess.run([
-            "diskutil", "partitionDisk", self.config.device_path,
-            "2", "MBR",
-            "MS-DOS", self.config.volume_label, f"{self.config.cdrom_size_mb}M",
-            "ExFAT", f"{self.config.volume_label}_DATA", f"{self.config.usb_size_mb}M"
-        ], capture_output=True, text=True)
+            "diskutil", "partitionDisk", device, "2",
+            "MBR",
+            "FAT32", self.path_config.CDROM_PARTITION_NAME, cdrom_size,
+            "FAT32", self.path_config.USB_PARTITION_NAME, "0"
+        ], capture_output=True)
         
-        if result.returncode != 0:
-            self.errors.append(f"Diskutil failed: {result.stderr}")
-            return False
-        
-        self.progress = 30.0
-        return True
+        return result.returncode == 0
     
     def _create_partitions_linux(self) -> bool:
         """Create partitions on Linux using parted"""
+        device = self.config['device_path']
+        
         commands = [
-            f"parted {self.config.device_path} mklabel msdos",
-            f"parted {self.config.device_path} mkpart primary fat32 1MiB {self.config.cdrom_size_mb}MiB",
-            f"parted {self.config.device_path} mkpart primary fat32 {self.config.cdrom_size_mb}MiB 100%",
-            f"mkfs.vfat -n {self.config.volume_label} {self.config.device_path}1",
-            f"mkfs.exfat -n {self.config.volume_label}_DATA {self.config.device_path}2"
+            ["parted", "-s", device, "mklabel", "msdos"],
+            ["parted", "-s", device, "mkpart", "primary", "fat32", "1MiB", f"{self.config['cdrom_size_gb']}GiB"],
+            ["parted", "-s", device, "mkpart", "primary", "fat32", f"{self.config['cdrom_size_gb']}GiB", "100%"],
+            ["parted", "-s", device, "set", "1", "hidden", "on"]
         ]
         
         for cmd in commands:
-            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True)
             if result.returncode != 0:
-                self.errors.append(f"Command failed: {cmd}\nError: {result.stderr}")
                 return False
         
-        self.progress = 30.0
         return True
+    
+    def _format_partitions(self) -> bool:
+        """Format the created partitions"""
+        try:
+            if self.platform == "Windows":
+                # Windows formatting is done in diskpart script
+                return True
+            elif self.platform == "Darwin":
+                # macOS formatting is done in diskutil command
+                return True
+            else:
+                # Linux formatting
+                device = self.config['device_path']
+                
+                # Format CD-ROM partition as FAT32
+                result1 = subprocess.run(
+                    ["mkfs.vfat", "-n", self.path_config.CDROM_PARTITION_NAME, f"{device}1"],
+                    capture_output=True
+                )
+                
+                # Format USB partition as FAT32
+                result2 = subprocess.run(
+                    ["mkfs.vfat", "-n", self.path_config.USB_PARTITION_NAME, f"{device}2"],
+                    capture_output=True
+                )
+                
+                return result1.returncode == 0 and result2.returncode == 0
+                
+        except Exception as e:
+            self.errors.append(f"Formatting failed: {e}")
+            return False
     
     def _get_disk_number(self) -> int:
         """Get disk number for Windows diskpart"""
-        if self.platform != "windows":
+        if self.platform != "Windows":
             return -1
         
         # Extract disk number from path like \\.\PhysicalDrive2
         import re
-        match = re.search(r'PhysicalDrive(\d+)', self.config.device_path)
+        match = re.search(r'PhysicalDrive(\d+)', self.config['device_path'])
         if match:
             return int(match.group(1))
         return -1
@@ -395,90 +267,52 @@ exit
             if not cdrom_mount:
                 return False
             
-            # Define source structure
-            source_files = {
-                "launchers": ["windows_launcher.exe", "macos_launcher.app"],
-                "models": self.config.model_variants,
-                "ollama": ["ollama_windows.exe", "ollama_macos"],
-                "modelfiles": ["Sunflower_AI_Kids.modelfile", "Sunflower_AI_Educator.modelfile"],
-                "interface": ["gui.py", "cli.py", "web_interface.py"],
-                "documentation": ["user_guide.pdf", "quick_start.pdf"],
-                "security": ["manifest.json", "checksums.sha256"]
+            # Create CD-ROM marker file
+            marker_file = Path(cdrom_mount) / self.path_config.CDROM_MARKER_FILE
+            marker_content = {
+                "type": self.path_config.CDROM_MARKER_CONTENT,
+                "batch_id": self.config['batch_id'],
+                "device_id": self.config['device_id'],
+                "created": self.config['creation_date'],
+                "version": "6.2.0"
             }
+            with open(marker_file, 'w') as f:
+                json.dump(marker_content, f, indent=2)
             
-            total_files = sum(len(files) for files in source_files.values())
-            files_copied = 0
-            
-            for category, files in source_files.items():
-                category_dir = Path(cdrom_mount) / category
-                category_dir.mkdir(parents=True, exist_ok=True)
-                
-                for file_name in files:
-                    source_path = self.source_dir / category / file_name
-                    dest_path = category_dir / file_name
+            # Copy directory structure based on PathConfiguration
+            for dir_key, dir_name in self.path_config.CDROM_STRUCTURE.items():
+                source_path = self.source_dir / dir_name
+                if source_path.exists():
+                    dest_path = Path(cdrom_mount) / dir_name
                     
-                    if source_path.exists():
-                        # Copy with progress tracking
-                        self._copy_with_progress(source_path, dest_path)
-                        
-                        # Calculate checksum
-                        checksum = self._calculate_checksum(dest_path)
-                        self.checksums[str(dest_path.relative_to(cdrom_mount))] = checksum
-                        
-                        files_copied += 1
-                        self.progress = 30 + (40 * files_copied / total_files)
+                    if source_path.is_dir():
+                        shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
                     else:
-                        logger.warning(f"Source file not found: {source_path}")
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source_path, dest_path)
+                    
+                    logger.info(f"Copied {dir_key}: {source_path} -> {dest_path}")
             
-            # Write device configuration
-            config_path = Path(cdrom_mount) / "device_config.json"
-            config_data = {
-                "device_id": self.config.device_id,
-                "creation_date": self.config.creation_date,
-                "platform": self.config.platform_type,
-                "models": self.config.model_variants,
-                "version": "6.2"
-            }
+            # Copy launcher at root
+            launcher_source = self.source_dir / "UNIVERSAL_LAUNCHER.py"
+            if launcher_source.exists():
+                shutil.copy2(launcher_source, Path(cdrom_mount) / "UNIVERSAL_LAUNCHER.py")
             
-            with open(config_path, 'w') as f:
-                json.dump(config_data, f, indent=2)
-            
-            # Create autorun for Windows
-            if self.platform == "windows":
-                autorun_path = Path(cdrom_mount) / "autorun.inf"
-                autorun_content = f"""[autorun]
-open=launchers\\windows_launcher.exe
-icon=sunflower.ico
-label={self.config.volume_label}
-"""
-                autorun_path.write_text(autorun_content)
+            # Copy configuration directory
+            config_source = self.source_dir / "config"
+            if config_source.exists():
+                shutil.copytree(config_source, Path(cdrom_mount) / "config", dirs_exist_ok=True)
             
             # Unmount partition
             self._unmount_partition(cdrom_mount)
             
-            self.progress = 70.0
+            logger.info("System files copied successfully")
             return True
             
         except Exception as e:
             self.errors.append(f"System file copy failed: {e}")
+            logger.error(f"Failed to copy system files: {e}")
             return False
-    
-    def _copy_with_progress(self, source: Path, dest: Path, chunk_size: int = 1024*1024) -> None:
-        """Copy file with progress tracking"""
-        file_size = source.stat().st_size
-        copied = 0
-        
-        with open(source, 'rb') as src, open(dest, 'wb') as dst:
-            while True:
-                chunk = src.read(chunk_size)
-                if not chunk:
-                    break
-                dst.write(chunk)
-                copied += len(chunk)
-                
-                # Update operation status
-                percent = (copied / file_size) * 100
-                self.current_operation = f"Copying {source.name}: {percent:.1f}%"
     
     def _configure_usb_partition(self) -> bool:
         """Configure writable USB partition with initial structure"""
@@ -491,56 +325,59 @@ label={self.config.volume_label}
             if not usb_mount:
                 return False
             
-            # Create directory structure
-            directories = [
-                "family_profiles",
-                "conversation_logs",
-                "learning_progress",
-                "parent_dashboard",
-                "runtime_config",
-                "backup"
-            ]
+            # Create USB marker file
+            marker_file = Path(usb_mount) / self.path_config.USB_MARKER_FILE
+            marker_content = {
+                "type": self.path_config.USB_MARKER_CONTENT,
+                "batch_id": self.config['batch_id'],
+                "device_id": self.config['device_id'],
+                "created": self.config['creation_date'],
+                "version": "6.2.0",
+                "writable": True
+            }
+            with open(marker_file, 'w') as f:
+                json.dump(marker_content, f, indent=2)
             
-            for dir_name in directories:
+            # Create directory structure based on PathConfiguration
+            for dir_key, dir_name in self.path_config.USB_STRUCTURE.items():
                 dir_path = Path(usb_mount) / dir_name
                 dir_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created USB directory: {dir_path}")
             
             # Create initial configuration
+            config_dir = Path(usb_mount) / self.path_config.USB_STRUCTURE['config']
+            config_dir.mkdir(parents=True, exist_ok=True)
+            
             runtime_config = {
-                "device_id": self.config.device_id,
+                "device_id": self.config['device_id'],
                 "first_run": True,
                 "encryption_enabled": True,
-                "encryption_key_hash": hashlib.sha256(self.config.encryption_key.encode()).hexdigest(),
-                "created": self.config.creation_date,
+                "encryption_key_hash": hashlib.sha256(self.config['encryption_key'].encode()).hexdigest(),
+                "created": self.config['creation_date'],
                 "last_accessed": None,
                 "family_count": 0
             }
             
-            config_path = Path(usb_mount) / "runtime_config" / "config.json"
+            config_path = config_dir / "runtime_config.json"
             with open(config_path, 'w') as f:
                 json.dump(runtime_config, f, indent=2)
             
             # Create README for users
-            readme_content = """
+            readme_content = f"""
 SUNFLOWER AI PROFESSIONAL SYSTEM - USER DATA PARTITION
 ======================================================
 
 This partition stores your family's data and learning progress.
 
 Directory Structure:
-- family_profiles/     Your family member profiles
-- conversation_logs/   Conversation history for each child
-- learning_progress/   Educational progress tracking
-- parent_dashboard/    Parent monitoring and reports
-- runtime_config/      System configuration
-- backup/             Backup of important data
+{chr(10).join(f"- {dir_name:<20} {self._get_dir_description(key)}" for key, dir_name in self.path_config.USB_STRUCTURE.items())}
 
-IMPORTANT: Do not modify files in runtime_config directory.
+IMPORTANT: Do not modify files in .config or .security directories.
 For support, consult the user guide on the system partition.
 
-Device ID: {device_id}
-Created: {date}
-""".format(device_id=self.config.device_id, date=self.config.creation_date)
+Device ID: {self.config['device_id']}
+Created: {self.config['creation_date']}
+"""
             
             readme_path = Path(usb_mount) / "README.txt"
             readme_path.write_text(readme_content)
@@ -548,34 +385,67 @@ Created: {date}
             # Unmount partition
             self._unmount_partition(usb_mount)
             
-            self.progress = 85.0
+            logger.info("USB partition configured successfully")
             return True
             
         except Exception as e:
             self.errors.append(f"USB partition configuration failed: {e}")
+            logger.error(f"Failed to configure USB partition: {e}")
             return False
+    
+    def _get_dir_description(self, dir_key: str) -> str:
+        """Get description for directory"""
+        descriptions = {
+            'profiles': 'Family and child profiles',
+            'conversations': 'Conversation history',
+            'sessions': 'Learning sessions',
+            'logs': 'System and safety logs',
+            'safety': 'Safety incident data',
+            'progress': 'Learning progress',
+            'backups': 'Data backups',
+            'cache': 'Temporary cache files',
+            'config': 'Configuration files',
+            'security': 'Security data'
+        }
+        return descriptions.get(dir_key, 'System directory')
     
     def _mount_partition(self, partition_index: int) -> Optional[str]:
         """Mount a partition and return mount point"""
         try:
-            if self.platform == "windows":
+            if self.platform == "Windows":
                 # Windows partitions are already assigned drive letters
-                if partition_index == 0:
-                    return "X:\\"
-                else:
-                    return "Y:\\"
-                    
-            elif self.platform == "darwin":
-                # macOS: Find partition device
-                device = f"{self.config.device_path}s{partition_index + 1}"
-                mount_point = f"/Volumes/SUNFLOWER_{partition_index}"
+                # We need to find them
+                import win32api
+                drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
                 
-                subprocess.run(["diskutil", "mount", device])
-                return mount_point
+                # Look for our partition by marker file
+                marker_file = self.path_config.CDROM_MARKER_FILE if partition_index == 0 else self.path_config.USB_MARKER_FILE
+                
+                for drive in drives:
+                    marker_path = Path(drive) / marker_file
+                    if marker_path.exists():
+                        return drive
+                
+                return None
+                    
+            elif self.platform == "Darwin":
+                # macOS: Find partition device
+                device = f"{self.config['device_path']}s{partition_index + 1}"
+                
+                # Mount the partition
+                result = subprocess.run(["diskutil", "mount", device], capture_output=True)
+                
+                if result.returncode == 0:
+                    # Find mount point
+                    result = subprocess.run(["diskutil", "info", device], capture_output=True, text=True)
+                    for line in result.stdout.split('\n'):
+                        if "Mount Point:" in line:
+                            mount_point = line.split(":")[-1].strip()
+                            return mount_point
                 
             else:
                 # Linux
-                device = f"{self.config.device_path}{partition_index + 1}"
+                device = f"{self.config['device_path']}{partition_index + 1}"
                 mount_point = self.temp_dir / f"mount_{partition_index}"
                 mount_point.mkdir(exist_ok=True)
                 
@@ -592,30 +462,23 @@ Created: {date}
             
         return None
     
-    def _unmount_partition(self, mount_point: str) -> bool:
+    def _unmount_partition(self, mount_point: str):
         """Unmount a partition"""
         try:
-            if self.platform == "windows":
+            if self.platform == "Windows":
                 # Windows doesn't need explicit unmounting for removable drives
-                return True
-                
-            elif self.platform == "darwin":
+                pass
+            elif self.platform == "Darwin":
                 subprocess.run(["diskutil", "unmount", mount_point])
-                return True
-                
             else:
                 subprocess.run(["umount", mount_point])
-                return True
-                
         except Exception as e:
             logger.warning(f"Failed to unmount {mount_point}: {e}")
-            return False
     
-    def _verify_integrity(self) -> bool:
-        """Verify device integrity and create final manifest"""
+    def _verify_device(self) -> bool:
+        """Verify the created device"""
         try:
-            self.current_operation = "Verifying device integrity"
-            logger.info("Running integrity verification")
+            logger.info("Verifying device integrity")
             
             # Mount both partitions
             cdrom_mount = self._mount_partition(0)
@@ -625,190 +488,96 @@ Created: {date}
                 self.errors.append("Failed to mount partitions for verification")
                 return False
             
-            # Verify CD-ROM files
-            verification_errors = []
-            for rel_path, expected_checksum in self.checksums.items():
-                file_path = Path(cdrom_mount) / rel_path
-                if file_path.exists():
-                    actual_checksum = self._calculate_checksum(file_path)
-                    if actual_checksum != expected_checksum:
-                        verification_errors.append(f"Checksum mismatch: {rel_path}")
-                else:
-                    verification_errors.append(f"Missing file: {rel_path}")
+            # Verify CD-ROM partition
+            cdrom_marker = Path(cdrom_mount) / self.path_config.CDROM_MARKER_FILE
+            if not cdrom_marker.exists():
+                self.errors.append("CD-ROM marker file not found")
+                return False
             
-            # Verify USB structure
-            required_dirs = ["family_profiles", "conversation_logs", "learning_progress"]
-            for dir_name in required_dirs:
-                if not (Path(usb_mount) / dir_name).exists():
-                    verification_errors.append(f"Missing directory: {dir_name}")
+            # Verify USB partition
+            usb_marker = Path(usb_mount) / self.path_config.USB_MARKER_FILE
+            if not usb_marker.exists():
+                self.errors.append("USB marker file not found")
+                return False
+            
+            # Verify directory structures
+            for dir_name in self.path_config.USB_STRUCTURE.values():
+                dir_path = Path(usb_mount) / dir_name
+                if not dir_path.exists():
+                    self.errors.append(f"Missing USB directory: {dir_name}")
+                    return False
             
             # Unmount partitions
             self._unmount_partition(cdrom_mount)
             self._unmount_partition(usb_mount)
             
-            if verification_errors:
-                self.errors.extend(verification_errors)
-                return False
-            
-            self.progress = 95.0
+            logger.info("Device verification successful")
             return True
             
         except Exception as e:
-            self.errors.append(f"Integrity verification failed: {e}")
+            self.errors.append(f"Verification failed: {e}")
             return False
     
-    def _calculate_checksum(self, file_path: Path) -> str:
-        """Calculate SHA256 checksum of a file"""
-        sha256_hash = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(chunk)
-        return sha256_hash.hexdigest()
+    def get_progress(self) -> Tuple[float, str]:
+        """Get current progress and operation"""
+        return self.progress, self.current_operation
     
-    def _create_manifest(self) -> None:
-        """Create device manifest with all metadata"""
-        self.manifest = {
-            "device_id": self.config.device_id,
-            "creation_date": self.config.creation_date,
-            "platform": self.config.platform_type,
-            "version": "6.2",
-            "partitions": {
-                "cdrom": {
-                    "size_mb": self.config.cdrom_size_mb,
-                    "filesystem": "CDFS" if self.platform == "windows" else "ISO9660",
-                    "label": self.config.volume_label
-                },
-                "usb": {
-                    "size_mb": self.config.usb_size_mb,
-                    "filesystem": "exFAT",
-                    "label": f"{self.config.volume_label}_DATA"
-                }
-            },
-            "models": self.config.model_variants,
-            "checksums": self.checksums,
-            "creation_log": {
-                "errors": self.errors,
-                "warnings": logger.handlers[0].baseFilename if logger.handlers else None
-            }
-        }
-        
-        # Save manifest
-        manifest_path = self.temp_dir / f"manifest_{self.config.device_id}.json"
-        with open(manifest_path, 'w') as f:
-            json.dump(self.manifest, f, indent=2)
-        
-        logger.info(f"Manifest saved to: {manifest_path}")
-    
-    def _cleanup(self) -> None:
-        """Clean up temporary files and resources"""
-        try:
-            # Keep manifest and logs, remove other temp files
-            for item in self.temp_dir.iterdir():
-                if not item.name.startswith("manifest_") and not item.suffix == ".log":
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
-        except Exception as e:
-            logger.warning(f"Cleanup error: {e}")
-    
-    def get_status_report(self) -> Dict[str, Any]:
-        """Get current status report"""
-        return {
-            "status": self.status.value,
-            "progress": self.progress,
-            "current_operation": self.current_operation,
-            "errors": self.errors,
-            "device_id": self.config.device_id if self.config else None
-        }
+    def get_errors(self) -> List[str]:
+        """Get list of errors encountered"""
+        return self.errors
 
 
 def main():
-    """Main entry point for device creation"""
-    print("\n" + "="*60)
-    print("SUNFLOWER AI PROFESSIONAL SYSTEM - DEVICE CREATOR")
-    print("Version 6.2 - Partitioned Device Architecture")
-    print("="*60 + "\n")
+    """Main entry point for USB device creation"""
+    parser = argparse.ArgumentParser(description='Create Sunflower AI USB Device')
+    parser.add_argument('--device', required=True, help='Device path (e.g., /dev/sdb or \\\\.\\PhysicalDrive2)')
+    parser.add_argument('--batch-id', required=True, help='Batch identifier')
+    parser.add_argument('--size', type=int, default=16, help='Device size in GB')
+    parser.add_argument('--cdrom-size', type=int, default=4, help='CD-ROM partition size in GB')
+    parser.add_argument('--dry-run', action='store_true', help='Perform dry run without writing')
     
-    # Check for admin/root privileges
-    if platform.system() == "Windows":
-        import ctypes
-        if not ctypes.windll.shell32.IsUserAnAdmin():
-            print("ERROR: Administrator privileges required.")
-            print("Please run this script as Administrator.")
-            sys.exit(1)
-    elif os.geteuid() != 0:
-        print("ERROR: Root privileges required.")
-        print("Please run this script with sudo.")
-        sys.exit(1)
+    args = parser.parse_args()
     
-    # Get device path
-    print("Available devices:")
-    if platform.system() == "Windows":
-        subprocess.run(["wmic", "diskdrive", "get", "Name,Size,Model"])
-    elif platform.system() == "Darwin":
-        subprocess.run(["diskutil", "list"])
-    else:
-        subprocess.run(["lsblk", "-o", "NAME,SIZE,MODEL"])
+    # Confirm with user
+    print("⚠️  WARNING: This will completely erase the device!")
+    print(f"Device: {args.device}")
+    print(f"Total Size: {args.size} GB")
+    print(f"CD-ROM Partition: {args.cdrom_size} GB")
+    print(f"USB Partition: {args.size - args.cdrom_size} GB")
     
-    print("\n" + "-"*40)
-    device_path = input("Enter device path (e.g., \\\\.\\PhysicalDrive2 on Windows, /dev/disk2 on macOS): ").strip()
-    
-    if not device_path:
-        print("ERROR: No device path provided")
-        sys.exit(1)
-    
-    # Confirm operation
-    print(f"\n{'WARNING':^40}")
-    print("="*40)
-    print(f"Device: {device_path}")
-    print("This will ERASE ALL DATA on the device!")
-    print("="*40)
-    
-    confirm = input("\nType 'YES' to continue: ").strip()
-    if confirm != "YES":
-        print("Operation cancelled.")
-        sys.exit(0)
+    if not args.dry_run:
+        response = input("\nAre you sure you want to continue? (yes/no): ")
+        if response.lower() != 'yes':
+            print("Operation cancelled")
+            return
     
     # Create configuration
-    config = DeviceConfiguration(
-        device_path=device_path,
-        cdrom_size_mb=4096,
-        usb_size_mb=1024,
-        volume_label="SUNFLOWER_AI"
-    )
+    config = {
+        'device_path': args.device,
+        'device_size_gb': args.size,
+        'cdrom_size_gb': args.cdrom_size,
+        'usb_size_gb': args.size - args.cdrom_size,
+        'batch_id': args.batch_id
+    }
     
     # Create device
-    creator = PartitionedDeviceCreator(config)
+    creator = USBDeviceCreator(config)
     
-    # Progress monitoring thread
-    def monitor_progress():
-        while creator.status not in [DeviceStatus.COMPLETE, DeviceStatus.ERROR]:
-            status = creator.get_status_report()
-            print(f"\rProgress: {status['progress']:.1f}% - {status['current_operation'][:50]:<50}", end="")
-            time.sleep(0.5)
-    
-    monitor_thread = threading.Thread(target=monitor_progress)
-    monitor_thread.start()
-    
-    # Execute device creation
-    success = creator.create_device()
-    monitor_thread.join()
-    
-    print("\n" + "="*60)
-    if success:
-        print("SUCCESS: Device created successfully!")
-        print(f"Device ID: {config.device_id}")
-        print(f"Manifest: {creator.temp_dir}/manifest_{config.device_id}.json")
+    if args.dry_run:
+        print("\nDry run mode - no actual changes will be made")
+        print("Configuration:", json.dumps(config, indent=2))
     else:
-        print("ERROR: Device creation failed!")
-        print("Errors:")
-        for error in creator.errors:
-            print(f"  - {error}")
-    print("="*60)
-    
-    return 0 if success else 1
+        success = creator.create_device()
+        
+        if success:
+            print("✅ USB device created successfully!")
+        else:
+            print("❌ Device creation failed!")
+            print("Errors:")
+            for error in creator.get_errors():
+                print(f"  - {error}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
