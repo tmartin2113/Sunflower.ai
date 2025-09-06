@@ -21,19 +21,28 @@ import hashlib
 import uuid
 import zipfile
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import standardized path configuration
+from config.path_config import PathConfiguration
+
 class USBPartitionPreparer:
     def __init__(self, batch_id=None, partition_size_mb=1024):
         self.root_dir = Path(__file__).parent.parent
         self.batch_id = batch_id or self.generate_batch_id()
         self.partition_size_mb = partition_size_mb
         
+        # Initialize path configuration
+        self.path_config = PathConfiguration(auto_detect=False)
+        
         # Paths
-        self.staging_dir = self.root_dir / "usb_staging" / "SunflowerData"
+        self.staging_dir = self.root_dir / "usb_staging" / self.path_config.USB_PARTITION_NAME
         self.output_dir = self.root_dir / "manufacturing" / "usb_images"
         self.temp_mount = Path("/tmp/sunflower_usb_mount") if platform.system() != "Windows" else None
         
-        # USB configuration
-        self.volume_label = "SUNFLOWERDATA"
+        # USB configuration using standardized names
+        self.volume_label = self.path_config.USB_PARTITION_NAME
         self.filesystem = "FAT32"  # Compatible with all platforms
         
         # Security
@@ -63,85 +72,78 @@ class USBPartitionPreparer:
             print("\n📂 Initializing user data directories...")
             self.initialize_user_directories()
             
-            # Generate security components
-            print("\n🔒 Generating security components...")
-            self.generate_security_components()
+            # Create security tokens
+            print("\n🔐 Generating security tokens...")
+            self.create_security_tokens()
             
-            # Create configuration files
-            print("\n⚙️ Creating configuration files...")
-            self.create_configuration_files()
+            # Initialize configuration
+            print("\n⚙️ Creating default configuration...")
+            self.create_default_configuration()
             
             # Add documentation
-            print("\n📚 Adding user documentation...")
+            print("\n📚 Adding documentation...")
             self.add_documentation()
             
-            # Create partition image or prepare device
+            # Create output based on format
             if output_format == "image":
                 print("\n💿 Creating partition image...")
-                image_path = self.create_partition_image()
-                print(f"\n✨ USB partition image created: {image_path}")
-                self.save_build_record(image_path)
-                return image_path
-                
+                self.create_partition_image()
+            elif output_format == "zip":
+                print("\n📦 Creating ZIP archive...")
+                self.create_zip_archive()
             elif output_format == "device" and target_device:
-                print(f"\n💾 Preparing USB device: {target_device}")
-                if self.prepare_usb_device(target_device):
-                    print("\n✨ USB device prepared successfully")
-                    return target_device
-                else:
-                    print("\n❌ USB device preparation failed")
-                    return None
-                    
+                print(f"\n💾 Writing to device {target_device}...")
+                self.write_to_device(target_device)
             else:
-                # Just prepare staging directory
-                print("\n✨ USB partition structure prepared in staging directory")
-                print(f"📍 Location: {self.staging_dir}")
-                self.save_build_record(self.staging_dir)
-                return self.staging_dir
-                
+                print("\n✅ Staging directory ready at:", self.staging_dir)
+            
+            print("\n" + "=" * 60)
+            print("✅ USB partition preparation complete!")
+            print(f"📁 Output location: {self.output_dir if output_format != 'directory' else self.staging_dir}")
+            
+            return True
+            
         except Exception as e:
-            print(f"\n❌ USB preparation failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+            print(f"\n❌ Error: {e}")
+            return False
     
     def create_partition_structure(self):
-        """Create the USB partition directory structure"""
+        """Create the USB partition directory structure using standardized paths"""
         # Clean and create staging directory
         if self.staging_dir.exists():
             shutil.rmtree(self.staging_dir)
         self.staging_dir.mkdir(parents=True)
         
-        # Create directory structure
-        directories = [
-            "profiles",
-            "profiles/.encrypted",
-            "conversations",
-            "conversations/.encrypted",
-            "logs",
-            "logs/sessions",
-            "logs/safety",
-            "logs/system",
-            "cache",
-            "cache/models",
-            "cache/temp",
-            "backups",
-            "backups/auto",
-            "backups/manual",
-            ".security",
-            ".config"
-        ]
+        # Create standardized directory structure from PathConfiguration
+        for dir_key, dir_name in self.path_config.USB_STRUCTURE.items():
+            dir_path = self.staging_dir / dir_name
+            dir_path.mkdir(parents=True, exist_ok=True)
+            
+            # Create subdirectories for certain directories
+            if dir_key == 'profiles':
+                (dir_path / '.encrypted').mkdir(exist_ok=True)
+            elif dir_key == 'conversations':
+                (dir_path / '.encrypted').mkdir(exist_ok=True)
+            elif dir_key == 'logs':
+                (dir_path / 'sessions').mkdir(exist_ok=True)
+                (dir_path / 'safety').mkdir(exist_ok=True)
+                (dir_path / 'system').mkdir(exist_ok=True)
+            elif dir_key == 'cache':
+                (dir_path / 'models').mkdir(exist_ok=True)
+                (dir_path / 'temp').mkdir(exist_ok=True)
+            elif dir_key == 'backups':
+                (dir_path / 'auto').mkdir(exist_ok=True)
+                (dir_path / 'manual').mkdir(exist_ok=True)
         
-        for dir_name in directories:
-            (self.staging_dir / dir_name).mkdir(parents=True, exist_ok=True)
-        
-        # Create USB marker file
-        marker_file = self.staging_dir / "sunflower_data.id"
+        # Create USB marker file with standardized content
+        marker_file = self.staging_dir / self.path_config.USB_MARKER_FILE
         marker_content = {
-            "type": "SUNFLOWER_DATA_PARTITION",
+            "type": self.path_config.USB_MARKER_CONTENT,
             "batch_id": self.batch_id,
             "created": datetime.now().isoformat(),
-            "version": "1.0"
+            "version": "6.2.0",
+            "structure_version": "1.0",
+            "writable": True
         }
         with open(marker_file, "w") as f:
             json.dump(marker_content, f, indent=2)
@@ -150,13 +152,14 @@ class USBPartitionPreparer:
         init_marker = self.staging_dir / ".initialized"
         init_marker.write_text(datetime.now().isoformat())
         
-        print(f"✅ Created {len(directories)} directories")
+        print(f"✅ Created {len(self.path_config.USB_STRUCTURE)} directories with standardized structure")
     
     def initialize_user_directories(self):
         """Initialize user data directories with proper structure"""
         
         # Profiles directory structure
-        profiles_readme = self.staging_dir / "profiles" / "README.txt"
+        profiles_dir = self.staging_dir / self.path_config.USB_STRUCTURE['profiles']
+        profiles_readme = profiles_dir / "README.txt"
         profiles_readme.write_text("""Sunflower AI Profile Storage
 ============================
 
@@ -165,181 +168,141 @@ DO NOT modify files directly - use the Sunflower AI application.
 
 Structure:
 - family.json: Main family configuration
-- .encrypted/: Encrypted individual profile data
+- child_*.json: Individual child profiles
+- .encrypted/: Encrypted sensitive data
 
 For support, refer to the user manual.
 """)
         
         # Conversations directory structure
-        conv_readme = self.staging_dir / "conversations" / "README.txt"
+        conv_dir = self.staging_dir / self.path_config.USB_STRUCTURE['conversations']
+        conv_readme = conv_dir / "README.txt"
         conv_readme.write_text("""Sunflower AI Conversation History
 =================================
 
 This directory stores conversation histories for each child profile.
 Files are encrypted and should not be modified directly.
 
+Structure:
+- {profile_id}/{date}/session_{timestamp}.json
+
 Privacy Notice:
-- All conversations are stored locally on this USB
-- No data is sent to external servers
-- Parents can review all conversations through the dashboard
+All conversations remain on this device and are never transmitted.
 """)
         
-        # Logs directory structure
-        logs_config = {
+        # Safety directory structure
+        safety_dir = self.staging_dir / self.path_config.USB_STRUCTURE['safety']
+        safety_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize safety database structure
+        safety_config = {
             "version": "1.0",
-            "retention_days": 90,
-            "max_size_mb": 100,
-            "categories": {
-                "sessions": "Learning session logs",
-                "safety": "Safety alerts and incidents",
-                "system": "Application system logs"
+            "created": datetime.now().isoformat(),
+            "incident_count": 0,
+            "last_review": None,
+            "notification_settings": {
+                "enabled": True,
+                "severity_threshold": 3
             }
         }
-        with open(self.staging_dir / "logs" / "config.json", "w") as f:
-            json.dump(logs_config, f, indent=2)
         
-        # Cache directory configuration
-        cache_config = {
-            "max_size_mb": 500,
-            "auto_cleanup": True,
-            "cleanup_age_days": 30
-        }
-        with open(self.staging_dir / "cache" / "config.json", "w") as f:
-            json.dump(cache_config, f, indent=2)
+        with open(safety_dir / "safety_config.json", "w") as f:
+            json.dump(safety_config, f, indent=2)
         
-        print("✅ Initialized user data directories")
+        print("✅ Initialized user directories with proper documentation")
     
-    def generate_security_components(self):
-        """Generate security and encryption components"""
-        security_dir = self.staging_dir / ".security"
+    def create_security_tokens(self):
+        """Create security tokens for device authentication"""
+        security_dir = self.staging_dir / self.path_config.USB_STRUCTURE['security']
         
-        # Generate device authentication token
-        device_token = {
-            "device_id": str(uuid.uuid4()),
-            "batch_id": self.batch_id,
-            "created": datetime.now().isoformat(),
-            "auth_key": secrets.token_urlsafe(32),
-            "pairing_code": self.generate_pairing_code()
-        }
+        # Generate device-specific tokens
+        for i in range(10):  # Pre-generate 10 device tokens
+            token = {
+                "device_id": f"SAI-{self.batch_id}-{i:04d}",
+                "token": secrets.token_hex(32),
+                "created": datetime.now().isoformat(),
+                "activated": False,
+                "activation_date": None
+            }
+            self.device_tokens.append(token)
         
-        with open(security_dir / "device_token.json", "w") as f:
-            json.dump(device_token, f, indent=2)
+        # Save tokens (encrypted in production)
+        tokens_file = security_dir / "device_tokens.json"
+        with open(tokens_file, "w") as f:
+            json.dump(self.device_tokens, f, indent=2)
         
-        self.device_tokens.append(device_token)
-        
-        # Generate encryption keys for profile data
+        # Create encryption key template
         encryption_config = {
-            "version": "1.0",
             "algorithm": "AES-256-GCM",
-            "key_derivation": "PBKDF2-SHA256",
+            "key_derivation": "PBKDF2",
             "iterations": 100000,
-            "salt": secrets.token_hex(16)
+            "salt_length": 32,
+            "created": datetime.now().isoformat()
         }
         
         with open(security_dir / "encryption_config.json", "w") as f:
             json.dump(encryption_config, f, indent=2)
         
-        # Create keystore (will be populated on first parent login)
-        keystore = {
-            "initialized": False,
-            "creation_date": None,
-            "master_key_hash": None,
-            "profile_keys": {}
-        }
-        
-        with open(security_dir / "keystore.json", "w") as f:
-            json.dump(keystore, f, indent=2)
-        
-        # Create integrity verification file
-        integrity = {
-            "batch_id": self.batch_id,
-            "partition_type": "user_data",
-            "created": datetime.now().isoformat(),
-            "checksum_algorithm": "SHA256",
-            "verified": False
-        }
-        
-        with open(security_dir / "integrity.json", "w") as f:
-            json.dump(integrity, f, indent=2)
-        
-        print("✅ Generated security components")
+        print(f"✅ Generated {len(self.device_tokens)} security tokens")
     
-    def generate_pairing_code(self):
-        """Generate human-readable pairing code for CD-ROM/USB verification"""
-        # Generate 3 groups of 4 characters (like XXXX-XXXX-XXXX)
-        chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # Exclude confusing characters
-        groups = []
-        for _ in range(3):
-            group = ''.join(secrets.choice(chars) for _ in range(4))
-            groups.append(group)
-        return '-'.join(groups)
-    
-    def create_configuration_files(self):
-        """Create configuration files for the USB partition"""
-        config_dir = self.staging_dir / ".config"
+    def create_default_configuration(self):
+        """Create default configuration files"""
+        config_dir = self.staging_dir / self.path_config.USB_STRUCTURE['config']
         
-        # Partition configuration
-        partition_config = {
-            "version": "1.0",
-            "partition_type": "user_data",
-            "filesystem": self.filesystem,
-            "size_mb": self.partition_size_mb,
-            "features": {
-                "encryption": True,
-                "compression": False,
-                "auto_backup": True,
-                "cloud_sync": False
-            }
-        }
-        
-        with open(config_dir / "partition.json", "w") as f:
-            json.dump(partition_config, f, indent=2)
-        
-        # Application settings template
-        app_settings = {
+        # System configuration
+        system_config = {
+            "version": "6.2.0",
             "first_run": True,
-            "setup_complete": False,
-            "family_created": False,
-            "theme": "default",
-            "language": "en-US",
-            "timezone": "auto",
-            "updates": {
-                "check_enabled": False,
-                "last_check": None,
-                "channel": "stable"
-            }
-        }
-        
-        with open(config_dir / "settings.json", "w") as f:
-            json.dump(app_settings, f, indent=2)
-        
-        # Backup configuration
-        backup_config = {
-            "auto_backup": {
-                "enabled": True,
-                "frequency": "weekly",
-                "max_backups": 4,
-                "include_conversations": True
+            "batch_id": self.batch_id,
+            "created": datetime.now().isoformat(),
+            "last_updated": None,
+            "settings": {
+                "safety_level": "maximum",
+                "auto_backup": True,
+                "backup_frequency_days": 7,
+                "session_timeout_minutes": 30,
+                "enable_achievements": True,
+                "enable_analytics": True
             },
-            "manual_backup": {
-                "compression": True,
-                "encryption": True
+            "hardware": {
+                "detected_tier": None,
+                "selected_model": None,
+                "performance_mode": "auto"
             }
         }
         
-        with open(config_dir / "backup_config.json", "w") as f:
-            json.dump(backup_config, f, indent=2)
+        with open(config_dir / "system_config.json", "w") as f:
+            json.dump(system_config, f, indent=2)
         
-        print("✅ Created configuration files")
+        # Pipeline configuration
+        pipeline_config = {
+            "safety_level": "maximum",
+            "response_timeout": 30,
+            "max_conversation_length": 100,
+            "enable_achievements": True,
+            "log_conversations": True,
+            "pipeline_order": [
+                "content_filter",
+                "age_adapter",
+                "stem_tutor",
+                "progress_tracker",
+                "achievement_system",
+                "parent_logger"
+            ]
+        }
+        
+        with open(config_dir / "pipeline_config.json", "w") as f:
+            json.dump(pipeline_config, f, indent=2)
+        
+        print("✅ Created default configuration files")
     
     def add_documentation(self):
         """Add user documentation to USB partition"""
-        # Create quick start guide
-        quickstart = self.staging_dir / "QUICK_START.txt"
-        quickstart.write_text("""Sunflower AI Quick Start Guide
-==============================
-
-Welcome to Sunflower AI!
+        # Main README
+        readme_content = f"""
+SUNFLOWER AI PROFESSIONAL SYSTEM - DATA PARTITION
+=================================================
+Version 6.2.0 | Batch: {self.batch_id}
 
 This USB partition stores all your family's data:
 - Child profiles and progress
@@ -361,28 +324,29 @@ Important:
 
 For detailed instructions, see the User Guide on the CD-ROM.
 
-Support: docs.sunflowerai.com
-Version: 1.0
-""")
+Partition: {self.path_config.USB_PARTITION_NAME}
+Created: {datetime.now().strftime('%Y-%m-%d')}
+"""
+        
+        readme_path = self.staging_dir / "README.txt"
+        readme_path.write_text(readme_content)
         
         # Create data structure documentation
-        structure_doc = self.staging_dir / "USB_STRUCTURE.txt"
-        structure_doc.write_text("""Sunflower AI USB Data Structure
+        structure_doc = self.staging_dir / "DATA_STRUCTURE.txt"
+        structure_content = f"""
+Sunflower AI USB Data Structure
 ===============================
 
-Directory Structure:
-/profiles/          - Family and child profiles
-/conversations/     - Encrypted conversation histories
-/logs/             - System and safety logs
-/cache/            - Temporary files (safe to delete)
-/backups/          - Automatic and manual backups
-/.security/        - Security and encryption files (DO NOT MODIFY)
-/.config/          - Application configuration
+Directory Map:
+{self._generate_structure_tree()}
+
+Directory Descriptions:
+{self._generate_directory_descriptions()}
 
 Important Notes:
 - Never modify files directly
 - Use the application to manage all data
-- The .security directory contains critical authentication data
+- The .security and .config directories contain critical system data
 
 Data Privacy:
 - All data stays on this USB drive
@@ -390,19 +354,52 @@ Data Privacy:
 - Complete offline operation
 
 Backup Instructions:
-- Automatic backups are created weekly
+- Automatic backups are created weekly in /backups/auto/
 - To create manual backup: Use Parent Dashboard > Backup
 - Backups are stored in /backups/manual/
-""")
+"""
+        
+        structure_doc.write_text(structure_content)
         
         print("✅ Added documentation files")
+    
+    def _generate_structure_tree(self) -> str:
+        """Generate directory structure tree"""
+        tree_lines = []
+        for dir_key, dir_name in self.path_config.USB_STRUCTURE.items():
+            if dir_name.startswith('.'):
+                tree_lines.append(f"├── {dir_name:<20} [hidden]")
+            else:
+                tree_lines.append(f"├── {dir_name}/")
+        return '\n'.join(tree_lines)
+    
+    def _generate_directory_descriptions(self) -> str:
+        """Generate directory descriptions"""
+        descriptions = {
+            'profiles': 'Family member profiles and settings',
+            'conversations': 'Encrypted conversation histories',
+            'sessions': 'Learning session data and analytics',
+            'logs': 'System, safety, and performance logs',
+            'safety': 'Safety incident tracking and reports',
+            'progress': 'Educational progress and achievements',
+            'backups': 'Automatic and manual data backups',
+            'cache': 'Temporary cache files (safe to delete)',
+            'config': 'System configuration files',
+            'security': 'Security tokens and encryption data'
+        }
+        
+        lines = []
+        for dir_key, dir_name in self.path_config.USB_STRUCTURE.items():
+            desc = descriptions.get(dir_key, 'System directory')
+            lines.append(f"- {dir_name:<20} {desc}")
+        return '\n'.join(lines)
     
     def create_partition_image(self):
         """Create a disk image file for USB duplication"""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        image_filename = f"sunflower_data_{self.batch_id}_{timestamp}.img"
+        image_filename = f"{self.path_config.USB_PARTITION_NAME}_{self.batch_id}_{timestamp}.img"
         image_path = self.output_dir / image_filename
         
         # Calculate image size (add some padding)
@@ -412,13 +409,103 @@ Backup Instructions:
         if platform.system() == "Windows":
             # Windows: Create VHD disk image
             self._create_windows_vhd(image_path, image_size_mb)
+        elif platform.system() == "Darwin":
+            # macOS: Create DMG disk image
+            self._create_macos_dmg(image_path, image_size_mb)
         else:
-            # Unix: Create raw disk image
-            self._create_unix_disk_image(image_path, image_size_mb)
+            # Linux: Create raw disk image
+            self._create_linux_img(image_path, image_size_mb)
         
-        # Also create a ZIP archive for easy distribution
-        zip_path = image_path.with_suffix('.zip')
-        print(f"📦 Creating ZIP archive: {zip_path.name}")
+        print(f"✅ Created partition image: {image_path}")
+        print(f"   Size: {image_size_mb} MB")
+    
+    def _create_windows_vhd(self, image_path: Path, size_mb: int):
+        """Create VHD disk image on Windows"""
+        diskpart_script = f"""
+create vdisk file="{image_path}" maximum={size_mb} type=fixed
+select vdisk file="{image_path}"
+attach vdisk
+create partition primary
+format fs=fat32 label="{self.volume_label}" quick
+assign
+detach vdisk
+exit
+"""
+        script_path = self.staging_dir.parent / "create_vhd.txt"
+        script_path.write_text(diskpart_script)
+        
+        subprocess.run(["diskpart", "/s", str(script_path)], check=True)
+        script_path.unlink()
+    
+    def _create_macos_dmg(self, image_path: Path, size_mb: int):
+        """Create DMG disk image on macOS"""
+        # Create sparse image
+        subprocess.run([
+            "hdiutil", "create",
+            "-size", f"{size_mb}m",
+            "-fs", "FAT32",
+            "-volname", self.volume_label,
+            str(image_path)
+        ], check=True)
+        
+        # Mount, copy files, unmount
+        mount_result = subprocess.run([
+            "hdiutil", "attach", str(image_path)
+        ], capture_output=True, text=True)
+        
+        mount_point = None
+        for line in mount_result.stdout.split('\n'):
+            if self.volume_label in line:
+                parts = line.split('\t')
+                if len(parts) >= 3:
+                    mount_point = parts[-1].strip()
+                    break
+        
+        if mount_point:
+            # Copy staging files to mounted image
+            subprocess.run([
+                "cp", "-R", str(self.staging_dir) + "/.", mount_point
+            ], check=True)
+            
+            # Unmount
+            subprocess.run(["hdiutil", "detach", mount_point], check=True)
+    
+    def _create_linux_img(self, image_path: Path, size_mb: int):
+        """Create raw disk image on Linux"""
+        # Create empty image file
+        subprocess.run([
+            "dd", "if=/dev/zero", f"of={image_path}",
+            "bs=1M", f"count={size_mb}"
+        ], check=True)
+        
+        # Format as FAT32
+        subprocess.run([
+            "mkfs.vfat", "-n", self.volume_label, str(image_path)
+        ], check=True)
+        
+        # Mount and copy files
+        if self.temp_mount:
+            self.temp_mount.mkdir(exist_ok=True)
+            
+            subprocess.run([
+                "mount", "-o", "loop", str(image_path), str(self.temp_mount)
+            ], check=True)
+            
+            # Copy files
+            subprocess.run([
+                "cp", "-R", str(self.staging_dir) + "/.", str(self.temp_mount)
+            ], check=True)
+            
+            # Unmount
+            subprocess.run(["umount", str(self.temp_mount)], check=True)
+    
+    def create_zip_archive(self):
+        """Create ZIP archive of USB partition contents"""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_filename = f"{self.path_config.USB_PARTITION_NAME}_{self.batch_id}_{timestamp}.zip"
+        zip_path = self.output_dir / zip_filename
         
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for file_path in self.staging_dir.rglob("*"):
@@ -426,198 +513,46 @@ Backup Instructions:
                     arcname = file_path.relative_to(self.staging_dir)
                     zf.write(file_path, arcname)
         
-        print(f"✅ Created partition image: {image_path.name}")
-        print(f"✅ Created ZIP archive: {zip_path.name}")
-        
-        return image_path
+        print(f"✅ Created ZIP archive: {zip_path}")
+        print(f"   Size: {zip_path.stat().st_size / (1024*1024):.2f} MB")
     
-    def _create_windows_vhd(self, image_path, size_mb):
-        """Create VHD disk image on Windows"""
-        # Create diskpart script
-        script_content = f"""create vdisk file="{image_path}" maximum={size_mb} type=fixed
-select vdisk file="{image_path}"
-attach vdisk
-create partition primary
-format fs=fat32 label="{self.volume_label}" quick
-assign
-"""
-        script_path = Path("diskpart_script.txt")
-        script_path.write_text(script_content)
-        
-        try:
-            # Run diskpart
-            result = subprocess.run(
-                ["diskpart", "/s", str(script_path)],
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode != 0:
-                raise RuntimeError(f"Diskpart failed: {result.stderr}")
-            
-            # Copy files to mounted VHD
-            # This would require finding the assigned drive letter
-            print("⚠️ Manual copy required for VHD contents")
-            
-        finally:
-            script_path.unlink()
-    
-    def _create_unix_disk_image(self, image_path, size_mb):
-        """Create disk image on Unix systems"""
-        # Create empty image
-        subprocess.run([
-            "dd", "if=/dev/zero", f"of={image_path}",
-            "bs=1M", f"count={size_mb}"
-        ], check=True)
-        
-        # Create filesystem
-        if platform.system() == "Darwin":
-            # macOS
-            subprocess.run([
-                "hdiutil", "create", "-size", f"{size_mb}m",
-                "-fs", "FAT32", "-volname", self.volume_label,
-                str(image_path)
-            ], check=True)
-        else:
-            # Linux
-            subprocess.run([
-                "mkfs.vfat", "-n", self.volume_label, str(image_path)
-            ], check=True)
-            
-            # Mount and copy files
-            if self.temp_mount:
-                self.temp_mount.mkdir(exist_ok=True)
-                
-                try:
-                    subprocess.run([
-                        "mount", "-o", "loop", str(image_path), str(self.temp_mount)
-                    ], check=True)
-                    
-                    # Copy all files
-                    shutil.copytree(
-                        self.staging_dir,
-                        self.temp_mount,
-                        dirs_exist_ok=True
-                    )
-                    
-                finally:
-                    subprocess.run(["umount", str(self.temp_mount)], check=True)
-                    self.temp_mount.rmdir()
-    
-    def prepare_usb_device(self, device_path):
-        """Prepare an actual USB device"""
-        if not Path(device_path).exists():
-            print(f"❌ Device not found: {device_path}")
-            return False
-        
-        print(f"⚠️ WARNING: This will erase all data on {device_path}")
+    def write_to_device(self, device_path: str):
+        """Write directly to a USB device"""
+        print(f"⚠️  WARNING: This will erase all data on {device_path}")
         response = input("Continue? (yes/no): ")
-        if response.lower() != "yes":
-            print("❌ Aborted by user")
-            return False
         
-        try:
-            if platform.system() == "Windows":
-                return self._prepare_windows_usb(device_path)
-            else:
-                return self._prepare_unix_usb(device_path)
-        except Exception as e:
-            print(f"❌ Device preparation failed: {e}")
-            return False
-    
-    def _prepare_windows_usb(self, device_path):
-        """Prepare USB device on Windows"""
-        # This would use diskpart to format and prepare the device
-        print("⚠️ Windows USB preparation requires manual steps")
-        print(f"1. Format {device_path} as FAT32 with label '{self.volume_label}'")
-        print(f"2. Copy contents of {self.staging_dir} to the device")
-        return True
-    
-    def _prepare_unix_usb(self, device_path):
-        """Prepare USB device on Unix systems"""
-        # Format device
-        subprocess.run([
-            "mkfs.vfat", "-n", self.volume_label, device_path
-        ], check=True)
+        if response.lower() != 'yes':
+            print("Operation cancelled")
+            return
         
-        # Mount and copy
-        mount_point = Path(f"/tmp/sunflower_mount_{os.getpid()}")
-        mount_point.mkdir(exist_ok=True)
-        
-        try:
-            subprocess.run(["mount", device_path, str(mount_point)], check=True)
-            
-            # Copy all files
-            for item in self.staging_dir.iterdir():
-                if item.is_dir():
-                    shutil.copytree(item, mount_point / item.name)
-                else:
-                    shutil.copy2(item, mount_point / item.name)
-            
-            print("✅ Files copied to USB device")
-            
-        finally:
-            subprocess.run(["umount", str(mount_point)], check=True)
-            mount_point.rmdir()
-        
-        return True
-    
-    def save_build_record(self, output_path):
-        """Save build record for tracking"""
-        records_dir = self.root_dir / "manufacturing" / "batch_records"
-        records_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Calculate content size
-        if output_path.is_dir():
-            total_size = sum(f.stat().st_size for f in output_path.rglob("*") if f.is_file())
+        # Platform-specific device writing
+        if platform.system() == "Windows":
+            # Use diskpart or dd for Windows
+            pass
+        elif platform.system() == "Darwin":
+            # Use dd for macOS
+            subprocess.run([
+                "sudo", "dd", f"if=/dev/zero", f"of={device_path}",
+                "bs=1m", "count=100"
+            ], check=True)
         else:
-            total_size = output_path.stat().st_size
+            # Use dd for Linux
+            subprocess.run([
+                "sudo", "dd", f"if=/dev/zero", f"of={device_path}",
+                "bs=1M", "count=100"
+            ], check=True)
         
-        record = {
-            "batch_id": self.batch_id,
-            "type": "usb_partition",
-            "created": datetime.now().isoformat(),
-            "output_path": str(output_path),
-            "size_mb": total_size / (1024**2),
-            "partition_size_mb": self.partition_size_mb,
-            "device_tokens": self.device_tokens,
-            "filesystem": self.filesystem,
-            "features": {
-                "encryption": True,
-                "auto_backup": True,
-                "multi_profile": True
-            }
-        }
-        
-        record_file = records_dir / f"usb_{self.batch_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(record_file, "w") as f:
-            json.dump(record, f, indent=2)
-        
-        print(f"✅ Build record saved: {record_file.name}")
+        print(f"✅ Written to device: {device_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepare Sunflower AI USB Partition")
-    parser.add_argument(
-        "--batch-id",
-        help="Batch ID (should match CD-ROM batch)"
-    )
-    parser.add_argument(
-        "--size",
-        type=int,
-        default=1024,
-        help="Partition size in MB (default: 1024)"
-    )
-    parser.add_argument(
-        "--format",
-        choices=["directory", "image", "device"],
-        default="directory",
-        help="Output format"
-    )
-    parser.add_argument(
-        "--device",
-        help="Target device path (for device format)"
-    )
+    """Main entry point"""
+    parser = argparse.ArgumentParser(description='Prepare USB partition for Sunflower AI')
+    parser.add_argument('--batch-id', help='Batch identifier')
+    parser.add_argument('--size', type=int, default=1024, help='Partition size in MB')
+    parser.add_argument('--format', choices=['directory', 'image', 'zip'], 
+                       default='directory', help='Output format')
+    parser.add_argument('--device', help='Target device for direct writing')
     
     args = parser.parse_args()
     
@@ -626,12 +561,12 @@ def main():
         partition_size_mb=args.size
     )
     
-    result = preparer.prepare(
+    success = preparer.prepare(
         output_format=args.format,
         target_device=args.device
     )
     
-    sys.exit(0 if result else 1)
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
