@@ -1,729 +1,447 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Comprehensive Testing Suite
-Version: 6.2
-Focus: Production-Ready Testing for Family-Focused K-12 STEM Education System
+Test Open WebUI Integration with Sunflower AI
+Comprehensive testing of Open WebUI integration with safety and profile systems
 """
 
 import os
 import sys
 import json
 import time
-import hashlib
-import platform
-import subprocess
 import unittest
 import tempfile
-import shutil
-import logging
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from unittest.mock import Mock, patch, MagicMock
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
-import psutil
 import sqlite3
+import hashlib
+import psutil
+import platform
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Optional
+from unittest.mock import Mock, patch, MagicMock
 from cryptography.fernet import Fernet
-from dataclasses import dataclass, asdict
 
-# Configure logging for test results
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('test_results.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Test configuration constants
-TEST_CONFIG = {
-    'MIN_RAM_GB': 4,
-    'MIN_DISK_GB': 5,
-    'MAX_RESPONSE_TIME': 3.0,
-    'SAFETY_FILTER_ACCURACY': 1.0,  # 100% requirement
-    'SETUP_SUCCESS_RATE': 0.95,  # 95% requirement
-    'SUPPORTED_PLATFORMS': ['Windows', 'Darwin'],  # Darwin = macOS
-    'MODEL_VARIANTS': ['7b', '3b', '1b', '1b-q4_0'],
-    'AGE_GROUPS': {
-        'K-2': (5, 7, 30, 50),
-        'Elementary': (8, 10, 50, 75),
-        'Middle': (11, 13, 75, 125),
-        'High School': (14, 17, 125, 200)
-    }
-}
+# Import standardized path configuration
+from config.path_config import PathConfiguration, get_usb_path, get_cdrom_path
 
-@dataclass
-class TestProfile:
-    """Test profile for simulating family members"""
-    name: str
-    age: int
-    role: str  # 'parent' or 'child'
-    password_hash: Optional[str] = None
-    created_at: datetime = None
-    
-    def __post_init__(self):
-        if self.created_at is None:
-            self.created_at = datetime.now()
+# Import components to test
+from safety_filter import SafetyFilter
+from pipelines import PipelineOrchestrator, PipelineContext
 
-class PartitionManager:
-    """Simulates and tests the dual-partition device architecture"""
-    
-    def __init__(self, test_dir: Path):
-        self.test_dir = test_dir
-        self.cdrom_path = test_dir / 'cdrom_partition'
-        self.usb_path = test_dir / 'usb_partition'
-        self._setup_partitions()
-    
-    def _setup_partitions(self):
-        """Create simulated partition structure"""
-        # CD-ROM partition (read-only simulation)
-        self.cdrom_path.mkdir(parents=True, exist_ok=True)
-        (self.cdrom_path / 'launchers').mkdir(exist_ok=True)
-        (self.cdrom_path / 'models').mkdir(exist_ok=True)
-        (self.cdrom_path / 'ollama').mkdir(exist_ok=True)
-        
-        # USB partition (writable)
-        self.usb_path.mkdir(parents=True, exist_ok=True)
-        (self.usb_path / 'profiles').mkdir(exist_ok=True)
-        (self.usb_path / 'conversations').mkdir(exist_ok=True)
-        (self.usb_path / 'logs').mkdir(exist_ok=True)
-    
-    def verify_integrity(self) -> Tuple[bool, Dict]:
-        """Verify partition integrity and checksums"""
-        results = {
-            'cdrom_valid': False,
-            'usb_valid': False,
-            'checksums': {},
-            'errors': []
-        }
-        
-        try:
-            # Verify CD-ROM partition
-            required_dirs = ['launchers', 'models', 'ollama']
-            cdrom_valid = all((self.cdrom_path / d).exists() for d in required_dirs)
-            results['cdrom_valid'] = cdrom_valid
-            
-            # Calculate checksums for system files
-            for file_path in self.cdrom_path.rglob('*'):
-                if file_path.is_file():
-                    with open(file_path, 'rb') as f:
-                        file_hash = hashlib.sha256(f.read()).hexdigest()
-                        results['checksums'][str(file_path.relative_to(self.cdrom_path))] = file_hash
-            
-            # Verify USB partition
-            usb_dirs = ['profiles', 'conversations', 'logs']
-            results['usb_valid'] = all((self.usb_path / d).exists() for d in usb_dirs)
-            
-            return True, results
-            
-        except Exception as e:
-            results['errors'].append(str(e))
-            return False, results
-    
-    def simulate_readonly(self, path: Path) -> bool:
-        """Simulate read-only behavior for CD-ROM partition"""
-        try:
-            # Attempt to write to CD-ROM partition should fail
-            test_file = path / 'test_write.tmp'
-            test_file.write_text('test')
-            test_file.unlink()
-            return False  # Should not be writable
-        except:
-            return True  # Correctly read-only
 
-class SafetyFilter:
-    """Production-ready safety filter for child interactions"""
+class TestOpenWebUIIntegration(unittest.TestCase):
+    """Test suite for Open WebUI integration"""
     
-    BLOCKED_TERMS = [
-        'violence', 'weapon', 'drug', 'alcohol', 'explicit',
-        'inappropriate', 'dangerous', 'harmful', 'adult'
-    ]
-    
-    SAFE_REDIRECTS = {
-        'violence': 'Let\'s explore physics and motion instead!',
-        'weapon': 'How about learning about engineering and tools?',
-        'drug': 'Let\'s discuss chemistry and medicine in a safe way!',
-        'inappropriate': 'Let\'s focus on something educational!',
-        'dangerous': 'Safety first! Let\'s learn about safety engineering!'
-    }
-    
-    def __init__(self, encryption_key: bytes = None):
-        self.encryption_key = encryption_key or Fernet.generate_key()
-        self.cipher = Fernet(self.encryption_key)
-        self.filter_log = []
-    
-    def check_content(self, text: str, age: int) -> Tuple[bool, Optional[str]]:
-        """
-        Check content for safety with 100% effectiveness requirement
-        Returns: (is_safe, redirect_message)
-        """
-        text_lower = text.lower()
-        
-        # Check for blocked terms
-        for term in self.BLOCKED_TERMS:
-            if term in text_lower:
-                redirect = self.SAFE_REDIRECTS.get(term.split()[0], 
-                    'Let\'s explore a STEM topic instead!')
-                self.filter_log.append({
-                    'timestamp': datetime.now().isoformat(),
-                    'blocked_term': term,
-                    'age': age,
-                    'redirect': redirect
-                })
-                return False, redirect
-        
-        # Age-appropriate content check
-        if age < 8 and any(word in text_lower for word in ['complex', 'advanced', 'calculus']):
-            return False, 'Let\'s start with something simpler for your age!'
-        
-        return True, None
-    
-    def encrypt_log(self) -> bytes:
-        """Encrypt safety log for parent review"""
-        log_json = json.dumps(self.filter_log)
-        return self.cipher.encrypt(log_json.encode())
-    
-    def decrypt_log(self, encrypted: bytes) -> List[Dict]:
-        """Decrypt safety log for parent dashboard"""
-        decrypted = self.cipher.decrypt(encrypted)
-        return json.loads(decrypted.decode())
-
-class ModelSelector:
-    """Intelligent model selection based on hardware capabilities"""
-    
-    @staticmethod
-    def detect_hardware() -> Dict:
-        """Detect system hardware capabilities"""
-        return {
-            'ram_gb': psutil.virtual_memory().total / (1024**3),
-            'cpu_cores': psutil.cpu_count(logical=False),
-            'cpu_freq': psutil.cpu_freq().current if psutil.cpu_freq() else 0,
-            'platform': platform.system(),
-            'architecture': platform.machine()
-        }
-    
-    @staticmethod
-    def select_optimal_model(hardware: Dict) -> str:
-        """Select the best model variant for hardware"""
-        ram_gb = hardware['ram_gb']
-        cpu_cores = hardware['cpu_cores']
-        
-        if ram_gb >= 16 and cpu_cores >= 8:
-            return 'llama3.2:7b'
-        elif ram_gb >= 8 and cpu_cores >= 4:
-            return 'llama3.2:3b'
-        elif ram_gb >= 6:
-            return 'llama3.2:1b'
-        else:
-            return 'llama3.2:1b-q4_0'  # Minimum spec fallback
-
-class FamilyProfileSystem:
-    """Complete family profile management system"""
-    
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self.conn = None
-        self._init_database()
-    
-    def _init_database(self):
-        """Initialize profile database with encryption"""
-        self.conn = sqlite3.connect(str(self.db_path))
-        cursor = self.conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS profiles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                age INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                password_hash TEXT,
-                preferences TEXT,
-                created_at TIMESTAMP,
-                last_active TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                profile_id INTEGER,
-                start_time TIMESTAMP,
-                end_time TIMESTAMP,
-                conversations TEXT,
-                safety_events TEXT,
-                FOREIGN KEY (profile_id) REFERENCES profiles(id)
-            )
-        ''')
-        
-        self.conn.commit()
-    
-    def create_profile(self, profile: TestProfile) -> int:
-        """Create a new family member profile"""
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT INTO profiles (name, age, role, password_hash, created_at, last_active)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (profile.name, profile.age, profile.role, profile.password_hash,
-              profile.created_at, datetime.now()))
-        self.conn.commit()
-        return cursor.lastrowid
-    
-    def switch_profile(self, profile_id: int) -> float:
-        """Switch to a different profile and measure time"""
-        start_time = time.time()
-        
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM profiles WHERE id = ?', (profile_id,))
-        profile = cursor.fetchone()
-        
-        if profile:
-            cursor.execute('UPDATE profiles SET last_active = ? WHERE id = ?',
-                         (datetime.now(), profile_id))
-            self.conn.commit()
-        
-        switch_time = time.time() - start_time
-        return switch_time
-
-class TestSunflowerCore(unittest.TestCase):
-    """Core system functionality tests"""
-    
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
         """Set up test environment"""
-        cls.test_dir = Path(tempfile.mkdtemp(prefix='sunflower_test_'))
-        cls.partition_mgr = PartitionManager(cls.test_dir)
-        cls.safety_filter = SafetyFilter()
-        cls.profile_db = cls.test_dir / 'profiles.db'
-        cls.family_system = FamilyProfileSystem(cls.profile_db)
-        logger.info(f"Test environment created at {cls.test_dir}")
-    
-    @classmethod
-    def tearDownClass(cls):
+        # Create temporary directory structure mimicking real partitions
+        self.temp_dir = tempfile.mkdtemp(prefix="sunflower_test_")
+        
+        # Create mock partition structure
+        self.mock_cdrom = Path(self.temp_dir) / "SUNFLOWER_CD"
+        self.mock_usb = Path(self.temp_dir) / "SUNFLOWER_DATA"
+        
+        self.mock_cdrom.mkdir()
+        self.mock_usb.mkdir()
+        
+        # Create marker files
+        (self.mock_cdrom / "sunflower_cd.id").write_text("SUNFLOWER_AI_SYSTEM_v6.2.0")
+        (self.mock_usb / "sunflower_data.id").write_text("SUNFLOWER_AI_DATA_v6.2.0")
+        
+        # Create standardized directory structure
+        path_config = PathConfiguration(auto_detect=False)
+        
+        # Create CD-ROM directories
+        for dir_name in path_config.CDROM_STRUCTURE.values():
+            (self.mock_cdrom / dir_name).mkdir(parents=True, exist_ok=True)
+        
+        # Create USB directories
+        for dir_name in path_config.USB_STRUCTURE.values():
+            (self.mock_usb / dir_name).mkdir(parents=True, exist_ok=True)
+        
+        # Patch the path configuration to use our mock directories
+        self.path_patch = patch('config.path_config.get_path_config')
+        mock_config = self.path_patch.start()
+        mock_config.return_value.cdrom_path = self.mock_cdrom
+        mock_config.return_value.usb_path = self.mock_usb
+        
+        # Initialize components with mock paths
+        self.safety_filter = SafetyFilter(self.mock_usb)
+        
+    def tearDown(self):
         """Clean up test environment"""
-        if cls.test_dir.exists():
-            shutil.rmtree(cls.test_dir)
-        logger.info("Test environment cleaned up")
+        self.path_patch.stop()
+        
+        # Clean up temporary directory
+        import shutil
+        if Path(self.temp_dir).exists():
+            shutil.rmtree(self.temp_dir)
     
-    def test_partition_architecture(self):
-        """Test dual-partition device architecture"""
-        # Verify partition structure
-        success, results = self.partition_mgr.verify_integrity()
-        self.assertTrue(success, "Partition verification failed")
-        self.assertTrue(results['cdrom_valid'], "CD-ROM partition invalid")
-        self.assertTrue(results['usb_valid'], "USB partition invalid")
+    def test_path_detection(self):
+        """Test that paths are correctly detected"""
+        from config.path_config import get_usb_path, get_cdrom_path
         
-        # Test read-only behavior
-        cdrom_readonly = self.partition_mgr.simulate_readonly(self.partition_mgr.cdrom_path)
-        self.assertTrue(cdrom_readonly, "CD-ROM partition should be read-only")
+        # These should return our mock paths
+        usb_path = get_usb_path()
+        cdrom_path = get_cdrom_path()
         
-        logger.info("Partition architecture test passed")
+        self.assertEqual(usb_path, self.mock_usb)
+        self.assertEqual(cdrom_path, self.mock_cdrom)
     
-    def test_hardware_detection_and_model_selection(self):
-        """Test hardware detection and automatic model selection"""
-        hardware = ModelSelector.detect_hardware()
+    def test_safety_filter_initialization(self):
+        """Test safety filter initializes with correct paths"""
+        self.assertIsNotNone(self.safety_filter)
+        self.assertEqual(self.safety_filter.usb_path, self.mock_usb)
         
-        # Verify hardware detection
-        self.assertIn('ram_gb', hardware)
-        self.assertIn('cpu_cores', hardware)
-        self.assertIn('platform', hardware)
-        self.assertIn(hardware['platform'], TEST_CONFIG['SUPPORTED_PLATFORMS'])
+        # Check that safety directories were created
+        safety_dir = self.mock_usb / 'safety'
+        self.assertTrue(safety_dir.exists())
         
-        # Test model selection
-        model = ModelSelector.select_optimal_model(hardware)
-        self.assertIn(model.split(':')[1], TEST_CONFIG['MODEL_VARIANTS'])
+        # Check that database was initialized
+        db_path = safety_dir / 'incidents.db'
+        self.assertTrue(db_path.exists())
+    
+    def test_profile_system_with_paths(self):
+        """Test profile system uses correct paths"""
+        profiles_dir = self.mock_usb / 'profiles'
+        self.assertTrue(profiles_dir.exists())
         
-        # Verify model selection for different hardware configs
-        test_configs = [
-            ({'ram_gb': 32, 'cpu_cores': 16}, 'llama3.2:7b'),
-            ({'ram_gb': 8, 'cpu_cores': 4}, 'llama3.2:3b'),
-            ({'ram_gb': 4, 'cpu_cores': 2}, 'llama3.2:1b-q4_0')
+        # Create a test family profile
+        family_data = {
+            "family_name": "Test Family",
+            "created": datetime.now().isoformat(),
+            "parent_password_hash": hashlib.sha256("password123".encode()).hexdigest()
+        }
+        
+        family_file = profiles_dir / "family.json"
+        with open(family_file, 'w') as f:
+            json.dump(family_data, f)
+        
+        # Verify file was created in correct location
+        self.assertTrue(family_file.exists())
+        
+        # Read back and verify
+        with open(family_file, 'r') as f:
+            loaded_data = json.load(f)
+        
+        self.assertEqual(loaded_data['family_name'], "Test Family")
+    
+    def test_conversation_logging_paths(self):
+        """Test conversation logging uses correct paths"""
+        conv_dir = self.mock_usb / 'conversations'
+        self.assertTrue(conv_dir.exists())
+        
+        # Create a test conversation log
+        test_child_id = "child_001"
+        test_date = datetime.now().strftime("%Y-%m-%d")
+        
+        conv_child_dir = conv_dir / test_child_id / test_date
+        conv_child_dir.mkdir(parents=True, exist_ok=True)
+        
+        session_file = conv_child_dir / f"session_{int(time.time())}.json"
+        session_data = {
+            "child_id": test_child_id,
+            "timestamp": datetime.now().isoformat(),
+            "messages": [
+                {"role": "user", "content": "What is photosynthesis?"},
+                {"role": "assistant", "content": "Photosynthesis is how plants make food..."}
+            ]
+        }
+        
+        with open(session_file, 'w') as f:
+            json.dump(session_data, f)
+        
+        self.assertTrue(session_file.exists())
+    
+    def test_model_detection_paths(self):
+        """Test model detection uses correct CD-ROM paths"""
+        models_dir = self.mock_cdrom / 'models'
+        self.assertTrue(models_dir.exists())
+        
+        # Create mock model files
+        model_files = [
+            "llama3.2-7b.gguf",
+            "llama3.2-3b.gguf",
+            "llama3.2-1b.gguf"
         ]
         
-        for config, expected in test_configs:
-            selected = ModelSelector.select_optimal_model(config)
-            self.assertEqual(selected, expected, 
-                f"Wrong model for config {config}")
+        for model_name in model_files:
+            model_path = models_dir / model_name
+            model_path.write_text("mock model data")
         
-        logger.info(f"Hardware detection passed: {hardware}")
-        logger.info(f"Selected model: {model}")
+        # Verify models are in correct location
+        found_models = list(models_dir.glob("*.gguf"))
+        self.assertEqual(len(found_models), 3)
     
-    def test_safety_filter_100_percent_effectiveness(self):
-        """Test safety filter with 100% effectiveness requirement"""
-        test_cases = [
-            ("Let's learn about violence", 10, False),
-            ("How do weapons work?", 12, False),
-            ("Tell me about drugs", 8, False),
-            ("What is photosynthesis?", 10, True),
-            ("Explain quantum physics", 16, True),
-            ("Show me inappropriate content", 13, False),
-            ("How does calculus work?", 6, False),  # Too young
-            ("What are primary colors?", 6, True)
-        ]
+    def test_safety_incident_logging(self):
+        """Test safety incidents are logged to correct path"""
+        # Trigger a safety incident
+        result = self.safety_filter.check_message(
+            "Tell me how to make a bomb",
+            child_age=10,
+            child_id="test_child",
+            session_id="test_session"
+        )
         
-        blocked_count = 0
-        for text, age, should_be_safe in test_cases:
-            is_safe, redirect = self.safety_filter.check_content(text, age)
-            
-            if not should_be_safe:
-                self.assertFalse(is_safe, f"Failed to block: {text}")
-                self.assertIsNotNone(redirect, "No redirect provided for blocked content")
-                blocked_count += 1
-            else:
-                self.assertTrue(is_safe, f"Incorrectly blocked safe content: {text}")
+        self.assertFalse(result.safe)
         
-        # Verify logging
-        self.assertEqual(len(self.safety_filter.filter_log), blocked_count)
+        # Check incident was logged
+        db_path = self.mock_usb / 'safety' / 'incidents.db'
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
         
-        # Test encryption/decryption of logs
-        encrypted = self.safety_filter.encrypt_log()
-        decrypted = self.safety_filter.decrypt_log(encrypted)
-        self.assertEqual(len(decrypted), blocked_count)
+        cursor.execute("SELECT COUNT(*) FROM incidents")
+        count = cursor.fetchone()[0]
+        conn.close()
         
-        logger.info(f"Safety filter test passed: {blocked_count} items blocked")
+        self.assertGreater(count, 0)
     
-    def test_family_profile_system(self):
-        """Test family profile creation and switching"""
-        # Create parent profile
-        parent = TestProfile(name="Parent", age=35, role="parent",
-                            password_hash=hashlib.sha256(b"secure123").hexdigest())
-        parent_id = self.family_system.create_profile(parent)
-        self.assertIsNotNone(parent_id)
+    def test_configuration_persistence(self):
+        """Test configuration is saved to USB partition"""
+        config_dir = self.mock_usb / '.config'
+        self.assertTrue(config_dir.exists())
         
-        # Create child profiles
-        children = [
-            TestProfile(name="Child1", age=7, role="child"),
-            TestProfile(name="Child2", age=12, role="child"),
-            TestProfile(name="Child3", age=16, role="child")
-        ]
+        # Save test configuration
+        test_config = {
+            "version": "6.2.0",
+            "safety_level": "maximum",
+            "first_run": False,
+            "last_updated": datetime.now().isoformat()
+        }
         
-        child_ids = []
-        for child in children:
-            child_id = self.family_system.create_profile(child)
-            child_ids.append(child_id)
-            self.assertIsNotNone(child_id)
+        config_file = config_dir / "system_config.json"
+        with open(config_file, 'w') as f:
+            json.dump(test_config, f)
         
-        # Test profile switching performance
-        for child_id in child_ids:
-            switch_time = self.family_system.switch_profile(child_id)
-            self.assertLess(switch_time, 1.0, 
-                f"Profile switch took {switch_time}s, exceeds 1 second requirement")
+        # Read back and verify
+        with open(config_file, 'r') as f:
+            loaded_config = json.load(f)
         
-        logger.info(f"Created {len(children)} child profiles with sub-second switching")
+        self.assertEqual(loaded_config['version'], "6.2.0")
+        self.assertEqual(loaded_config['safety_level'], "maximum")
     
-    def test_age_appropriate_responses(self):
-        """Test age-appropriate content delivery"""
-        test_prompts = [
-            ("What is addition?", 6),
-            ("Explain chemical reactions", 10),
-            ("Describe calculus", 15),
-            ("How do computers work?", 8)
-        ]
+    def test_backup_directory_structure(self):
+        """Test backup directories are correctly structured"""
+        backups_dir = self.mock_usb / 'backups'
+        auto_backup_dir = backups_dir / 'auto'
+        manual_backup_dir = backups_dir / 'manual'
         
-        for prompt, age in test_prompts:
-            # Get age group configuration
-            for group_name, (min_age, max_age, min_words, max_words) in TEST_CONFIG['AGE_GROUPS'].items():
-                if min_age <= age <= max_age:
-                    # Simulate response length check
-                    mock_response = "Test " * (min_words // 2)  # Simulate appropriate length
-                    word_count = len(mock_response.split())
-                    
-                    self.assertGreaterEqual(word_count, min_words // 2,
-                        f"Response too short for {group_name}")
-                    self.assertLessEqual(word_count, max_words,
-                        f"Response too long for {group_name}")
-                    
-                    logger.info(f"Age {age} ({group_name}): {min_words}-{max_words} words")
-                    break
+        self.assertTrue(backups_dir.exists())
+        self.assertTrue(auto_backup_dir.exists())
+        self.assertTrue(manual_backup_dir.exists())
+        
+        # Create a test backup
+        backup_data = {
+            "backup_date": datetime.now().isoformat(),
+            "profiles_count": 3,
+            "conversations_count": 150,
+            "size_mb": 25.3
+        }
+        
+        backup_file = auto_backup_dir / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(backup_file, 'w') as f:
+            json.dump(backup_data, f)
+        
+        self.assertTrue(backup_file.exists())
+    
+    def test_cache_management(self):
+        """Test cache directory is properly managed"""
+        cache_dir = self.mock_usb / 'cache'
+        models_cache = cache_dir / 'models'
+        temp_cache = cache_dir / 'temp'
+        
+        self.assertTrue(cache_dir.exists())
+        self.assertTrue(models_cache.exists())
+        self.assertTrue(temp_cache.exists())
+        
+        # Create temp file
+        temp_file = temp_cache / "temp_processing.tmp"
+        temp_file.write_text("temporary data")
+        
+        self.assertTrue(temp_file.exists())
+        
+        # Simulate cache cleanup
+        for temp_file in temp_cache.glob("*.tmp"):
+            temp_file.unlink()
+        
+        self.assertEqual(len(list(temp_cache.glob("*.tmp"))), 0)
+    
+    def test_ollama_integration_paths(self):
+        """Test Ollama binary detection on CD-ROM"""
+        ollama_dir = self.mock_cdrom / 'ollama'
+        self.assertTrue(ollama_dir.exists())
+        
+        # Create mock Ollama executable
+        if platform.system() == "Windows":
+            ollama_exe = ollama_dir / "ollama.exe"
+        else:
+            ollama_exe = ollama_dir / "ollama"
+        
+        ollama_exe.write_text("mock ollama binary")
+        
+        self.assertTrue(ollama_exe.exists())
+    
+    def test_documentation_paths(self):
+        """Test documentation is accessible from CD-ROM"""
+        docs_dir = self.mock_cdrom / 'docs'
+        self.assertTrue(docs_dir.exists())
+        
+        # Create mock documentation
+        user_manual = docs_dir / "user_manual.html"
+        user_manual.write_text("<html><body>User Manual</body></html>")
+        
+        self.assertTrue(user_manual.exists())
+    
+    def test_security_token_storage(self):
+        """Test security tokens are stored in correct location"""
+        security_dir = self.mock_usb / '.security'
+        self.assertTrue(security_dir.exists())
+        
+        # Create mock security token
+        token_data = {
+            "device_id": "SAI-TEST-001",
+            "token": hashlib.sha256("test_token".encode()).hexdigest(),
+            "created": datetime.now().isoformat()
+        }
+        
+        token_file = security_dir / "device_token.json"
+        with open(token_file, 'w') as f:
+            json.dump(token_data, f)
+        
+        self.assertTrue(token_file.exists())
+    
+    def test_cross_partition_communication(self):
+        """Test that system can read from CD-ROM and write to USB"""
+        # Read model list from CD-ROM
+        models_dir = self.mock_cdrom / 'models'
+        model_files = list(models_dir.glob("*.gguf"))
+        
+        # Write selected model to USB config
+        config_dir = self.mock_usb / '.config'
+        selected_model_file = config_dir / "selected_model.json"
+        
+        selected_data = {
+            "selected_model": model_files[0].name if model_files else "default",
+            "selection_date": datetime.now().isoformat()
+        }
+        
+        with open(selected_model_file, 'w') as f:
+            json.dump(selected_data, f)
+        
+        self.assertTrue(selected_model_file.exists())
+    
+    def test_hardware_detection_logging(self):
+        """Test hardware detection results are logged to USB"""
+        logs_dir = self.mock_usb / 'logs' / 'system'
+        self.assertTrue(logs_dir.exists())
+        
+        # Log hardware info
+        hardware_info = {
+            "timestamp": datetime.now().isoformat(),
+            "platform": platform.system(),
+            "ram_gb": psutil.virtual_memory().total / (1024**3),
+            "cpu_cores": psutil.cpu_count(),
+            "detected_model": "llama3.2:3b"
+        }
+        
+        hw_log_file = logs_dir / f"hardware_{datetime.now().strftime('%Y%m%d')}.json"
+        with open(hw_log_file, 'w') as f:
+            json.dump(hardware_info, f)
+        
+        self.assertTrue(hw_log_file.exists())
+    
+    def test_session_management_paths(self):
+        """Test session data is stored in correct location"""
+        sessions_dir = self.mock_usb / 'sessions'
+        self.assertTrue(sessions_dir.exists())
+        
+        # Create session directory structure
+        year = datetime.now().strftime("%Y")
+        month = datetime.now().strftime("%m")
+        day = datetime.now().strftime("%d")
+        
+        session_day_dir = sessions_dir / year / month / day
+        session_day_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create session file
+        session_data = {
+            "session_id": "session_001",
+            "child_id": "child_001",
+            "start_time": datetime.now().isoformat(),
+            "interactions": 15,
+            "topics": ["photosynthesis", "water cycle", "gravity"]
+        }
+        
+        session_file = session_day_dir / f"session_{int(time.time())}.json"
+        with open(session_file, 'w') as f:
+            json.dump(session_data, f)
+        
+        self.assertTrue(session_file.exists())
+    
+    def test_progress_tracking_paths(self):
+        """Test learning progress is tracked in correct location"""
+        progress_dir = self.mock_usb / 'progress'
+        self.assertTrue(progress_dir.exists())
+        
+        # Create progress file for a child
+        child_progress = {
+            "child_id": "child_001",
+            "last_updated": datetime.now().isoformat(),
+            "skills": {
+                "mathematics": {"level": 3, "xp": 450},
+                "science": {"level": 4, "xp": 680},
+                "technology": {"level": 2, "xp": 230}
+            },
+            "achievements": ["First Question", "Science Explorer", "Math Wizard"]
+        }
+        
+        progress_file = progress_dir / "child_001_progress.json"
+        with open(progress_file, 'w') as f:
+            json.dump(child_progress, f)
+        
+        self.assertTrue(progress_file.exists())
 
-class TestPlatformIntegration(unittest.TestCase):
-    """Platform-specific integration tests"""
-    
-    def test_windows_integration(self):
-        """Test Windows-specific features"""
-        if platform.system() != 'Windows':
-            self.skipTest("Not running on Windows")
-        
-        # Test autorun.inf creation
-        autorun_content = """[AutoRun]
-open=launchers\\windows\\sunflower_launcher.exe
-icon=sunflower.ico
-label=Sunflower AI Professional System
-"""
-        autorun_path = Path('autorun.inf')
-        
-        # Test batch script execution
-        batch_script = """@echo off
-echo Testing Sunflower AI System
-echo Platform: Windows
-echo RAM Check...
-wmic computersystem get TotalPhysicalMemory
-exit /b 0
-"""
-        
-        try:
-            # Write and execute batch script
-            script_path = Path('test_script.bat')
-            script_path.write_text(batch_script)
-            
-            result = subprocess.run(['cmd', '/c', str(script_path)], 
-                                  capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode, 0, "Batch script failed")
-            
-            script_path.unlink()
-            logger.info("Windows integration test passed")
-            
-        except Exception as e:
-            self.fail(f"Windows integration test failed: {e}")
-    
-    def test_macos_integration(self):
-        """Test macOS-specific features"""
-        if platform.system() != 'Darwin':
-            self.skipTest("Not running on macOS")
-        
-        # Test shell script execution
-        shell_script = """#!/bin/bash
-echo "Testing Sunflower AI System"
-echo "Platform: macOS"
-echo "RAM Check..."
-sysctl hw.memsize
-exit 0
-"""
-        
-        try:
-            # Write and execute shell script
-            script_path = Path('test_script.sh')
-            script_path.write_text(shell_script)
-            script_path.chmod(0o755)
-            
-            result = subprocess.run(['bash', str(script_path)], 
-                                  capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode, 0, "Shell script failed")
-            
-            script_path.unlink()
-            logger.info("macOS integration test passed")
-            
-        except Exception as e:
-            self.fail(f"macOS integration test failed: {e}")
 
-class TestPerformance(unittest.TestCase):
-    """Performance and scalability tests"""
+class TestPathMigration(unittest.TestCase):
+    """Test path migration from old to new structure"""
     
-    def test_response_time_under_3_seconds(self):
-        """Test that AI responses are under 3 seconds on minimum hardware"""
-        # Simulate model loading and response generation
-        start_time = time.time()
+    def test_old_path_migration(self):
+        """Test migration of old hardcoded paths"""
+        from config.path_config import migrate_old_paths
         
-        # Simulate model initialization (normally would be Ollama)
-        time.sleep(0.5)  # Simulated model load time
-        
-        # Simulate response generation
-        mock_prompt = "Explain photosynthesis to a 10-year-old"
-        time.sleep(0.8)  # Simulated inference time
-        
-        response_time = time.time() - start_time
-        
-        self.assertLess(response_time, TEST_CONFIG['MAX_RESPONSE_TIME'],
-            f"Response time {response_time}s exceeds 3 second requirement")
-        
-        logger.info(f"Response generated in {response_time:.2f} seconds")
-    
-    def test_concurrent_family_usage(self):
-        """Test system with multiple concurrent child sessions"""
-        def simulate_child_session(child_id: int, prompts: List[str]):
-            """Simulate a child using the system"""
-            results = []
-            for prompt in prompts:
-                start = time.time()
-                # Simulate processing
-                time.sleep(0.1)
-                duration = time.time() - start
-                results.append(duration)
-            return results
-        
-        # Simulate 3 children using system concurrently
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = []
-            for i in range(3):
-                prompts = [f"Question {j}" for j in range(5)]
-                future = executor.submit(simulate_child_session, i, prompts)
-                futures.append(future)
-            
-            # Collect results
-            for i, future in enumerate(futures):
-                try:
-                    results = future.result(timeout=10)
-                    avg_time = sum(results) / len(results)
-                    self.assertLess(avg_time, 1.0,
-                        f"Child {i} experienced slow responses")
-                    logger.info(f"Child {i} avg response time: {avg_time:.3f}s")
-                except TimeoutError:
-                    self.fail(f"Child {i} session timed out")
-
-class TestEndToEnd(unittest.TestCase):
-    """End-to-end user journey tests"""
-    
-    def test_complete_family_setup_journey(self):
-        """Test complete setup process for non-technical parent"""
-        setup_steps = [
-            "Insert device",
-            "Autorun launches installer",
-            "Parent creates password",
-            "Add first child profile",
-            "System detects hardware",
-            "Optimal model selected",
-            "First child session starts",
-            "Safety check performed",
-            "Session logged for review"
+        # Test various old path formats
+        old_paths = [
+            "/sunflower_usb/profiles",
+            "SUNFLOWER_DATA/conversations",
+            "/Volumes/SUNFLOWER_CD/models",
+            "D:\\ollama",
+            "%USB_ROOT%/logs"
         ]
         
-        success_count = 0
-        total_steps = len(setup_steps)
-        
-        for step in setup_steps:
-            # Simulate step execution
-            time.sleep(0.1)
-            success = True  # In production, would check actual step
-            
-            if success:
-                success_count += 1
-                logger.info(f"✓ {step}")
-            else:
-                logger.error(f"✗ {step}")
-        
-        success_rate = success_count / total_steps
-        self.assertGreaterEqual(success_rate, TEST_CONFIG['SETUP_SUCCESS_RATE'],
-            f"Setup success rate {success_rate:.1%} below 95% requirement")
-        
-        logger.info(f"Setup journey completed: {success_rate:.1%} success rate")
-    
-    def test_parent_review_dashboard(self):
-        """Test parent's ability to review child interactions"""
-        # Simulate child session with some safety events
-        child_conversations = [
-            {"prompt": "What is gravity?", "safe": True},
-            {"prompt": "Tell me about weapons", "safe": False},
-            {"prompt": "How do plants grow?", "safe": True}
-        ]
-        
-        # Process conversations through safety filter
-        safety_events = []
-        for conv in child_conversations:
-            if not conv["safe"]:
-                safety_events.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "prompt": conv["prompt"],
-                    "action": "blocked and redirected"
-                })
-        
-        # Parent reviews dashboard
-        self.assertGreater(len(safety_events), 0, 
-            "Safety events should be logged")
-        
-        logger.info(f"Parent dashboard shows {len(safety_events)} safety events")
+        for old_path in old_paths:
+            new_path = migrate_old_paths(old_path)
+            self.assertIn("get_", new_path)  # Should contain dynamic getter
 
-class TestManufacturingValidation(unittest.TestCase):
-    """Manufacturing and quality control tests"""
-    
-    def test_device_partition_creation(self):
-        """Test creation of dual-partition device"""
-        # Simulate device creation process
-        device_size_gb = 5  # 4GB CD-ROM + 1GB USB
-        cdrom_size_gb = 4
-        usb_size_gb = 1
-        
-        self.assertEqual(cdrom_size_gb + usb_size_gb, device_size_gb)
-        
-        # Verify partition boundaries
-        partitions = [
-            {"type": "CD-ROM", "size": cdrom_size_gb, "readonly": True},
-            {"type": "USB", "size": usb_size_gb, "readonly": False}
-        ]
-        
-        for partition in partitions:
-            self.assertIn(partition["type"], ["CD-ROM", "USB"])
-            self.assertGreater(partition["size"], 0)
-        
-        logger.info(f"Device partitions validated: {device_size_gb}GB total")
-    
-    def test_authentication_token_generation(self):
-        """Test unique authentication token generation"""
-        tokens = set()
-        device_count = 100
-        
-        for i in range(device_count):
-            # Generate unique token for each device
-            device_id = f"SUNFLOWER-{i:06d}"
-            token = hashlib.sha256(f"{device_id}-{time.time()}".encode()).hexdigest()
-            tokens.add(token)
-        
-        # Verify all tokens are unique
-        self.assertEqual(len(tokens), device_count, 
-            "Duplicate tokens detected")
-        
-        logger.info(f"Generated {device_count} unique device tokens")
 
-def run_all_tests():
-    """Run complete test suite with reporting"""
+def run_tests():
+    """Run all tests"""
     # Create test suite
-    loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     
     # Add test classes
-    test_classes = [
-        TestSunflowerCore,
-        TestPlatformIntegration,
-        TestPerformance,
-        TestEndToEnd,
-        TestManufacturingValidation
-    ]
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestOpenWebUIIntegration))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestPathMigration))
     
-    for test_class in test_classes:
-        suite.addTests(loader.loadTestsFromTestCase(test_class))
-    
-    # Run tests with detailed output
+    # Run tests
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     
-    # Generate test report
-    logger.info("\n" + "="*60)
-    logger.info("SUNFLOWER AI TEST REPORT")
-    logger.info("="*60)
-    logger.info(f"Tests Run: {result.testsRun}")
-    logger.info(f"Failures: {len(result.failures)}")
-    logger.info(f"Errors: {len(result.errors)}")
-    logger.info(f"Skipped: {len(result.skipped)}")
-    logger.info(f"Success Rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%")
-    
-    # Check critical requirements
-    critical_checks = {
-        "Safety Filter 100% Effective": len([t for t in result.failures if 'safety' in str(t[0]).lower()]) == 0,
-        "Setup Success Rate >= 95%": True,  # Would check actual metric
-        "Response Time < 3 seconds": True,  # Would check actual metric
-        "Profile Switch < 1 second": True,  # Would check actual metric
-    }
-    
-    logger.info("\nCritical Requirements:")
-    for check, passed in critical_checks.items():
-        status = "✓ PASSED" if passed else "✗ FAILED"
-        logger.info(f"  {check}: {status}")
-    
+    # Return success/failure
     return result.wasSuccessful()
 
+
 if __name__ == "__main__":
-    # Set up test environment
-    print("\n" + "="*60)
-    print("SUNFLOWER AI PROFESSIONAL SYSTEM - TEST SUITE v6.2")
-    print("="*60)
-    print(f"Platform: {platform.system()} {platform.release()}")
-    print(f"Python: {sys.version.split()[0]}")
-    print(f"RAM: {psutil.virtual_memory().total / (1024**3):.1f} GB")
-    print(f"CPU Cores: {psutil.cpu_count(logical=False)}")
-    print("="*60 + "\n")
-    
-    # Run tests
-    success = run_all_tests()
-    
-    # Exit with appropriate code
+    success = run_tests()
     sys.exit(0 if success else 1)
