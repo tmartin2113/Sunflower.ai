@@ -1,772 +1,486 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Common Launcher Components
-Shared components for Windows and macOS launchers
-Version: 6.2
+Sunflower AI Professional System - Common Launcher Module
+Shared functionality for Windows and macOS launchers
+Version: 6.2.0 - Production Ready
 """
 
 import os
 import sys
-import json
-import sqlite3
-import hashlib
-import secrets
-import logging
 import platform
 import subprocess
-import psutil
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from pathlib import Path
-from typing import Dict, Optional, List, Tuple, Any
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-import uuid
-import threading
-import queue
+import json
 import time
+import psutil
+import socket
+import hashlib
+import sqlite3
+import threading
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime, timedelta
+from dataclasses import dataclass
+import tkinter as tk
+from tkinter import messagebox, ttk, filedialog
+import webbrowser
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
-# ==================== ENUMS ====================
-class SafetyLevel(Enum):
-    """Safety levels for child profiles"""
-    MAXIMUM = "maximum"  # Ages 5-7
-    HIGH = "high"        # Ages 8-10
-    MODERATE = "moderate" # Ages 11-13  
-    STANDARD = "standard" # Ages 14-17
-
-
-class ModelTier(Enum):
-    """Model performance tiers"""
-    HIGH = "llama3.2:7b"
-    MID = "llama3.2:3b"
-    LOW = "llama3.2:1b"
-    MINIMAL = "llama3.2:1b-q4_0"
-
-
-class SystemStatus(Enum):
-    """System operation status"""
-    INITIALIZING = "initializing"
-    READY = "ready"
-    LOADING = "loading"
-    RUNNING = "running"
-    ERROR = "error"
-    SHUTDOWN = "shutdown"
-
-
-# ==================== DATA CLASSES ====================
-@dataclass
-class ChildProfile:
-    """Child profile information"""
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = ""
-    age: int = 10
-    grade_level: int = 5
-    safety_level: SafetyLevel = SafetyLevel.HIGH
-    interests: List[str] = field(default_factory=list)
-    learning_style: str = "visual"
-    created_at: datetime = field(default_factory=datetime.now)
-    last_active: Optional[datetime] = None
-    total_sessions: int = 0
-    total_learning_time: timedelta = timedelta()
-    blocked_topics: List[str] = field(default_factory=list)
-    vocabulary_level: str = "grade_appropriate"
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for storage"""
-        return {
-            "id": self.id,
-            "name": self.name,
-            "age": self.age,
-            "grade_level": self.grade_level,
-            "safety_level": self.safety_level.value,
-            "interests": json.dumps(self.interests),
-            "learning_style": self.learning_style,
-            "created_at": self.created_at.isoformat(),
-            "last_active": self.last_active.isoformat() if self.last_active else None,
-            "total_sessions": self.total_sessions,
-            "total_learning_time": self.total_learning_time.total_seconds(),
-            "blocked_topics": json.dumps(self.blocked_topics),
-            "vocabulary_level": self.vocabulary_level
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'ChildProfile':
-        """Create from dictionary"""
-        profile = cls()
-        profile.id = data.get("id", str(uuid.uuid4()))
-        profile.name = data.get("name", "")
-        profile.age = data.get("age", 10)
-        profile.grade_level = data.get("grade_level", 5)
-        profile.safety_level = SafetyLevel(data.get("safety_level", "high"))
-        profile.interests = json.loads(data.get("interests", "[]"))
-        profile.learning_style = data.get("learning_style", "visual")
-        profile.created_at = datetime.fromisoformat(data.get("created_at", datetime.now().isoformat()))
-        if data.get("last_active"):
-            profile.last_active = datetime.fromisoformat(data["last_active"])
-        profile.total_sessions = data.get("total_sessions", 0)
-        profile.total_learning_time = timedelta(seconds=data.get("total_learning_time", 0))
-        profile.blocked_topics = json.loads(data.get("blocked_topics", "[]"))
-        profile.vocabulary_level = data.get("vocabulary_level", "grade_appropriate")
-        return profile
+logger = logging.getLogger('SunflowerLauncher')
 
 
 @dataclass
-class FamilyAccount:
-    """Family account information"""
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    family_name: str = ""
-    parent_email: str = ""
-    password_hash: str = ""
-    salt: str = ""
-    children: List[ChildProfile] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.now)
-    last_login: Optional[datetime] = None
-    subscription_tier: str = "standard"
-    device_id: str = ""
-    security_questions: Dict[str, str] = field(default_factory=dict)
-    two_factor_enabled: bool = False
-    session_timeout_minutes: int = 60
-    max_children: int = 10
+class SystemConfig:
+    """System configuration data"""
+    platform: str
+    cdrom_path: Path
+    usb_path: Path
+    model_variant: str
+    hardware_tier: str
+    ram_gb: float
+    cpu_cores: int
+    ollama_port: int = 11434
+    webui_port: int = 8080
 
 
-# ==================== PROFILE MANAGER ====================
-class ProfileManager:
-    """Manages family profiles and child accounts"""
-    
-    def __init__(self, usb_path: Path):
-        self.usb_path = usb_path
-        self.db_path = usb_path / "profiles" / "family_profiles.db"
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_database()
-        self.logger = logging.getLogger(__name__)
-        
-        # Security
-        self.max_login_attempts = 5
-        self.lockout_duration = timedelta(minutes=30)
-        self.failed_attempts = {}
-        self.lockout_until = {}
-    
-    def _init_database(self):
-        """Initialize the profiles database"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        # Create families table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS families (
-                id TEXT PRIMARY KEY,
-                family_name TEXT NOT NULL,
-                parent_email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_login TEXT,
-                subscription_tier TEXT DEFAULT 'standard',
-                device_id TEXT,
-                security_questions TEXT,
-                two_factor_enabled INTEGER DEFAULT 0,
-                session_timeout_minutes INTEGER DEFAULT 60,
-                max_children INTEGER DEFAULT 10
-            )
-        """)
-        
-        # Create children table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS children (
-                id TEXT PRIMARY KEY,
-                family_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                age INTEGER NOT NULL,
-                grade_level INTEGER NOT NULL,
-                safety_level TEXT NOT NULL,
-                interests TEXT,
-                learning_style TEXT DEFAULT 'visual',
-                created_at TEXT NOT NULL,
-                last_active TEXT,
-                total_sessions INTEGER DEFAULT 0,
-                total_learning_time REAL DEFAULT 0,
-                blocked_topics TEXT,
-                vocabulary_level TEXT DEFAULT 'grade_appropriate',
-                FOREIGN KEY (family_id) REFERENCES families (id) ON DELETE CASCADE
-            )
-        """)
-        
-        # Create sessions table for audit trail
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                child_id TEXT NOT NULL,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                duration_seconds REAL,
-                topics_covered TEXT,
-                safety_incidents INTEGER DEFAULT 0,
-                parent_reviewed INTEGER DEFAULT 0,
-                FOREIGN KEY (child_id) REFERENCES children (id) ON DELETE CASCADE
-            )
-        """)
-        
-        # Create indexes for performance
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_family_email ON families (parent_email)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_child_family ON children (family_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_child ON sessions (child_id)")
-        
-        conn.commit()
-        conn.close()
-    
-    def create_family(self, family_name: str, parent_email: str, password: str) -> str:
-        """Create new family account"""
-        # Check if email already exists
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT id FROM families WHERE parent_email = ?", (parent_email,))
-        if cursor.fetchone():
-            conn.close()
-            raise ValueError("Email already registered")
-        
-        # Generate salt and hash password
-        salt = secrets.token_hex(32)
-        password_hash = self._hash_password(password, salt)
-        
-        # Create family account
-        family_id = str(uuid.uuid4())
-        cursor.execute("""
-            INSERT INTO families (id, family_name, parent_email, password_hash, salt, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (family_id, family_name, parent_email, password_hash, salt, datetime.now().isoformat()))
-        
-        conn.commit()
-        conn.close()
-        
-        self.logger.info(f"Created family account: {family_name} ({parent_email})")
-        return family_id
-    
-    def authenticate_parent(self, email: str, password: str) -> Optional[str]:
-        """Authenticate parent login"""
-        # Check lockout
-        if email in self.lockout_until:
-            if datetime.now() < self.lockout_until[email]:
-                remaining = (self.lockout_until[email] - datetime.now()).seconds // 60
-                self.logger.warning(f"Account locked: {email} ({remaining} minutes remaining)")
-                return None
-            else:
-                del self.lockout_until[email]
-                self.failed_attempts[email] = 0
-        
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, password_hash, salt FROM families WHERE parent_email = ?
-        """, (email,))
-        
-        result = cursor.fetchone()
-        if not result:
-            conn.close()
-            self._record_failed_attempt(email)
-            return None
-        
-        family_id, stored_hash, salt = result
-        
-        # Verify password
-        if self._hash_password(password, salt) == stored_hash:
-            # Update last login
-            cursor.execute("""
-                UPDATE families SET last_login = ? WHERE id = ?
-            """, (datetime.now().isoformat(), family_id))
-            conn.commit()
-            conn.close()
-            
-            # Reset failed attempts
-            self.failed_attempts[email] = 0
-            
-            self.logger.info(f"Successful login: {email}")
-            return family_id
-        else:
-            conn.close()
-            self._record_failed_attempt(email)
-            return None
-    
-    def _record_failed_attempt(self, email: str):
-        """Record failed login attempt"""
-        if email not in self.failed_attempts:
-            self.failed_attempts[email] = 0
-        
-        self.failed_attempts[email] += 1
-        
-        if self.failed_attempts[email] >= self.max_login_attempts:
-            self.lockout_until[email] = datetime.now() + self.lockout_duration
-            self.logger.warning(f"Account locked due to failed attempts: {email}")
-    
-    def _hash_password(self, password: str, salt: str) -> str:
-        """Hash password with salt using PBKDF2"""
-        key = hashlib.pbkdf2_hmac(
-            'sha256',
-            password.encode('utf-8'),
-            salt.encode('utf-8'),
-            100000  # iterations
-        )
-        return key.hex()
-    
-    def add_child(self, family_id: str, child: ChildProfile) -> str:
-        """Add child profile to family"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        # Check family exists
-        cursor.execute("SELECT id FROM families WHERE id = ?", (family_id,))
-        if not cursor.fetchone():
-            conn.close()
-            raise ValueError("Family not found")
-        
-        # Check child limit
-        cursor.execute("SELECT COUNT(*) FROM children WHERE family_id = ?", (family_id,))
-        count = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT max_children FROM families WHERE id = ?", (family_id,))
-        max_children = cursor.fetchone()[0]
-        
-        if count >= max_children:
-            conn.close()
-            raise ValueError(f"Maximum number of children ({max_children}) reached")
-        
-        # Add child
-        cursor.execute("""
-            INSERT INTO children (
-                id, family_id, name, age, grade_level, safety_level,
-                interests, learning_style, created_at, total_sessions,
-                total_learning_time, blocked_topics, vocabulary_level
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            child.id, family_id, child.name, child.age, child.grade_level,
-            child.safety_level.value, json.dumps(child.interests),
-            child.learning_style, child.created_at.isoformat(),
-            child.total_sessions, child.total_learning_time.total_seconds(),
-            json.dumps(child.blocked_topics), child.vocabulary_level
-        ))
-        
-        conn.commit()
-        conn.close()
-        
-        self.logger.info(f"Added child profile: {child.name} to family {family_id}")
-        return child.id
-    
-    def get_children(self, family_id: str) -> List[ChildProfile]:
-        """Get all children for a family"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM children WHERE family_id = ? ORDER BY name
-        """, (family_id,))
-        
-        children = []
-        for row in cursor.fetchall():
-            child = ChildProfile(
-                id=row[0],
-                name=row[2],
-                age=row[3],
-                grade_level=row[4],
-                safety_level=SafetyLevel(row[5]),
-                interests=json.loads(row[6] or "[]"),
-                learning_style=row[7],
-                created_at=datetime.fromisoformat(row[8]),
-                last_active=datetime.fromisoformat(row[9]) if row[9] else None,
-                total_sessions=row[10],
-                total_learning_time=timedelta(seconds=row[11]),
-                blocked_topics=json.loads(row[12] or "[]"),
-                vocabulary_level=row[13]
-            )
-            children.append(child)
-        
-        conn.close()
-        return children
-    
-    def update_child(self, child: ChildProfile):
-        """Update child profile"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            UPDATE children SET
-                name = ?, age = ?, grade_level = ?, safety_level = ?,
-                interests = ?, learning_style = ?, last_active = ?,
-                total_sessions = ?, total_learning_time = ?,
-                blocked_topics = ?, vocabulary_level = ?
-            WHERE id = ?
-        """, (
-            child.name, child.age, child.grade_level, child.safety_level.value,
-            json.dumps(child.interests), child.learning_style,
-            child.last_active.isoformat() if child.last_active else None,
-            child.total_sessions, child.total_learning_time.total_seconds(),
-            json.dumps(child.blocked_topics), child.vocabulary_level,
-            child.id
-        ))
-        
-        conn.commit()
-        conn.close()
-        
-        self.logger.info(f"Updated child profile: {child.name}")
-    
-    def start_session(self, child_id: str) -> str:
-        """Start learning session for child"""
-        session_id = str(uuid.uuid4())
-        
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        # Create session record
-        cursor.execute("""
-            INSERT INTO sessions (id, child_id, start_time)
-            VALUES (?, ?, ?)
-        """, (session_id, child_id, datetime.now().isoformat()))
-        
-        # Update child's last active
-        cursor.execute("""
-            UPDATE children SET last_active = ? WHERE id = ?
-        """, (datetime.now().isoformat(), child_id))
-        
-        conn.commit()
-        conn.close()
-        
-        self.logger.info(f"Started session {session_id} for child {child_id}")
-        return session_id
-    
-    def end_session(self, session_id: str, topics_covered: List[str] = None, 
-                   safety_incidents: int = 0):
-        """End learning session"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        # Get session start time
-        cursor.execute("SELECT start_time, child_id FROM sessions WHERE id = ?", (session_id,))
-        result = cursor.fetchone()
-        if not result:
-            conn.close()
-            return
-        
-        start_time = datetime.fromisoformat(result[0])
-        child_id = result[1]
-        duration = (datetime.now() - start_time).total_seconds()
-        
-        # Update session
-        cursor.execute("""
-            UPDATE sessions SET
-                end_time = ?, duration_seconds = ?, topics_covered = ?, safety_incidents = ?
-            WHERE id = ?
-        """, (
-            datetime.now().isoformat(), duration,
-            json.dumps(topics_covered or []), safety_incidents, session_id
-        ))
-        
-        # Update child stats
-        cursor.execute("""
-            UPDATE children SET
-                total_sessions = total_sessions + 1,
-                total_learning_time = total_learning_time + ?
-            WHERE id = ?
-        """, (duration, child_id))
-        
-        conn.commit()
-        conn.close()
-        
-        self.logger.info(f"Ended session {session_id} (duration: {duration:.0f}s)")
-    
-    def get_session_history(self, child_id: str, limit: int = 50) -> List[Dict]:
-        """Get session history for child"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT * FROM sessions 
-            WHERE child_id = ? 
-            ORDER BY start_time DESC 
-            LIMIT ?
-        """, (child_id, limit))
-        
-        sessions = []
-        for row in cursor.fetchall():
-            session = {
-                "id": row[0],
-                "child_id": row[1],
-                "start_time": row[2],
-                "end_time": row[3],
-                "duration_seconds": row[4],
-                "topics_covered": json.loads(row[5] or "[]"),
-                "safety_incidents": row[6],
-                "parent_reviewed": bool(row[7])
-            }
-            sessions.append(session)
-        
-        conn.close()
-        return sessions
-    
-    def mark_session_reviewed(self, session_id: str):
-        """Mark session as reviewed by parent"""
-        conn = sqlite3.connect(str(self.db_path))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            UPDATE sessions SET parent_reviewed = 1 WHERE id = ?
-        """, (session_id,))
-        
-        conn.commit()
-        conn.close()
-        
-        self.logger.info(f"Session {session_id} marked as reviewed")
-
-
-# ==================== HARDWARE DETECTOR ====================
-class HardwareDetector:
-    """Detects system hardware capabilities"""
+class PartitionDetector:
+    """Detect and validate partitioned device"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
         self.platform = platform.system()
+        self.cdrom_path = None
+        self.usb_path = None
+    
+    def detect_partitions(self) -> Tuple[Optional[Path], Optional[Path]]:
+        """Detect CD-ROM and USB partitions"""
+        if self.platform == "Windows":
+            return self._detect_windows()
+        elif self.platform == "Darwin":
+            return self._detect_macos()
+        else:
+            return self._detect_linux()
+    
+    def _detect_windows(self) -> Tuple[Optional[Path], Optional[Path]]:
+        """Detect partitions on Windows"""
+        import win32api
+        import win32file
         
-    def get_system_info(self) -> Dict[str, Any]:
+        cdrom_path = None
+        usb_path = None
+        
+        drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
+        
+        for drive in drives:
+            drive_type = win32file.GetDriveType(drive)
+            
+            # Check for CD-ROM partition marker
+            marker_file = Path(drive) / "sunflower_cd.id"
+            if marker_file.exists():
+                cdrom_path = Path(drive)
+                logger.info(f"Found CD-ROM partition: {cdrom_path}")
+            
+            # Check for USB data partition marker
+            data_marker = Path(drive) / "sunflower_data.id"
+            if data_marker.exists():
+                usb_path = Path(drive)
+                logger.info(f"Found USB partition: {usb_path}")
+        
+        return cdrom_path, usb_path
+    
+    def _detect_macos(self) -> Tuple[Optional[Path], Optional[Path]]:
+        """Detect partitions on macOS"""
+        cdrom_path = None
+        usb_path = None
+        
+        volumes_path = Path("/Volumes")
+        
+        for volume in volumes_path.iterdir():
+            if volume.is_dir():
+                # Check for partition markers
+                cd_marker = volume / "sunflower_cd.id"
+                data_marker = volume / "sunflower_data.id"
+                
+                if cd_marker.exists():
+                    cdrom_path = volume
+                    logger.info(f"Found CD-ROM partition: {cdrom_path}")
+                
+                if data_marker.exists():
+                    usb_path = volume
+                    logger.info(f"Found USB partition: {usb_path}")
+        
+        return cdrom_path, usb_path
+    
+    def _detect_linux(self) -> Tuple[Optional[Path], Optional[Path]]:
+        """Detect partitions on Linux"""
+        cdrom_path = None
+        usb_path = None
+        
+        # Check common mount points
+        mount_points = [
+            Path("/media"),
+            Path("/mnt"),
+            Path("/run/media") / os.environ.get("USER", "")
+        ]
+        
+        for mount_base in mount_points:
+            if not mount_base.exists():
+                continue
+            
+            for mount in mount_base.iterdir():
+                if mount.is_dir():
+                    cd_marker = mount / "sunflower_cd.id"
+                    data_marker = mount / "sunflower_data.id"
+                    
+                    if cd_marker.exists():
+                        cdrom_path = mount
+                        logger.info(f"Found CD-ROM partition: {cdrom_path}")
+                    
+                    if data_marker.exists():
+                        usb_path = mount
+                        logger.info(f"Found USB partition: {usb_path}")
+        
+        return cdrom_path, usb_path
+
+
+class HardwareDetector:
+    """Detect hardware capabilities for model selection"""
+    
+    @staticmethod
+    def get_system_info() -> Dict[str, Any]:
         """Get comprehensive system information"""
         info = {
-            "platform": self.platform,
-            "platform_version": platform.version(),
-            "architecture": platform.machine(),
-            "processor": platform.processor(),
-            "cpu_count": psutil.cpu_count(logical=False),
-            "cpu_threads": psutil.cpu_count(logical=True),
-            "ram_gb": round(psutil.virtual_memory().total / (1024**3), 1),
-            "ram_available_gb": round(psutil.virtual_memory().available / (1024**3), 1),
-            "disk_total_gb": round(psutil.disk_usage('/').total / (1024**3), 1),
-            "disk_free_gb": round(psutil.disk_usage('/').free / (1024**3), 1),
-            "gpu_available": self._detect_gpu(),
-            "performance_score": self._calculate_performance_score()
+            'platform': platform.system(),
+            'architecture': platform.machine(),
+            'processor': platform.processor(),
+            'ram_gb': psutil.virtual_memory().total / (1024**3),
+            'ram_available_gb': psutil.virtual_memory().available / (1024**3),
+            'cpu_cores': psutil.cpu_count(logical=False),
+            'cpu_threads': psutil.cpu_count(logical=True),
+            'cpu_freq': psutil.cpu_freq().current if psutil.cpu_freq() else 0,
+            'disk_free_gb': psutil.disk_usage('/').free / (1024**3)
         }
         
-        self.logger.info(f"System info: {info}")
+        # Determine hardware tier
+        ram_gb = info['ram_gb']
+        cpu_cores = info['cpu_cores']
+        
+        if ram_gb >= 16 and cpu_cores >= 8:
+            info['tier'] = 'high'
+            info['recommended_model'] = 'llama3.2:7b'
+        elif ram_gb >= 8 and cpu_cores >= 4:
+            info['tier'] = 'medium'
+            info['recommended_model'] = 'llama3.2:3b'
+        elif ram_gb >= 4:
+            info['tier'] = 'low'
+            info['recommended_model'] = 'llama3.2:1b'
+        else:
+            info['tier'] = 'minimum'
+            info['recommended_model'] = 'llama3.2:1b-q4_0'
+        
         return info
-    
-    def _detect_gpu(self) -> bool:
-        """Detect if GPU is available"""
-        try:
-            if self.platform == "Windows":
-                result = subprocess.run(
-                    ["wmic", "path", "win32_VideoController", "get", "name"],
-                    capture_output=True, text=True, timeout=5
-                )
-                return "NVIDIA" in result.stdout or "AMD" in result.stdout
-            elif self.platform == "Darwin":
-                result = subprocess.run(
-                    ["system_profiler", "SPDisplaysDataType"],
-                    capture_output=True, text=True, timeout=5
-                )
-                return "GPU" in result.stdout or "Metal" in result.stdout
-            else:
-                # Linux
-                try:
-                    result = subprocess.run(
-                        ["lspci"], capture_output=True, text=True, timeout=5
-                    )
-                    return "VGA" in result.stdout or "3D" in result.stdout
-                except:
-                    return False
-        except:
-            return False
-    
-    def _calculate_performance_score(self) -> int:
-        """Calculate system performance score (0-100)"""
-        score = 0
-        
-        # CPU score (max 40 points)
-        cpu_threads = psutil.cpu_count(logical=True)
-        score += min(cpu_threads * 5, 40)
-        
-        # RAM score (max 40 points)
-        ram_gb = psutil.virtual_memory().total / (1024**3)
-        score += min(ram_gb * 2.5, 40)
-        
-        # GPU bonus (20 points)
-        if self._detect_gpu():
-            score += 20
-        
-        return min(score, 100)
-    
-    def select_optimal_model(self) -> ModelTier:
-        """Select optimal model based on hardware"""
-        info = self.get_system_info()
-        score = info["performance_score"]
-        ram_gb = info["ram_gb"]
-        
-        if score >= 80 and ram_gb >= 16:
-            return ModelTier.HIGH
-        elif score >= 60 and ram_gb >= 8:
-            return ModelTier.MID
-        elif score >= 40 and ram_gb >= 4:
-            return ModelTier.LOW
-        else:
-            return ModelTier.MINIMAL
 
 
-# ==================== OLLAMA MANAGER ====================
 class OllamaManager:
-    """Manages Ollama service and model operations"""
+    """Manage Ollama service lifecycle"""
     
-    def __init__(self, cdrom_path: Path, usb_path: Path, model: str):
+    def __init__(self, cdrom_path: Path, config: SystemConfig):
         self.cdrom_path = cdrom_path
-        self.usb_path = usb_path
-        self.model = model
-        self.platform = platform.system()
-        
-        # Determine Ollama executable path
-        if self.platform == "Windows":
-            self.ollama_exe = cdrom_path / "system" / "ollama" / "ollama.exe"
-        else:
-            self.ollama_exe = cdrom_path / "system" / "ollama" / "ollama"
-        
-        self.ollama_home = usb_path / "ollama_data"
-        self.ollama_home.mkdir(exist_ok=True)
+        self.config = config
         self.process = None
-        self.logger = logging.getLogger(__name__)
-        self.service_ready = False
+        self.ollama_path = self._find_ollama_executable()
+    
+    def _find_ollama_executable(self) -> Optional[Path]:
+        """Find Ollama executable on CD-ROM partition"""
+        if self.config.platform == "Windows":
+            ollama_exe = self.cdrom_path / "ollama" / "ollama.exe"
+        else:
+            ollama_exe = self.cdrom_path / "ollama" / "ollama"
+        
+        if ollama_exe.exists():
+            return ollama_exe
+        
+        # Try root of CD-ROM
+        if self.config.platform == "Windows":
+            ollama_exe = self.cdrom_path / "ollama.exe"
+        else:
+            ollama_exe = self.cdrom_path / "ollama"
+        
+        if ollama_exe.exists():
+            return ollama_exe
+        
+        logger.warning("Ollama executable not found on CD-ROM")
+        return None
     
     def start_service(self) -> bool:
         """Start Ollama service"""
-        if not self.ollama_exe.exists():
-            self.logger.error(f"Ollama executable not found: {self.ollama_exe}")
+        if not self.ollama_path:
+            logger.error("Cannot start Ollama - executable not found")
             return False
         
-        env = os.environ.copy()
-        env["OLLAMA_HOME"] = str(self.ollama_home)
-        env["OLLAMA_MODELS"] = str(self.cdrom_path / "system" / "models")
-        
         try:
+            # Check if already running
+            if self.is_running():
+                logger.info("Ollama already running")
+                return True
+            
+            # Start Ollama service
+            env = os.environ.copy()
+            env['OLLAMA_HOST'] = f"0.0.0.0:{self.config.ollama_port}"
+            env['OLLAMA_MODELS'] = str(self.cdrom_path / "models")
+            
             self.process = subprocess.Popen(
-                [str(self.ollama_exe), "serve"],
+                [str(self.ollama_path), "serve"],
                 env=env,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if self.config.platform == "Windows" else 0
             )
             
             # Wait for service to be ready
-            import requests
-            max_attempts = 30
-            for attempt in range(max_attempts):
-                try:
-                    response = requests.get("http://localhost:11434/api/tags", timeout=1)
-                    if response.status_code == 200:
-                        self.service_ready = True
-                        self.logger.info("Ollama service started successfully")
-                        return True
-                except:
-                    pass
+            for _ in range(30):
+                if self.is_running():
+                    logger.info("Ollama service started successfully")
+                    return True
                 time.sleep(1)
             
-            self.logger.error("Ollama service failed to start in time")
+            logger.error("Ollama service failed to start")
             return False
             
         except Exception as e:
-            self.logger.error(f"Failed to start Ollama: {e}")
+            logger.error(f"Failed to start Ollama: {e}")
+            return False
+    
+    def is_running(self) -> bool:
+        """Check if Ollama is running"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('localhost', self.config.ollama_port))
+            sock.close()
+            return result == 0
+        except:
             return False
     
     def stop_service(self):
         """Stop Ollama service"""
         if self.process:
-            self.process.terminate()
             try:
-                self.process.wait(timeout=10)
+                self.process.terminate()
+                self.process.wait(timeout=5)
             except:
-                self.process.kill()
-            self.process = None
-            self.service_ready = False
-            self.logger.info("Ollama service stopped")
-    
-    def load_model(self) -> bool:
-        """Load the specified model"""
-        if not self.service_ready:
-            self.logger.error("Ollama service not ready")
-            return False
-        
-        try:
-            import requests
-            
-            # Check if model exists
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                models = response.json().get("models", [])
-                model_names = [m.get("name") for m in models]
-                
-                if self.model in model_names:
-                    self.logger.info(f"Model {self.model} is available")
-                    return True
+                if self.config.platform == "Windows":
+                    subprocess.run(["taskkill", "/F", "/IM", "ollama.exe"], 
+                                 capture_output=True)
                 else:
-                    # Try to load from file
-                    model_file = self.cdrom_path / "system" / "models" / f"{self.model}.gguf"
-                    if model_file.exists():
-                        return self._import_model(model_file)
-                    else:
-                        self.logger.error(f"Model {self.model} not found")
-                        return False
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load model: {e}")
-            return False
+                    subprocess.run(["pkill", "-f", "ollama"], 
+                                 capture_output=True)
+            self.process = None
+            logger.info("Ollama service stopped")
     
-    def _import_model(self, model_file: Path) -> bool:
-        """Import model from file"""
-        try:
-            result = subprocess.run(
-                [str(self.ollama_exe), "create", self.model, "-f", str(model_file)],
-                capture_output=True, text=True, timeout=60
-            )
-            
-            if result.returncode == 0:
-                self.logger.info(f"Model {self.model} imported successfully")
-                return True
-            else:
-                self.logger.error(f"Model import failed: {result.stderr}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Failed to import model: {e}")
-            return False
-    
-    def test_model(self) -> bool:
-        """Test model with a simple query"""
-        if not self.service_ready:
-            return False
+    def load_model(self, model_name: Optional[str] = None) -> bool:
+        """Load specified model or auto-detect best model"""
+        if not model_name:
+            model_name = self.config.model_variant
         
         try:
-            import requests
+            # Check if model exists
+            model_path = self.cdrom_path / "models" / f"{model_name}.gguf"
+            if not model_path.exists():
+                logger.warning(f"Model file not found: {model_path}")
+                # Try to pull from Ollama library if online
+                result = subprocess.run(
+                    [str(self.ollama_path), "pull", model_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
+                if result.returncode != 0:
+                    return False
             
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": "Hello",
-                    "stream": False
-                },
+            # Load the model
+            result = subprocess.run(
+                [str(self.ollama_path), "run", model_name, "hello"],
+                capture_output=True,
+                text=True,
                 timeout=30
             )
             
-            if response.status_code == 200:
-                self.logger.info("Model test successful")
-                return True
-            else:
-                self.logger.error(f"Model test failed: {response.status_code}")
-                return False
-                
+            return result.returncode == 0
+            
         except Exception as e:
-            self.logger.error(f"Model test failed: {e}")
+            logger.error(f"Failed to load model: {e}")
             return False
 
 
-# ==================== MAIN LAUNCHER UI ====================
+class ProfileManager:
+    """Manage family and child profiles"""
+    
+    def __init__(self, usb_path: Path):
+        self.usb_path = usb_path
+        self.profiles_dir = usb_path / "profiles"
+        self.profiles_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.profiles_dir / "profiles.db"
+        self._init_database()
+    
+    def _init_database(self):
+        """Initialize profiles database"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        # Create tables
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS family (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                family_name TEXT NOT NULL,
+                parent_password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                settings TEXT
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS children (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                family_id INTEGER,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                grade TEXT,
+                avatar TEXT,
+                settings TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (family_id) REFERENCES family (id)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                child_id INTEGER,
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time TIMESTAMP,
+                duration_minutes INTEGER,
+                interactions INTEGER DEFAULT 0,
+                topics TEXT,
+                FOREIGN KEY (child_id) REFERENCES children (id)
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+    
+    def authenticate_parent(self, password: str) -> bool:
+        """Verify parent password"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT parent_password_hash FROM family LIMIT 1")
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result:
+            return False
+        
+        stored_hash = result[0]
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        return password_hash == stored_hash
+    
+    def create_family(self, family_name: str, password: str) -> bool:
+        """Create new family account"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        # Check if family already exists
+        cursor.execute("SELECT COUNT(*) FROM family")
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            return False
+        
+        # Create family
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        cursor.execute(
+            "INSERT INTO family (family_name, parent_password_hash) VALUES (?, ?)",
+            (family_name, password_hash)
+        )
+        
+        conn.commit()
+        conn.close()
+        return True
+    
+    def add_child_profile(self, name: str, age: int, grade: str = None, 
+                         avatar: str = "🦄") -> int:
+        """Add a child profile"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        # Get family ID
+        cursor.execute("SELECT id FROM family LIMIT 1")
+        family_id = cursor.fetchone()[0]
+        
+        # Add child
+        cursor.execute(
+            "INSERT INTO children (family_id, name, age, grade, avatar) VALUES (?, ?, ?, ?, ?)",
+            (family_id, name, age, grade, avatar)
+        )
+        
+        child_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return child_id
+    
+    def get_children(self) -> List[Dict]:
+        """Get all child profiles"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, name, age, grade, avatar FROM children")
+        children = []
+        for row in cursor.fetchall():
+            children.append({
+                'id': row[0],
+                'name': row[1],
+                'age': row[2],
+                'grade': row[3],
+                'avatar': row[4]
+            })
+        
+        conn.close()
+        return children
+    
+    def start_session(self, child_id: int) -> int:
+        """Start a new session for a child"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT INTO sessions (child_id) VALUES (?)",
+            (child_id,)
+        )
+        
+        session_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return session_id
+    
+    def end_session(self, session_id: int):
+        """End a session"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "UPDATE sessions SET end_time = CURRENT_TIMESTAMP WHERE id = ?",
+            (session_id,)
+        )
+        
+        conn.commit()
+        conn.close()
+
+
 class SunflowerLauncherUI:
     """Main launcher user interface"""
     
@@ -774,328 +488,440 @@ class SunflowerLauncherUI:
         self.cdrom_path = cdrom_path
         self.usb_path = usb_path
         
-        # Initialize components
-        self.profile_manager = ProfileManager(usb_path)
-        self.hardware_detector = HardwareDetector()
-        self.model_tier = self.hardware_detector.select_optimal_model()
-        self.ollama_manager = OllamaManager(cdrom_path, usb_path, self.model_tier.value)
+        # Initialize system configuration
+        hardware_info = HardwareDetector.get_system_info()
+        self.config = SystemConfig(
+            platform=platform.system(),
+            cdrom_path=cdrom_path,
+            usb_path=usb_path,
+            model_variant=hardware_info['recommended_model'],
+            hardware_tier=hardware_info['tier'],
+            ram_gb=hardware_info['ram_gb'],
+            cpu_cores=hardware_info['cpu_cores']
+        )
         
-        # Current session
-        self.current_family_id = None
-        self.current_child_id = None
+        # Initialize managers
+        self.ollama_manager = OllamaManager(cdrom_path, self.config)
+        self.profile_manager = ProfileManager(usb_path)
+        
+        # Session tracking
         self.current_session_id = None
         
-        # Initialize UI
+        # Create UI
+        self.create_ui()
+    
+    def create_ui(self):
+        """Create the main user interface"""
         self.root = tk.Tk()
-        self.root.title("Sunflower AI Professional System")
+        self.root.title("🌻 Sunflower AI Professional System")
         self.root.geometry("800x600")
         self.root.resizable(False, False)
         
-        # Apply modern styling
+        # Apply styling
         self.setup_styles()
         
-        # Build UI
-        self.build_ui()
+        # Create header
+        self.create_header()
+        
+        # Create main content area
+        self.content_frame = ttk.Frame(self.root)
+        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        # Check if family exists
+        if not self.check_family_exists():
+            self.show_family_setup()
+        else:
+            self.show_login()
+        
+        # Create status bar
+        self.create_status_bar()
         
         # Start background services
         self.start_services()
     
     def setup_styles(self):
-        """Configure modern UI styling"""
+        """Configure UI styles"""
         style = ttk.Style()
         style.theme_use('clam')
         
         # Configure colors
-        colors = {
-            'bg': '#f0f4f8',
-            'primary': '#5e72e4',
-            'success': '#2dce89',
-            'warning': '#fb6340',
-            'text': '#32325d'
-        }
-        
-        self.root.configure(bg=colors['bg'])
-        
-        # Configure styles
-        style.configure('Title.TLabel', font=('Helvetica', 24, 'bold'))
-        style.configure('Heading.TLabel', font=('Helvetica', 14, 'bold'))
-        style.configure('Primary.TButton', font=('Helvetica', 11))
+        style.configure('Header.TFrame', background='#5e72e4')
+        style.configure('Header.TLabel', background='#5e72e4', foreground='white',
+                       font=('Segoe UI', 18, 'bold'))
+        style.configure('Success.TButton', foreground='green')
+        style.configure('Warning.TButton', foreground='orange')
     
-    def build_ui(self):
-        """Build the main UI"""
-        self.show_login_screen()
+    def create_header(self):
+        """Create application header"""
+        header_frame = ttk.Frame(self.root, style='Header.TFrame', height=80)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+        
+        title_label = ttk.Label(
+            header_frame,
+            text="🌻 Sunflower AI Professional System",
+            style='Header.TLabel'
+        )
+        title_label.pack(pady=20)
+        
+        subtitle_label = ttk.Label(
+            header_frame,
+            text="Family-Focused K-12 STEM Education",
+            style='Header.TLabel',
+            font=('Segoe UI', 11)
+        )
+        subtitle_label.pack()
     
-    def show_login_screen(self):
-        """Display the login/registration screen"""
-        # Clear window
-        for widget in self.root.winfo_children():
+    def create_status_bar(self):
+        """Create status bar"""
+        status_frame = ttk.Frame(self.root)
+        status_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.status_label = ttk.Label(
+            status_frame,
+            text=f"Hardware: {self.config.hardware_tier.upper()} | Model: {self.config.model_variant}",
+            relief=tk.SUNKEN,
+            anchor=tk.W
+        )
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    
+    def check_family_exists(self) -> bool:
+        """Check if a family account exists"""
+        db_path = self.usb_path / "profiles" / "profiles.db"
+        if not db_path.exists():
+            return False
+        
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM family")
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        return count > 0
+    
+    def show_family_setup(self):
+        """Show family setup screen"""
+        # Clear content frame
+        for widget in self.content_frame.winfo_children():
             widget.destroy()
         
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="50")
-        main_frame.pack(expand=True, fill=tk.BOTH)
+        setup_frame = ttk.Frame(self.content_frame)
+        setup_frame.pack(pady=50)
         
-        # Title
-        title = ttk.Label(main_frame, text="Welcome to Sunflower AI", style='Title.TLabel')
-        title.pack(pady=20)
+        ttk.Label(
+            setup_frame,
+            text="Welcome! Let's set up your family account",
+            font=('Segoe UI', 14, 'bold')
+        ).grid(row=0, column=0, columnspan=2, pady=20)
         
-        subtitle = ttk.Label(main_frame, text="Family-Focused K-12 STEM Education")
-        subtitle.pack(pady=10)
+        ttk.Label(setup_frame, text="Family Name:").grid(row=1, column=0, sticky=tk.E, padx=5, pady=5)
+        self.family_name_entry = ttk.Entry(setup_frame, width=30)
+        self.family_name_entry.grid(row=1, column=1, padx=5, pady=5)
         
-        # Login frame
-        login_frame = ttk.LabelFrame(main_frame, text="Parent Login", padding="20")
-        login_frame.pack(pady=20)
+        ttk.Label(setup_frame, text="Parent Password:").grid(row=2, column=0, sticky=tk.E, padx=5, pady=5)
+        self.password_entry = ttk.Entry(setup_frame, width=30, show="*")
+        self.password_entry.grid(row=2, column=1, padx=5, pady=5)
         
-        # Email
-        ttk.Label(login_frame, text="Email:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.email_var = tk.StringVar()
-        email_entry = ttk.Entry(login_frame, textvariable=self.email_var, width=30)
-        email_entry.grid(row=0, column=1, pady=5)
+        ttk.Label(setup_frame, text="Confirm Password:").grid(row=3, column=0, sticky=tk.E, padx=5, pady=5)
+        self.confirm_password_entry = ttk.Entry(setup_frame, width=30, show="*")
+        self.confirm_password_entry.grid(row=3, column=1, padx=5, pady=5)
         
-        # Password
-        ttk.Label(login_frame, text="Password:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.password_var = tk.StringVar()
-        password_entry = ttk.Entry(login_frame, textvariable=self.password_var, show="*", width=30)
-        password_entry.grid(row=1, column=1, pady=5)
-        
-        # Buttons
-        button_frame = ttk.Frame(login_frame)
-        button_frame.grid(row=2, column=0, columnspan=2, pady=20)
-        
-        ttk.Button(button_frame, text="Login", command=self.handle_login, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Register", command=self.show_registration, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
-        
-        # Status
-        self.status_label = ttk.Label(main_frame, text="System Ready", foreground="green")
-        self.status_label.pack(pady=10)
+        ttk.Button(
+            setup_frame,
+            text="Create Family Account",
+            command=self.create_family_account
+        ).grid(row=4, column=0, columnspan=2, pady=20)
     
-    def show_registration(self):
-        """Show registration dialog"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Create Family Account")
-        dialog.geometry("400x300")
+    def create_family_account(self):
+        """Create new family account"""
+        family_name = self.family_name_entry.get()
+        password = self.password_entry.get()
+        confirm = self.confirm_password_entry.get()
         
-        fields = {}
+        if not family_name or not password:
+            messagebox.showerror("Error", "Please fill in all fields")
+            return
         
-        ttk.Label(dialog, text="Family Name:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['family'] = ttk.Entry(dialog, width=30)
-        fields['family'].grid(row=0, column=1, pady=5, padx=10)
+        if password != confirm:
+            messagebox.showerror("Error", "Passwords do not match")
+            return
         
-        ttk.Label(dialog, text="Parent Email:").grid(row=1, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['email'] = ttk.Entry(dialog, width=30)
-        fields['email'].grid(row=1, column=1, pady=5, padx=10)
+        if len(password) < 6:
+            messagebox.showerror("Error", "Password must be at least 6 characters")
+            return
         
-        ttk.Label(dialog, text="Password:").grid(row=2, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['password'] = ttk.Entry(dialog, show="*", width=30)
-        fields['password'].grid(row=2, column=1, pady=5, padx=10)
-        
-        ttk.Label(dialog, text="Confirm Password:").grid(row=3, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['confirm'] = ttk.Entry(dialog, show="*", width=30)
-        fields['confirm'].grid(row=3, column=1, pady=5, padx=10)
-        
-        def register():
-            if fields['password'].get() != fields['confirm'].get():
-                messagebox.showerror("Error", "Passwords don't match")
-                return
-            
-            if len(fields['password'].get()) < 8:
-                messagebox.showerror("Error", "Password must be at least 8 characters")
-                return
-            
-            try:
-                family_id = self.profile_manager.create_family(
-                    fields['family'].get(),
-                    fields['email'].get(),
-                    fields['password'].get()
-                )
-                messagebox.showinfo("Success", "Account created! You can now login.")
-                dialog.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-        
-        ttk.Button(dialog, text="Register", command=register).grid(row=4, column=0, columnspan=2, pady=20)
+        if self.profile_manager.create_family(family_name, password):
+            messagebox.showinfo("Success", "Family account created successfully!")
+            self.show_child_setup()
+        else:
+            messagebox.showerror("Error", "Failed to create family account")
     
-    def handle_login(self):
-        """Handle parent login"""
-        family_id = self.profile_manager.authenticate_parent(
-            self.email_var.get(),
-            self.password_var.get()
-        )
+    def show_login(self):
+        """Show parent login screen"""
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
         
-        if family_id:
-            self.current_family_id = family_id
+        login_frame = ttk.Frame(self.content_frame)
+        login_frame.pack(pady=100)
+        
+        ttk.Label(
+            login_frame,
+            text="Parent Login",
+            font=('Segoe UI', 16, 'bold')
+        ).grid(row=0, column=0, columnspan=2, pady=20)
+        
+        ttk.Label(login_frame, text="Password:").grid(row=1, column=0, sticky=tk.E, padx=5, pady=5)
+        self.login_password_entry = ttk.Entry(login_frame, width=30, show="*")
+        self.login_password_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.login_password_entry.bind('<Return>', lambda e: self.parent_login())
+        
+        ttk.Button(
+            login_frame,
+            text="Login",
+            command=self.parent_login
+        ).grid(row=2, column=0, columnspan=2, pady=20)
+    
+    def parent_login(self):
+        """Authenticate parent"""
+        password = self.login_password_entry.get()
+        
+        if self.profile_manager.authenticate_parent(password):
             self.show_child_selection()
         else:
-            messagebox.showerror("Login Failed", "Invalid email or password")
+            messagebox.showerror("Error", "Invalid password")
+    
+    def show_child_setup(self):
+        """Show child profile setup"""
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+        
+        setup_frame = ttk.Frame(self.content_frame)
+        setup_frame.pack(pady=50)
+        
+        ttk.Label(
+            setup_frame,
+            text="Add Your First Child",
+            font=('Segoe UI', 14, 'bold')
+        ).grid(row=0, column=0, columnspan=2, pady=20)
+        
+        ttk.Label(setup_frame, text="Child's Name:").grid(row=1, column=0, sticky=tk.E, padx=5, pady=5)
+        self.child_name_entry = ttk.Entry(setup_frame, width=30)
+        self.child_name_entry.grid(row=1, column=1, padx=5, pady=5)
+        
+        ttk.Label(setup_frame, text="Age:").grid(row=2, column=0, sticky=tk.E, padx=5, pady=5)
+        self.age_spinbox = ttk.Spinbox(setup_frame, from_=2, to=18, width=10)
+        self.age_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        ttk.Label(setup_frame, text="Grade:").grid(row=3, column=0, sticky=tk.E, padx=5, pady=5)
+        self.grade_combo = ttk.Combobox(setup_frame, width=27, values=[
+            "Pre-K", "Kindergarten", "1st Grade", "2nd Grade", "3rd Grade",
+            "4th Grade", "5th Grade", "6th Grade", "7th Grade", "8th Grade",
+            "9th Grade", "10th Grade", "11th Grade", "12th Grade"
+        ])
+        self.grade_combo.grid(row=3, column=1, padx=5, pady=5)
+        
+        ttk.Label(setup_frame, text="Avatar:").grid(row=4, column=0, sticky=tk.E, padx=5, pady=5)
+        avatar_frame = ttk.Frame(setup_frame)
+        avatar_frame.grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        self.avatar_var = tk.StringVar(value="🦄")
+        avatars = ["🦄", "🚀", "🎮", "🎨", "🏀", "🎭", "🎸", "🦖"]
+        for i, avatar in enumerate(avatars):
+            ttk.Radiobutton(
+                avatar_frame,
+                text=avatar,
+                variable=self.avatar_var,
+                value=avatar
+            ).grid(row=0, column=i, padx=2)
+        
+        button_frame = ttk.Frame(setup_frame)
+        button_frame.grid(row=5, column=0, columnspan=2, pady=20)
+        
+        ttk.Button(
+            button_frame,
+            text="Add Child",
+            command=self.add_child
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            button_frame,
+            text="Skip for Now",
+            command=self.show_main_menu
+        ).pack(side=tk.LEFT, padx=5)
+    
+    def add_child(self):
+        """Add a child profile"""
+        name = self.child_name_entry.get()
+        age = int(self.age_spinbox.get())
+        grade = self.grade_combo.get()
+        avatar = self.avatar_var.get()
+        
+        if not name:
+            messagebox.showerror("Error", "Please enter child's name")
+            return
+        
+        child_id = self.profile_manager.add_child_profile(name, age, grade, avatar)
+        messagebox.showinfo("Success", f"{name}'s profile created!")
+        
+        # Ask if they want to add another child
+        if messagebox.askyesno("Add Another", "Would you like to add another child?"):
+            self.child_name_entry.delete(0, tk.END)
+            self.age_spinbox.set(2)
+            self.grade_combo.set("")
+        else:
+            self.show_child_selection()
     
     def show_child_selection(self):
         """Show child profile selection screen"""
-        # Clear window
-        for widget in self.root.winfo_children():
+        for widget in self.content_frame.winfo_children():
             widget.destroy()
         
-        main_frame = ttk.Frame(self.root, padding="30")
-        main_frame.pack(expand=True, fill=tk.BOTH)
+        selection_frame = ttk.Frame(self.content_frame)
+        selection_frame.pack(pady=50)
         
-        # Title
-        title = ttk.Label(main_frame, text="Select Child Profile", style='Title.TLabel')
-        title.pack(pady=20)
+        ttk.Label(
+            selection_frame,
+            text="Who's Learning Today?",
+            font=('Segoe UI', 16, 'bold')
+        ).pack(pady=20)
         
-        # Get children
-        children = self.profile_manager.get_children(self.current_family_id)
+        children = self.profile_manager.get_children()
         
         if not children:
-            # No children yet, show add child
-            ttk.Label(main_frame, text="No child profiles found. Please add a child.").pack(pady=20)
-            ttk.Button(main_frame, text="Add Child", command=self.show_add_child).pack()
+            ttk.Label(
+                selection_frame,
+                text="No child profiles found. Please add a child first.",
+                font=('Segoe UI', 11)
+            ).pack(pady=20)
+            
+            ttk.Button(
+                selection_frame,
+                text="Add Child",
+                command=self.show_child_setup
+            ).pack(pady=10)
         else:
-            # List children
-            for child in children:
-                frame = ttk.Frame(main_frame)
-                frame.pack(pady=10, fill=tk.X)
+            # Create grid of child buttons
+            button_frame = ttk.Frame(selection_frame)
+            button_frame.pack(pady=20)
+            
+            for i, child in enumerate(children):
+                row = i // 3
+                col = i % 3
                 
-                btn = ttk.Button(frame, text=f"{child.name} (Age {child.age})",
-                               command=lambda c=child: self.start_child_session(c))
-                btn.pack(side=tk.LEFT, padx=10)
-                
-                info = f"Grade {child.grade_level} | {child.total_sessions} sessions"
-                ttk.Label(frame, text=info).pack(side=tk.LEFT)
+                btn = tk.Button(
+                    button_frame,
+                    text=f"{child['avatar']}\n{child['name']}\nAge {child['age']}",
+                    width=15,
+                    height=5,
+                    font=('Segoe UI', 11),
+                    command=lambda c=child: self.select_child(c)
+                )
+                btn.grid(row=row, column=col, padx=10, pady=10)
             
-            # Add child button
-            ttk.Button(main_frame, text="Add Another Child", command=self.show_add_child).pack(pady=20)
-        
-        # Parent dashboard button
-        ttk.Button(main_frame, text="Parent Dashboard", command=self.show_parent_dashboard).pack(pady=10)
-        
-        # Logout button
-        ttk.Button(main_frame, text="Logout", command=self.show_login_screen).pack(pady=10)
-    
-    def show_add_child(self):
-        """Show add child dialog"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Add Child Profile")
-        dialog.geometry("400x400")
-        
-        fields = {}
-        
-        ttk.Label(dialog, text="Child's Name:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['name'] = ttk.Entry(dialog, width=30)
-        fields['name'].grid(row=0, column=1, pady=5, padx=10)
-        
-        ttk.Label(dialog, text="Age:").grid(row=1, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['age'] = ttk.Spinbox(dialog, from_=5, to=17, width=10)
-        fields['age'].grid(row=1, column=1, pady=5, padx=10, sticky=tk.W)
-        
-        ttk.Label(dialog, text="Grade Level:").grid(row=2, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['grade'] = ttk.Spinbox(dialog, from_=0, to=12, width=10)
-        fields['grade'].grid(row=2, column=1, pady=5, padx=10, sticky=tk.W)
-        
-        ttk.Label(dialog, text="Learning Style:").grid(row=3, column=0, sticky=tk.W, pady=5, padx=10)
-        fields['style'] = ttk.Combobox(dialog, values=["Visual", "Auditory", "Kinesthetic", "Reading/Writing"])
-        fields['style'].set("Visual")
-        fields['style'].grid(row=3, column=1, pady=5, padx=10)
-        
-        def add_child():
-            profile = ChildProfile(
-                name=fields['name'].get(),
-                age=int(fields['age'].get()),
-                grade_level=int(fields['grade'].get()),
-                learning_style=fields['style'].get().lower()
-            )
+            # Add parent options
+            parent_frame = ttk.Frame(selection_frame)
+            parent_frame.pack(pady=30)
             
-            # Set safety level based on age
-            if profile.age <= 7:
-                profile.safety_level = SafetyLevel.MAXIMUM
-            elif profile.age <= 10:
-                profile.safety_level = SafetyLevel.HIGH
-            elif profile.age <= 13:
-                profile.safety_level = SafetyLevel.MODERATE
-            else:
-                profile.safety_level = SafetyLevel.STANDARD
+            ttk.Button(
+                parent_frame,
+                text="Add New Child",
+                command=self.show_child_setup
+            ).pack(side=tk.LEFT, padx=5)
             
-            try:
-                self.profile_manager.add_child(self.current_family_id, profile)
-                messagebox.showinfo("Success", f"Added {profile.name} to your family!")
-                dialog.destroy()
-                self.show_child_selection()
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
+            ttk.Button(
+                parent_frame,
+                text="Parent Dashboard",
+                command=self.show_parent_dashboard
+            ).pack(side=tk.LEFT, padx=5)
+    
+    def select_child(self, child: Dict):
+        """Select a child profile and start session"""
+        # Start session
+        self.current_session_id = self.profile_manager.start_session(child['id'])
         
-        ttk.Button(dialog, text="Add Child", command=add_child).grid(row=4, column=0, columnspan=2, pady=20)
+        # Launch appropriate interface based on age
+        if child['age'] <= 13:
+            model = "sunflower-kids"
+        else:
+            model = "sunflower-educator"
+        
+        # Configure and launch
+        self.launch_ai_interface(child, model)
     
-    def start_child_session(self, child: ChildProfile):
-        """Start a learning session for a child"""
-        self.current_child_id = child.id
-        self.current_session_id = self.profile_manager.start_session(child.id)
-        self.show_learning_interface(child)
+    def launch_ai_interface(self, child: Dict, model: str):
+        """Launch the AI interface for selected child"""
+        # Update status
+        self.status_label.config(
+            text=f"Loading AI for {child['name']} (Age {child['age']})..."
+        )
+        
+        # Ensure Ollama is running
+        if not self.ollama_manager.is_running():
+            self.ollama_manager.start_service()
+        
+        # Load appropriate model
+        self.ollama_manager.load_model(model)
+        
+        # Open web interface
+        webbrowser.open(f"http://localhost:{self.config.webui_port}")
+        
+        # Show session controls
+        self.show_session_controls(child)
     
-    def show_learning_interface(self, child: ChildProfile):
-        """Show the main learning interface"""
-        # Clear window
-        for widget in self.root.winfo_children():
+    def show_session_controls(self, child: Dict):
+        """Show session control panel"""
+        for widget in self.content_frame.winfo_children():
             widget.destroy()
         
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(expand=True, fill=tk.BOTH)
+        control_frame = ttk.Frame(self.content_frame)
+        control_frame.pack(pady=50)
         
-        # Header
-        header = ttk.Frame(main_frame)
-        header.pack(fill=tk.X, pady=10)
+        ttk.Label(
+            control_frame,
+            text=f"{child['avatar']} {child['name']} is Learning!",
+            font=('Segoe UI', 18, 'bold')
+        ).pack(pady=20)
         
-        ttk.Label(header, text=f"Welcome, {child.name}!", style='Heading.TLabel').pack(side=tk.LEFT)
-        ttk.Button(header, text="End Session", command=self.end_session).pack(side=tk.RIGHT)
+        ttk.Label(
+            control_frame,
+            text="The AI interface has opened in your browser.",
+            font=('Segoe UI', 11)
+        ).pack(pady=10)
         
-        # Launch button
-        launch_frame = ttk.Frame(main_frame)
-        launch_frame.pack(expand=True)
+        ttk.Label(
+            control_frame,
+            text=f"Web Interface: http://localhost:{self.config.webui_port}",
+            font=('Segoe UI', 10),
+            foreground='blue'
+        ).pack(pady=5)
         
-        ttk.Button(launch_frame, text="Launch Sunflower AI", 
-                  command=self.launch_ai_interface, style='Primary.TButton').pack()
+        button_frame = ttk.Frame(control_frame)
+        button_frame.pack(pady=30)
         
-        self.status_label = ttk.Label(launch_frame, text="Ready to learn!", foreground="green")
-        self.status_label.pack(pady=10)
-    
-    def launch_ai_interface(self):
-        """Launch the main AI interface"""
-        # This would normally open the Open WebUI interface
-        # For now, show status
-        self.status_label.config(text="AI Interface launching... Opening browser to http://localhost:8080")
+        ttk.Button(
+            button_frame,
+            text="End Session",
+            command=self.end_session,
+            style='Warning.TButton'
+        ).pack(side=tk.LEFT, padx=5)
         
-        # Open browser
-        import webbrowser
-        webbrowser.open("http://localhost:8080")
+        ttk.Button(
+            button_frame,
+            text="Switch Child",
+            command=self.end_session
+        ).pack(side=tk.LEFT, padx=5)
     
     def show_parent_dashboard(self):
         """Show parent dashboard"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Parent Dashboard")
-        dialog.geometry("800x600")
-        
-        notebook = ttk.Notebook(dialog)
-        notebook.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
-        
-        # Children tab
-        children_frame = ttk.Frame(notebook)
-        notebook.add(children_frame, text="Children")
-        
-        children = self.profile_manager.get_children(self.current_family_id)
-        for child in children:
-            frame = ttk.LabelFrame(children_frame, text=child.name, padding="10")
-            frame.pack(fill=tk.X, padx=10, pady=5)
-            
-            info = f"""Age: {child.age} | Grade: {child.grade_level}
-Safety Level: {child.safety_level.value}
-Total Sessions: {child.total_sessions}
-Total Learning Time: {child.total_learning_time}"""
-            ttk.Label(frame, text=info).pack()
-        
-        # Sessions tab
-        sessions_frame = ttk.Frame(notebook)
-        notebook.add(sessions_frame, text="Recent Sessions")
-        
-        # Settings tab
-        settings_frame = ttk.Frame(notebook)
-        notebook.add(settings_frame, text="Settings")
+        dashboard_path = self.cdrom_path / "data" / "parent_dashboard.html"
+        if dashboard_path.exists():
+            webbrowser.open(f"file://{dashboard_path}")
+        else:
+            messagebox.showinfo("Dashboard", "Parent dashboard will be available soon!")
+    
+    def show_main_menu(self):
+        """Show main menu"""
+        self.show_child_selection()
     
     def end_session(self):
         """End current session"""
@@ -1162,12 +988,27 @@ def main():
     
     # Detect partitions if not provided
     if not args.cdrom_path or not args.usb_path:
-        # Try to auto-detect
-        cdrom_path = Path("/Volumes/SUNFLOWER_CD") if platform.system() == "Darwin" else Path("D:\\")
-        usb_path = Path("/Volumes/SUNFLOWER_DATA") if platform.system() == "Darwin" else Path("E:\\")
+        detector = PartitionDetector()
+        cdrom_path, usb_path = detector.detect_partitions()
+        
+        if not cdrom_path or not usb_path:
+            # Try manual fallback paths
+            if platform.system() == "Windows":
+                cdrom_path = Path("D:\\")
+                usb_path = Path("E:\\")
+            elif platform.system() == "Darwin":
+                cdrom_path = Path("/Volumes/SUNFLOWER_CD")
+                usb_path = Path("/Volumes/SUNFLOWER_DATA")
+            else:
+                cdrom_path = Path("/media/SUNFLOWER_CD")
+                usb_path = Path("/media/SUNFLOWER_DATA")
         
         if not cdrom_path.exists() or not usb_path.exists():
-            print("Error: Could not detect partitions. Please specify paths.")
+            messagebox.showerror(
+                "Partition Detection Failed",
+                "Could not detect Sunflower AI partitions.\n\n"
+                "Please ensure the device is properly connected and try again."
+            )
             sys.exit(1)
     else:
         cdrom_path = args.cdrom_path
