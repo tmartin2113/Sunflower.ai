@@ -1,68 +1,67 @@
 @echo off
 setlocal EnableDelayedExpansion
-chcp 65001 >nul 2>&1
-color 0E
-title Sunflower AI Professional System - Family Setup
+title Sunflower AI Professional System Launcher
 
-:: Sunflower AI Professional System - Windows Launcher
-:: Version: 6.2.0
-:: Copyright (c) 2025 Sunflower AI Educational Systems
-:: Production-Ready Universal Family Launcher
-
-:: ==================== SYSTEM CONSTANTS ====================
-set "SYSTEM_VERSION=6.2.0"
-set "MIN_RAM_GB=4"
+:: ==================== CONFIGURATION ====================
+set "VERSION=6.2.0"
+set "LOG_FILE=%TEMP%\sunflower_launcher_%DATE:~-4%%DATE:~4,2%%DATE:~7,2%.log"
 set "MIN_WINDOWS_BUILD=17134"
-set "LAUNCHER_PID=%RANDOM%"
-set "LOG_DIR=%TEMP%\SunflowerAI_Logs"
-set "CDROM_MARKER=SUNFLOWER_AI_SYSTEM"
-set "USB_MARKER=SUNFLOWER_USER_DATA"
+set "MIN_RAM_GB=4"
+set "CDROM_MARKER=SUNFLOWER_CD"
+set "USB_MARKER=SUNFLOWER_DATA"
 
-:: ==================== ERROR CODES ====================
-set "ERROR_INSUFFICIENT_PRIVILEGES=1001"
-set "ERROR_CDROM_NOT_FOUND=1002"
-set "ERROR_USB_NOT_FOUND=1003"
-set "ERROR_INSUFFICIENT_RAM=1004"
-set "ERROR_INCOMPATIBLE_OS=1005"
-set "ERROR_PYTHON_NOT_FOUND=1006"
-set "ERROR_INTEGRITY_CHECK_FAILED=1007"
+:: Error codes
+set ERROR_NO_ADMIN=1
+set ERROR_INCOMPATIBLE_OS=2
+set ERROR_INSUFFICIENT_RAM=3
+set ERROR_CDROM_NOT_FOUND=4
+set ERROR_USB_NOT_FOUND=5
+set ERROR_INTEGRITY_CHECK_FAILED=6
+set ERROR_PYTHON_NOT_FOUND=7
+set ERROR_OLLAMA_FAILED=8
 
-:: ==================== INITIALIZATION ====================
+:: ==================== LOGGING SETUP ====================
+:LogMessage
+    echo [%DATE% %TIME%] [%~1] %~2 >> "%LOG_FILE%"
+    if "%~1"=="ERROR" (
+        echo [ERROR] %~2
+    ) else if "%~1"=="INFO" (
+        echo [INFO] %~2
+    )
+    exit /b 0
+
+:: ==================== MAIN EXECUTION ====================
 cls
 echo.
 echo  ╔══════════════════════════════════════════════════════════════════╗
-echo  ║           SUNFLOWER AI PROFESSIONAL SYSTEM v%SYSTEM_VERSION%                ║
-echo  ║              Family-Focused K-12 STEM Education                  ║
+echo  ║              SUNFLOWER AI PROFESSIONAL SYSTEM v%VERSION%              ║
+echo  ║                   Family-Safe K-12 STEM Education                ║
 echo  ╚══════════════════════════════════════════════════════════════════╝
 echo.
-echo  Starting family setup wizard...
-echo.
 
-:: Create log directory
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
-set "LOG_FILE=%LOG_DIR%\launcher_%DATE:~-4%%DATE:~4,2%%DATE:~7,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%.log"
-set "LOG_FILE=!LOG_FILE: =0!"
+call :LogMessage "INFO" "Launcher started - Version %VERSION%"
 
-:: Log startup
-call :LogMessage "INFO" "Sunflower AI Launcher started - PID: %LAUNCHER_PID%"
+:: ==================== SYSTEM CHECKS ====================
+echo  [1/7] Checking system requirements...
 
-:: ==================== PRIVILEGE CHECK ====================
+:: Check for administrator privileges
 call :CheckAdminPrivileges
 if %ERRORLEVEL% neq 0 (
-    call :ShowUserError "Administrator Access Required" "Please right-click and select 'Run as Administrator'"
-    exit /b %ERROR_INSUFFICIENT_PRIVILEGES%
+    call :ShowUserError "Administrator Required" "Please run as Administrator"
+    exit /b %ERROR_NO_ADMIN%
 )
 
-:: ==================== SYSTEM VALIDATION ====================
-echo  [1/7] Checking system requirements...
+:: Validate Windows version
 call :ValidateWindowsVersion
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+:: Validate system RAM
 call :ValidateSystemRAM
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 :: ==================== PARTITION DETECTION ====================
 echo  [2/7] Detecting Sunflower AI device...
+
 call :DetectCDROMPartition
 if %ERRORLEVEL% neq 0 (
     call :ShowUserError "CD-ROM Partition Not Found" "Please ensure the Sunflower AI device is properly connected"
@@ -75,7 +74,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERROR_USB_NOT_FOUND%
 )
 
-:: ==================== INTEGRITY VERIFICATION ====================
+:: ==================== INTEGRITY CHECK ====================
 echo  [3/7] Verifying system integrity...
 call :VerifySystemIntegrity
 if %ERRORLEVEL% neq 0 (
@@ -167,76 +166,51 @@ exit /b 0
         if exist "%%D\" (
             vol %%D 2>nul | findstr /i "%CDROM_MARKER%" >nul
             if !ERRORLEVEL! equ 0 (
-                set "CDROM_PATH=%%D"
-                call :LogMessage "INFO" "CD-ROM partition found at !CDROM_PATH!"
-                goto :CDROMFound
-            )
-        )
-    )
-    
-    if "%CDROM_PATH%"=="" (
-        call :LogMessage "ERROR" "CD-ROM partition with marker %CDROM_MARKER% not found"
-        exit /b 1
-    )
-    
-    :CDROMFound
-    :: Verify expected structure
-    if not exist "%CDROM_PATH%\system\models\" (
-        call :LogMessage "ERROR" "CD-ROM partition missing system directory structure"
-        exit /b 1
-    )
-    
-    exit /b 0
-
-:DetectUSBPartition
-    set "USB_PATH="
-    
-    :: Detect USB writable partition by volume label
-    for %%D in (D: E: F: G: H: I: J: K: L: M: N: O: P: Q: R: S: T: U: V: W: X: Y: Z:) do (
-        if exist "%%D\" (
-            vol %%D 2>nul | findstr /i "%USB_MARKER%" >nul
-            if !ERRORLEVEL! equ 0 (
-                :: Verify it's writable
-                echo test > "%%D\write_test.tmp" 2>nul
-                if !ERRORLEVEL! equ 0 (
-                    del "%%D\write_test.tmp" 2>nul
-                    set "USB_PATH=%%D"
-                    call :LogMessage "INFO" "USB partition found at !USB_PATH!"
-                    goto :USBFound
+                if exist "%%D\sunflower_cd.id" (
+                    set "CDROM_PATH=%%D"
+                    call :LogMessage "INFO" "CD-ROM partition found at !CDROM_PATH!"
+                    exit /b 0
                 )
             )
         )
     )
     
-    if "%USB_PATH%"=="" (
-        call :LogMessage "ERROR" "USB writable partition with marker %USB_MARKER% not found"
-        exit /b 1
+    call :LogMessage "ERROR" "CD-ROM partition not found"
+    exit /b 1
+
+:DetectUSBPartition
+    set "USB_PATH="
+    
+    :: Detect USB partition by volume label
+    for %%D in (D: E: F: G: H: I: J: K: L: M: N: O: P: Q: R: S: T: U: V: W: X: Y: Z:) do (
+        if exist "%%D\" (
+            vol %%D 2>nul | findstr /i "%USB_MARKER%" >nul
+            if !ERRORLEVEL! equ 0 (
+                if exist "%%D\sunflower_data.id" (
+                    :: Test write permission
+                    echo test > "%%D\write_test.tmp" 2>nul
+                    if !ERRORLEVEL! equ 0 (
+                        del "%%D\write_test.tmp" 2>nul
+                        set "USB_PATH=%%D"
+                        call :LogMessage "INFO" "USB partition found at !USB_PATH!"
+                        exit /b 0
+                    )
+                )
+            )
+        )
     )
     
-    :USBFound
-    :: Create required directories if they don't exist
-    if not exist "%USB_PATH%\profiles" mkdir "%USB_PATH%\profiles"
-    if not exist "%USB_PATH%\conversations" mkdir "%USB_PATH%\conversations"
-    if not exist "%USB_PATH%\logs" mkdir "%USB_PATH%\logs"
-    if not exist "%USB_PATH%\config" mkdir "%USB_PATH%\config"
-    
-    exit /b 0
+    call :LogMessage "ERROR" "USB partition not found"
+    exit /b 1
 
 :VerifySystemIntegrity
-    set "MANIFEST_FILE=%CDROM_PATH%\system\integrity.manifest"
+    :: Check critical files exist
+    set "CRITICAL_FILES[0]=%CDROM_PATH%\system\launcher_common.py"
+    set "CRITICAL_FILES[1]=%CDROM_PATH%\system\ollama\ollama.exe"
+    set "CRITICAL_FILES[2]=%CDROM_PATH%\modelfiles\sunflower-kids.modelfile"
+    set "CRITICAL_FILES[3]=%CDROM_PATH%\modelfiles\sunflower-educator.modelfile"
     
-    if not exist "%MANIFEST_FILE%" (
-        call :LogMessage "WARNING" "Integrity manifest not found, skipping verification"
-        exit /b 0
-    )
-    
-    :: Verify critical files exist
-    set CRITICAL_FILES[0]=%CDROM_PATH%\system\launcher_common.py
-    set CRITICAL_FILES[1]=%CDROM_PATH%\system\models\Sunflower_AI_Kids.modelfile
-    set CRITICAL_FILES[2]=%CDROM_PATH%\system\models\Sunflower_AI_Educator.modelfile
-    set CRITICAL_FILES[3]=%CDROM_PATH%\system\ollama\ollama.exe
-    
-    for /l %%i in (0,1,3) do (
+    for /L %%i in (0,1,3) do (
         if not exist "!CRITICAL_FILES[%%i]!" (
             call :LogMessage "ERROR" "Critical file missing: !CRITICAL_FILES[%%i]!"
             exit /b 1
@@ -329,9 +303,40 @@ exit /b 0
     :: Wait for Ollama to be ready
     timeout /t 3 /nobreak >nul
     
-    :: Load the selected model
+    :: FIX: Validate SELECTED_MODEL before use
+    if not defined SELECTED_MODEL (
+        call :LogMessage "WARNING" "SELECTED_MODEL not set, using default"
+        set "SELECTED_MODEL=llama3.2:1b"
+    )
+    
+    if "!SELECTED_MODEL!"=="" (
+        call :LogMessage "WARNING" "SELECTED_MODEL is empty, using default"
+        set "SELECTED_MODEL=llama3.2:1b"
+    )
+    
+    :: Load the selected model with error handling
     call :LogMessage "INFO" "Loading AI model: !SELECTED_MODEL!"
-    "%OLLAMA_EXE%" pull "%OLLAMA_MODELS%\!SELECTED_MODEL!.bin" >nul 2>&1
+    
+    :: Check if model file exists before attempting to pull
+    if exist "%OLLAMA_MODELS%\!SELECTED_MODEL!.bin" (
+        "%OLLAMA_EXE%" pull "%OLLAMA_MODELS%\!SELECTED_MODEL!.bin" >"%USB_PATH%\logs\model_load.log" 2>&1
+        if !ERRORLEVEL! neq 0 (
+            call :LogMessage "ERROR" "Failed to load model !SELECTED_MODEL!, trying fallback"
+            :: Try fallback to smallest model
+            set "SELECTED_MODEL=llama3.2:1b-q4_0"
+            "%OLLAMA_EXE%" pull "%OLLAMA_MODELS%\!SELECTED_MODEL!.bin" >"%USB_PATH%\logs\model_load_fallback.log" 2>&1
+            if !ERRORLEVEL! neq 0 (
+                call :LogMessage "ERROR" "Failed to load fallback model"
+                call :ShowUserError "Model Loading Failed" "Unable to load AI model. Check logs for details."
+                exit /b %ERROR_OLLAMA_FAILED%
+            )
+        )
+        call :LogMessage "INFO" "Model !SELECTED_MODEL! loaded successfully"
+    ) else (
+        call :LogMessage "ERROR" "Model file not found: %OLLAMA_MODELS%\!SELECTED_MODEL!.bin"
+        call :ShowUserError "Model File Missing" "The AI model file is missing from the installation."
+        exit /b %ERROR_OLLAMA_FAILED%
+    )
     
     exit /b 0
 
@@ -369,22 +374,12 @@ exit /b 0
     echo  ║  %~2
     echo  ╚══════════════════════════════════════════════════════════════════╝
     echo.
-    echo  Press any key to exit...
-    pause >nul
-    exit /b 0
-
-:LogMessage
-    echo [%DATE% %TIME%] [%~1] %~2 >> "%LOG_FILE%"
-    exit /b 0
+    pause
+    exit /b 1
 
 :Cleanup
-    call :LogMessage "INFO" "Performing cleanup..."
-    
-    :: Stop Ollama service gracefully
+    :: Stop Ollama service
     taskkill /F /IM ollama.exe >nul 2>&1
-    
-    :: Clear temporary files
-    if exist "%TEMP%\build.txt" del "%TEMP%\build.txt"
     
     call :LogMessage "INFO" "Launcher shutdown complete"
     exit /b 0
