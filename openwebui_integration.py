@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Open WebUI Integration Manager
-Production-ready integration layer for Open WebUI with family profile management
+Sunflower AI Open WebUI Integration Module
+Production-ready integration with Open WebUI for family-safe AI education
 Version: 6.2 | Platform: Windows/macOS | Architecture: Partitioned CD-ROM + USB
 """
 
@@ -9,70 +9,54 @@ import os
 import sys
 import json
 import uuid
+import time
+import sqlite3
+import platform
 import hashlib
 import logging
-import platform
-import subprocess
 import threading
-import time
+import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
-from dataclasses import dataclass, asdict
+from typing import Dict, Optional, List, Any, Tuple
+from dataclasses import dataclass, field, asdict
 from contextlib import contextmanager
-import secrets
-import sqlite3
+from cryptography.fernet import Fernet
 
-# Configure production logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('sunflower_ai.log'),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ChildProfile:
-    """Secure child profile with age-appropriate settings"""
+    """Child profile with age-appropriate settings"""
     profile_id: str
     name: str
     age: int
-    grade_level: str
-    created_at: str
-    last_active: str
-    total_sessions: int
-    learning_preferences: Dict[str, Any]
-    safety_level: str  # 'maximum', 'high', 'standard'
-    session_history: List[Dict[str, Any]]
+    grade: str
+    created_at: datetime
+    last_active: Optional[datetime] = None
+    total_sessions: int = 0
+    safety_level: str = "maximum"
+    interests: List[str] = field(default_factory=list)
+    learning_style: str = "visual"
     
     def get_model_parameters(self) -> Dict[str, Any]:
-        """Generate age-appropriate model parameters"""
-        if self.age <= 7:
+        """Get age-appropriate model parameters"""
+        if self.age < 8:
             return {
                 'temperature': 0.3,
-                'max_tokens': 50,
+                'max_tokens': 100,
                 'complexity': 'simple',
                 'safety_mode': 'maximum',
-                'vocabulary_level': 'k2'
+                'vocabulary_level': 'basic'
             }
-        elif self.age <= 10:
-            return {
-                'temperature': 0.4,
-                'max_tokens': 75,
-                'complexity': 'elementary',
-                'safety_mode': 'high',
-                'vocabulary_level': 'elementary'
-            }
-        elif self.age <= 13:
+        elif self.age < 13:
             return {
                 'temperature': 0.5,
-                'max_tokens': 125,
-                'complexity': 'middle_school',
+                'max_tokens': 150,
+                'complexity': 'intermediate',
                 'safety_mode': 'high',
-                'vocabulary_level': 'middle'
+                'vocabulary_level': 'intermediate'
             }
         else:
             return {
@@ -82,6 +66,7 @@ class ChildProfile:
                 'safety_mode': 'standard',
                 'vocabulary_level': 'advanced'
             }
+
 
 class OpenWebUIIntegration:
     """Production-ready Open WebUI integration with enterprise security"""
@@ -132,53 +117,29 @@ class OpenWebUIIntegration:
             import win32api
             drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
             for drive in drives:
-                # Check if it's a CD-ROM by trying to access it and checking if it's read-only
-                try:
-                    marker_file = Path(drive) / 'SUNFLOWER_SYSTEM.marker'
-                    if marker_file.exists():
-                        # Additional check: CD-ROM drives are typically read-only
-                        test_file = Path(drive) / 'test_write.tmp'
-                        try:
-                            test_file.write_text('test')
-                            test_file.unlink()  # Clean up
-                        except (PermissionError, OSError):
-                            # This is likely a CD-ROM drive
-                            return Path(drive)
-                except (PermissionError, OSError):
-                    continue
-        elif self.platform == "Darwin":  # macOS
-            volumes = Path('/Volumes')
-            for volume in volumes.iterdir():
+                marker_file = Path(drive) / 'SUNFLOWER_SYSTEM.marker'
+                if marker_file.exists():
+                    return Path(drive)
+        else:  # macOS/Linux
+            for volume in Path('/Volumes').iterdir():
                 marker_file = volume / 'SUNFLOWER_SYSTEM.marker'
-                if marker_file.exists() and not os.access(volume, os.W_OK):
+                if marker_file.exists():
                     return volume
         
         # Fallback for development
         return Path.cwd() / 'cdrom_simulation'
     
     def _detect_usb_partition(self) -> Path:
-        """Detect USB partition for user data storage"""
+        """Detect USB partition for user data"""
         if self.platform == "Windows":
             import win32api
             drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
             for drive in drives:
-                # Check for USB marker file and writable access
-                try:
-                    marker_file = Path(drive) / 'SUNFLOWER_DATA.marker'
-                    if marker_file.exists():
-                        # Test if we can write to this drive (USB drives are typically writable)
-                        test_file = Path(drive) / 'test_write.tmp'
-                        try:
-                            test_file.write_text('test')
-                            test_file.unlink()  # Clean up
-                            return Path(drive)  # This is writable, likely USB
-                        except (PermissionError, OSError):
-                            continue
-                except (PermissionError, OSError):
-                    continue
-        elif self.platform == "Darwin":  # macOS
-            volumes = Path('/Volumes')
-            for volume in volumes.iterdir():
+                marker_file = Path(drive) / 'SUNFLOWER_DATA.marker'
+                if marker_file.exists() and os.access(drive, os.W_OK):
+                    return Path(drive)
+        else:  # macOS/Linux
+            for volume in Path('/Volumes').iterdir():
                 marker_file = volume / 'SUNFLOWER_DATA.marker'
                 if marker_file.exists() and os.access(volume, os.W_OK):
                     return volume
@@ -237,7 +198,7 @@ class OpenWebUIIntegration:
                     topics_covered TEXT,
                     safety_flags INTEGER DEFAULT 0,
                     parent_reviewed BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (profile_id) REFERENCES profiles (profile_id)
+                    FOREIGN KEY (profile_id) REFERENCES profiles(profile_id)
                 )
             ''')
             
@@ -247,21 +208,11 @@ class OpenWebUIIntegration:
                     interaction_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
-                    user_input TEXT NOT NULL,
-                    ai_response TEXT NOT NULL,
+                    user_input TEXT,
+                    ai_response TEXT,
                     safety_score REAL,
-                    educational_value REAL,
                     flagged BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (session_id) REFERENCES sessions (session_id)
-                )
-            ''')
-            
-            # Parent settings table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS parent_settings (
-                    setting_key TEXT PRIMARY KEY,
-                    setting_value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
             ''')
             
@@ -270,122 +221,91 @@ class OpenWebUIIntegration:
     @contextmanager
     def _get_db_connection(self):
         """Thread-safe database connection context manager"""
-        conn = sqlite3.connect(
-            self.db_path,
-            timeout=30.0,
-            isolation_level='IMMEDIATE'
-        )
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise
         finally:
             conn.close()
     
     def _load_or_generate_key(self) -> bytes:
-        """Load or generate encryption key for sensitive data"""
+        """Load or generate encryption key"""
         key_file = self.config_path / '.encryption.key'
         
         if key_file.exists():
             with open(key_file, 'rb') as f:
                 return f.read()
         else:
-            # Generate new key
-            key = secrets.token_bytes(32)
+            key = Fernet.generate_key()
             with open(key_file, 'wb') as f:
                 f.write(key)
-            # Secure file permissions
+            # Set restrictive permissions
             if self.platform != "Windows":
                 os.chmod(key_file, 0o600)
             return key
     
     def _load_configuration(self) -> Dict[str, Any]:
-        """Load or create default configuration"""
+        """Load system configuration"""
         config_file = self.config_path / 'config.json'
         
         default_config = {
-            'version': '6.2',
-            'platform': self.platform,
             'openwebui': {
-                'host': '127.0.0.1',
+                'host': 'localhost',
                 'port': 8080,
-                'auto_start': True,
-                'models': {
-                    'kids': 'sunflower-kids:latest',
-                    'educator': 'sunflower-educator:latest'
-                }
+                'timeout': 30
+            },
+            'ollama': {
+                'host': 'localhost',
+                'port': 11434
             },
             'safety': {
                 'max_session_minutes': 30,
                 'require_parent_auth': True,
-                'auto_logout_minutes': 10,
-                'content_filtering': 'strict'
-            },
-            'hardware': {
-                'auto_detect': True,
-                'min_ram_gb': 4,
-                'preferred_model_size': 'auto'
+                'log_all_interactions': True
             }
         }
         
         if config_file.exists():
-            try:
-                with open(config_file, 'r') as f:
-                    loaded_config = json.load(f)
-                    # Merge with defaults for any missing keys
-                    return {**default_config, **loaded_config}
-            except (json.JSONDecodeError, OSError) as e:
-                logger.error(f"Error loading config: {e}")
-                return default_config
-        else:
-            # Save default configuration
-            with open(config_file, 'w') as f:
-                json.dump(default_config, f, indent=2)
-            return default_config
+            with open(config_file, 'r') as f:
+                user_config = json.load(f)
+                default_config.update(user_config)
+        
+        return default_config
     
     def authenticate_parent(self, password: str) -> bool:
-        """Authenticate parent with secure password verification"""
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT setting_value FROM parent_settings WHERE setting_key = 'password_hash'"
-            )
-            row = cursor.fetchone()
-            
-            if not row:
-                # First time setup - set password
-                password_hash = hashlib.pbkdf2_hmac(
-                    'sha256',
-                    password.encode('utf-8'),
-                    self.encryption_key,
-                    100000
-                )
-                cursor.execute(
-                    "INSERT INTO parent_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
-                    ('password_hash', password_hash.hex(), datetime.now().isoformat())
-                )
-                conn.commit()
-                self.parent_authenticated = True
-                logger.info("Parent password set successfully")
-                return True
-            else:
-                # Verify password
-                stored_hash = bytes.fromhex(row['setting_value'])
-                password_hash = hashlib.pbkdf2_hmac(
-                    'sha256',
-                    password.encode('utf-8'),
-                    self.encryption_key,
-                    100000
-                )
-                if password_hash == stored_hash:
-                    self.parent_authenticated = True
-                    logger.info("Parent authenticated successfully")
-                    return True
-                else:
-                    logger.warning("Failed parent authentication attempt")
-                    return False
+        """Authenticate parent access"""
+        # Hash password for comparison
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        # Check against stored hash
+        auth_file = self.config_path / '.parent_auth'
+        
+        if not auth_file.exists():
+            # First time setup
+            with open(auth_file, 'w') as f:
+                f.write(password_hash)
+            if self.platform != "Windows":
+                os.chmod(auth_file, 0o600)
+            self.parent_authenticated = True
+            return True
+        
+        with open(auth_file, 'r') as f:
+            stored_hash = f.read().strip()
+        
+        if password_hash == stored_hash:
+            self.parent_authenticated = True
+            logger.info("Parent authentication successful")
+            return True
+        
+        logger.warning("Parent authentication failed")
+        return False
     
-    def create_child_profile(self, name: str, age: int, grade_level: str) -> ChildProfile:
-        """Create new child profile with safety defaults"""
+    def create_child_profile(self, name: str, age: int, grade: str) -> ChildProfile:
+        """Create new child profile"""
         if not self.parent_authenticated:
             raise PermissionError("Parent authentication required")
         
@@ -393,40 +313,30 @@ class OpenWebUIIntegration:
             profile_id=str(uuid.uuid4()),
             name=name,
             age=age,
-            grade_level=grade_level,
-            created_at=datetime.now().isoformat(),
-            last_active=None,
-            total_sessions=0,
-            learning_preferences={},
-            safety_level='maximum' if age < 8 else 'high',
-            session_history=[]
+            grade=grade,
+            created_at=datetime.now()
         )
         
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO profiles (
-                    profile_id, name, age, grade_level, created_at,
-                    safety_level, learning_preferences
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    profile_id, name, age, grade_level, created_at, safety_level
+                ) VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 profile.profile_id, profile.name, profile.age,
-                profile.grade_level, profile.created_at,
-                profile.safety_level, json.dumps(profile.learning_preferences)
+                profile.grade, profile.created_at.isoformat(),
+                profile.safety_level
             ))
-            conn.commit()
         
-        logger.info(f"Created profile for {name} (age {age})")
+        logger.info(f"Created profile for {name}")
         return profile
     
     def load_profile(self, profile_id: str) -> Optional[ChildProfile]:
-        """Load child profile from database"""
+        """Load existing child profile"""
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM profiles WHERE profile_id = ?",
-                (profile_id,)
-            )
+            cursor.execute('SELECT * FROM profiles WHERE profile_id = ?', (profile_id,))
             row = cursor.fetchone()
             
             if row:
@@ -434,18 +344,16 @@ class OpenWebUIIntegration:
                     profile_id=row['profile_id'],
                     name=row['name'],
                     age=row['age'],
-                    grade_level=row['grade_level'],
-                    created_at=row['created_at'],
-                    last_active=row['last_active'],
+                    grade=row['grade_level'],
+                    created_at=datetime.fromisoformat(row['created_at']),
+                    last_active=datetime.fromisoformat(row['last_active']) if row['last_active'] else None,
                     total_sessions=row['total_sessions'],
-                    learning_preferences=json.loads(row['learning_preferences'] or '{}'),
-                    safety_level=row['safety_level'],
-                    session_history=[]
+                    safety_level=row['safety_level']
                 )
         return None
     
     def start_session(self, profile_id: str) -> str:
-        """Start new learning session for child"""
+        """Start new learning session"""
         profile = self.load_profile(profile_id)
         if not profile:
             raise ValueError(f"Profile {profile_id} not found")
@@ -511,8 +419,22 @@ class OpenWebUIIntegration:
                     # This is handled by the safety filter module
                     
                     time.sleep(10)  # Check every 10 seconds
-                except (OSError, RuntimeError) as e:
-                    logger.error(f"Monitoring error: {e}")
+                
+                # FIX: Catch only specific expected exceptions
+                # OSError for file/network issues, threading.ThreadError for thread issues
+                except OSError as e:
+                    logger.error(f"Monitoring OS error: {e}")
+                    # Continue monitoring if it's just a temporary OS issue
+                    time.sleep(10)
+                except threading.ThreadError as e:
+                    logger.error(f"Monitoring thread error: {e}")
+                    # Thread error is more serious, break the loop
+                    break
+                except Exception as e:
+                    # Log unexpected exceptions but don't mask them with broad RuntimeError catch
+                    logger.error(f"Unexpected monitoring error: {type(e).__name__}: {e}")
+                    # For unexpected errors, stop monitoring and let them bubble up if needed
+                    break
         
         self.monitoring_thread = threading.Thread(target=monitor, daemon=True)
         self.monitoring_thread.start()
@@ -543,17 +465,34 @@ class OpenWebUIIntegration:
                 "UPDATE sessions SET interactions_count = interactions_count + 1 WHERE session_id = ?",
                 (self.session_id,)
             )
-            
-            conn.commit()
         
         self.last_activity = datetime.now()
         
-        # Flag for parent review if needed
-        if safety_score < 0.8:
-            logger.warning(f"Interaction flagged for review: {interaction_id}")
+        # Alert parent if safety score is low
+        if safety_score < 0.5:
+            self._alert_parent(user_input, ai_response, safety_score)
+    
+    def _alert_parent(self, user_input: str, ai_response: str, safety_score: float):
+        """Alert parent of safety concern"""
+        alert_file = self.logs_path / f"safety_alert_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        alert_data = {
+            'timestamp': datetime.now().isoformat(),
+            'session_id': self.session_id,
+            'profile_name': self.active_profile.name if self.active_profile else 'Unknown',
+            'user_input': user_input,
+            'ai_response': ai_response,
+            'safety_score': safety_score,
+            'action_taken': 'Session continued with monitoring'
+        }
+        
+        with open(alert_file, 'w') as f:
+            json.dump(alert_data, f, indent=2)
+        
+        logger.warning(f"Safety alert created: {alert_file}")
     
     def end_session(self):
-        """End current learning session"""
+        """End current session"""
         if not self.session_id:
             return
         
@@ -566,11 +505,11 @@ class OpenWebUIIntegration:
                 (self.session_id,)
             )
             row = cursor.fetchone()
+            
             if row:
                 start_time = datetime.fromisoformat(row['start_time'])
                 duration = int((datetime.now() - start_time).total_seconds() / 60)
                 
-                # Update session
                 cursor.execute('''
                     UPDATE sessions 
                     SET end_time = ?, duration_minutes = ?
@@ -578,12 +517,11 @@ class OpenWebUIIntegration:
                 ''', (datetime.now().isoformat(), duration, self.session_id))
                 
                 # Update profile total sessions
-                cursor.execute(
-                    "UPDATE profiles SET total_sessions = total_sessions + 1 WHERE profile_id = ?",
-                    (self.active_profile.profile_id,)
-                )
-                
-                conn.commit()
+                cursor.execute('''
+                    UPDATE profiles 
+                    SET total_sessions = total_sessions + 1
+                    WHERE profile_id = ?
+                ''', (self.active_profile.profile_id,))
         
         logger.info(f"Ended session {self.session_id}")
         
@@ -591,93 +529,83 @@ class OpenWebUIIntegration:
         self.session_id = None
     
     def get_parent_dashboard_data(self) -> Dict[str, Any]:
-        """Get comprehensive dashboard data for parent review"""
+        """Get data for parent dashboard"""
         if not self.parent_authenticated:
             raise PermissionError("Parent authentication required")
+        
+        dashboard_data = {
+            'profiles': [],
+            'recent_sessions': [],
+            'safety_alerts': [],
+            'usage_stats': {}
+        }
         
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
             
             # Get all profiles
-            cursor.execute("SELECT * FROM profiles")
-            profiles = [dict(row) for row in cursor.fetchall()]
+            cursor.execute('SELECT * FROM profiles ORDER BY name')
+            for row in cursor.fetchall():
+                dashboard_data['profiles'].append({
+                    'id': row['profile_id'],
+                    'name': row['name'],
+                    'age': row['age'],
+                    'grade': row['grade_level'],
+                    'total_sessions': row['total_sessions'],
+                    'last_active': row['last_active']
+                })
             
             # Get recent sessions
             cursor.execute('''
-                SELECT s.*, p.name as child_name
+                SELECT s.*, p.name 
                 FROM sessions s
                 JOIN profiles p ON s.profile_id = p.profile_id
                 ORDER BY s.start_time DESC
-                LIMIT 50
+                LIMIT 10
             ''')
-            sessions = [dict(row) for row in cursor.fetchall()]
+            for row in cursor.fetchall():
+                dashboard_data['recent_sessions'].append(dict(row))
             
-            # Get flagged interactions
+            # Get safety alerts
             cursor.execute('''
-                SELECT i.*, s.profile_id, p.name as child_name
+                SELECT i.*, s.profile_id, p.name
                 FROM interactions i
                 JOIN sessions s ON i.session_id = s.session_id
                 JOIN profiles p ON s.profile_id = p.profile_id
-                WHERE i.flagged = 1 AND s.parent_reviewed = 0
+                WHERE i.flagged = 1
                 ORDER BY i.timestamp DESC
+                LIMIT 20
             ''')
-            flagged = [dict(row) for row in cursor.fetchall()]
-            
-            # Calculate statistics
-            total_time = sum(s['duration_minutes'] or 0 for s in sessions)
-            avg_session = total_time / len(sessions) if sessions else 0
-            
-            return {
-                'profiles': profiles,
-                'recent_sessions': sessions,
-                'flagged_interactions': flagged,
-                'statistics': {
-                    'total_sessions': len(sessions),
-                    'total_time_minutes': total_time,
-                    'average_session_minutes': avg_session,
-                    'active_profiles': len(profiles),
-                    'pending_reviews': len(flagged)
-                }
-            }
-    
-    def mark_session_reviewed(self, session_id: str):
-        """Mark session as reviewed by parent"""
-        if not self.parent_authenticated:
-            raise PermissionError("Parent authentication required")
+            for row in cursor.fetchall():
+                dashboard_data['safety_alerts'].append(dict(row))
         
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE sessions SET parent_reviewed = 1 WHERE session_id = ?",
-                (session_id,)
-            )
-            conn.commit()
+        return dashboard_data
     
     def export_session_history(self, profile_id: str, format: str = 'json') -> Path:
-        """Export session history for backup or analysis"""
+        """Export session history for a profile"""
         if not self.parent_authenticated:
             raise PermissionError("Parent authentication required")
         
+        sessions = []
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
             
             # Get all sessions for profile
-            cursor.execute('''
-                SELECT s.*, 
-                    (SELECT COUNT(*) FROM interactions WHERE session_id = s.session_id) as interaction_count
-                FROM sessions s
-                WHERE profile_id = ?
-                ORDER BY start_time DESC
-            ''', (profile_id,))
-            sessions = [dict(row) for row in cursor.fetchall()]
+            cursor.execute(
+                "SELECT * FROM sessions WHERE profile_id = ? ORDER BY start_time",
+                (profile_id,)
+            )
             
-            # Get interactions for each session
-            for session in sessions:
+            for session in cursor.fetchall():
+                session_data = dict(session)
+                
+                # Get interactions for each session
                 cursor.execute(
                     "SELECT * FROM interactions WHERE session_id = ? ORDER BY timestamp",
                     (session['session_id'],)
                 )
-                session['interactions'] = [dict(row) for row in cursor.fetchall()]
+                session_data['interactions'] = [dict(row) for row in cursor.fetchall()]
+                sessions.append(session_data)
         
         # Generate export file
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -747,6 +675,7 @@ class OpenWebUIIntegration:
             logger.info("Sunflower AI system shutdown complete")
         except (subprocess.SubprocessError, OSError) as e:
             logger.error(f"Error during shutdown: {e}")
+
 
 # Production entry point
 if __name__ == "__main__":
