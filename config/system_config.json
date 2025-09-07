@@ -1,0 +1,137 @@
+{
+  "version": "6.2.0",
+  "build": "production",
+  "platform_support": {
+    "windows": {
+      "min_version": "10",
+      "architectures": ["x86_64", "arm64"],
+      "executable": "SunflowerAI.exe"
+    },
+    "macos": {
+      "min_version": "10.14",
+      "architectures": ["x86_64", "arm64"],
+      "executable": "SunflowerAI.app"
+    },
+    "linux": {
+      "min_version": "Ubuntu 20.04",
+      "architectures": ["x86_64", "arm64"],
+      "executable": "SunflowerAI"
+    }
+  },
+  
+  "paths": {
+    "cdrom_partition": {
+      "name": "SUNFLOWER_CD",
+      "marker": "sunflower_cd.id",
+      "directories": {
+        "models": "models",
+        "modelfiles": "modelfiles",
+        "ollama": "ollama",
+        "open_webui": "open-webui",
+        "resources": "resources",
+        "docs": "docs",
+        "_internal": "_internal"
+      }
+    },
+    "usb_partition": {
+      "name": "SUNFLOWER_DATA",
+      "marker": "sunflower_data.id",
+      "directories": {
+        "profiles": "profiles",
+        "conversations": "conversations",
+        "sessions": "sessions",
+        "logs": "logs",
+        "safety": "safety",
+        "progress": "progress",
+        "backups": "backups",
+        "cache": "cache",
+        "config": ".config",
+        "security": ".security"
+      }
+    }
+  },
+  
+  "hardware_tiers": {
+    "high": {
+      "min_ram_gb": 16,
+      "min_cpu_cores": 8,
+      "recommended_model": "llama3.2:7b",
+      "max_parallel_sessions": 4
+    },
+    "medium": {
+      "min_ram_gb": 8,
+      "min_cpu_cores": 4,
+      "recommended_model": "llama3.2:3b",
+      "max_parallel_sessions": 2
+    },
+    "low": {
+      "min_ram_gb": 4,
+      "min_cpu_cores": 2,
+      "recommended_model": "llama3.2:1b",
+      "max_parallel_sessions": 1
+    },
+    "minimum": {
+      "min_ram_gb": 2,
+      "min_cpu_cores": 2,
+      "recommended_model": "llama3.2:1b-q4_0",
+      "max_parallel_sessions": 1
+    }
+  },
+  
+  "safety_config": {
+    "enabled": true,
+    "level": "maximum",
+    "filters": [
+      "violence",
+      "inappropriate",
+      "personal_info",
+      "dangerous",
+      "scary",
+      "bullying",
+      "medical",
+      "commercial",
+      "profanity"
+    ],
+    "parent_notification_threshold": 3,
+    "incident_retention_days": 365
+  },
+  
+  "session_config": {
+    "timeout_minutes": 30,
+    "max_duration_minutes": 120,
+    "break_reminder_minutes": 30,
+    "max_messages_per_session": 100
+  },
+  
+  "backup_config": {
+    "auto_backup": true,
+    "frequency_days": 7,
+    "retention_count": 4,
+    "include_conversations": true,
+    "include_progress": true,
+    "compression": true
+  },
+  
+  "ollama_config": {
+    "host": "localhost",
+    "port": 11434,
+    "keep_alive": "5m",
+    "num_parallel": 1,
+    "max_loaded_models": 2
+  },
+  
+  "openwebui_config": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "auth": false,
+    "signup": false,
+    "default_models": ["sunflower-kids", "sunflower-educator"]
+  },
+  
+  "update_config": {
+    "check_for_updates": false,
+    "auto_update": false,
+    "update_channel": "stable",
+    "update_server": null
+  }
+}
