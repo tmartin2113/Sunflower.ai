@@ -185,7 +185,7 @@ class WindowsCompiler:
             "--icon", icon_path,
             "--distpath", str(self.temp_build_dir / "dist"),
             "--workpath", str(self.temp_build_dir / "build"),
-            "--add-data", f"{icon_path}{os.pathsep}.",  # FIX: Use os.pathsep for proper platform separator
+            "--add-data", f"{icon_path}{';' if sys.platform == 'win32' else ':'}.".
             str(launcher_py)
         ]
         
