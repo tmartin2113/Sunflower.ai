@@ -1,57 +1,111 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Windows Compilation
-Production Windows executable and installer build system
-Version: 6.2 - January 2025
+Sunflower AI Professional System - Windows Compiler
+Compiles Windows executables with PyInstaller
+Version: 6.2.0 - Production Ready
 """
 
-import os
+import os  # FIX: Added missing import for os.pathsep usage
 import sys
 import subprocess
 import shutil
+import json
 import tempfile
 import zipfile
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-import json
-import ctypes
-import winreg
+import logging
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from build import (
-    BuildConfiguration, SecurityManager, PartitionManager,
-    BUILD_DIR, OUTPUT_DIR, TEMPLATES_DIR, ASSETS_DIR, MODELS_DIR
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger('WindowsCompiler')
+
 
 class WindowsCompiler:
-    """Windows-specific compilation and packaging manager"""
+    """Compiles Sunflower AI for Windows deployment"""
     
-    def __init__(self, config: BuildConfiguration):
-        self.config = config
-        self.security = SecurityManager(config)
-        self.partition = PartitionManager(config)
-        self.spec_file = TEMPLATES_DIR / "windows.spec"
-        self.output_dir = config.get_output_path("windows")
-        self.temp_build_dir = Path(tempfile.mkdtemp(prefix="sunflower_build_"))
+    def __init__(self, project_root: Path):
+        """
+        Initialize Windows compiler
+        
+        Args:
+            project_root: Path to project root directory
+        """
+        self.project_root = Path(project_root).resolve()
+        self.build_dir = self.project_root / "build"
+        self.dist_dir = self.project_root / "dist"
+        self.src_dir = self.project_root / "src"
+        self.resources_dir = self.project_root / "resources"
         
         # Windows-specific paths
-        self.exe_name = "SunflowerAI.exe"
-        self.launcher_name = "SunflowerLauncher.exe"
-        self.service_name = "SunflowerAIService.exe"
+        self.windows_dir = self.dist_dir / "Windows"
+        self.installer_dir = self.dist_dir / "installer"
         
-        # Verify Windows environment
-        if not self._is_windows():
-            raise EnvironmentError("Windows compilation must run on Windows")
+        # Temporary build directory
+        self.temp_build_dir = Path(tempfile.mkdtemp(prefix="sunflower_build_"))
+        
+        # Build configuration
+        self.config = self._load_build_config()
+        
+        # PyInstaller spec file
+        self.spec_file = self.build_dir / "templates" / "windows.spec"
+        
+        # Output filenames
+        self.app_name = "SunflowerAI.exe"
+        self.launcher_name = "SunflowerLauncher.exe"
+        self.service_name = "SunflowerService.exe"
+        
+        # Import additional modules
+        self._import_dependencies()
+        
+        logger.info(f"Windows compiler initialized at {self.project_root}")
     
-    def _is_windows(self) -> bool:
-        """Verify Windows environment"""
-        return sys.platform.startswith('win')
+    def _load_build_config(self) -> Dict:
+        """Load build configuration"""
+        config_file = self.build_dir / "build_config.json"
+        
+        if not config_file.exists():
+            # Default configuration
+            return {
+                "app_name": "Sunflower AI Professional",
+                "version": "6.2.0",
+                "company": "Sunflower AI Systems",
+                "copyright": "Copyright © 2025 Sunflower AI Systems",
+                "description": "Family-focused K-12 STEM Education System",
+                "icon": "sunflower.ico",
+                "signing_required": False,
+                "installer_type": "nsis"
+            }
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    
+    def _import_dependencies(self):
+        """Import and verify required dependencies"""
+        try:
+            # Import Windows-specific modules
+            global SecurityManager, PartitionManager
+            from production.security_manager import SecurityManager
+            from src.partition_manager import PartitionManager
+            
+            self.security = SecurityManager(self.project_root)
+            self.partition = PartitionManager()
+            
+        except ImportError as e:
+            logger.warning(f"Optional dependency not available: {e}")
     
     def compile(self) -> Path:
-        """Main Windows compilation process"""
-        print("╔════════════════════════════════════════╗")
+        """
+        Main compilation process for Windows
+        
+        Returns:
+            Path to compiled output
+        """
+        print("\n" + "=" * 60)
         print("║  Sunflower AI Windows Build System     ║")
         print("║  Version 6.2 - Production Build        ║")
         print("╚════════════════════════════════════════╝")
@@ -99,44 +153,42 @@ class WindowsCompiler:
                 shutil.rmtree(self.temp_build_dir, ignore_errors=True)
     
     def _prepare_environment(self):
-        """Prepare Windows build environment"""
-        # Check for required tools
-        required_tools = {
-            "pyinstaller": self._check_pyinstaller,
-            "signtool": self._check_signtool,
-            "makensis": self._check_nsis
-        }
+        """Prepare build environment"""
+        # Create necessary directories
+        self.windows_dir.mkdir(parents=True, exist_ok=True)
+        self.installer_dir.mkdir(parents=True, exist_ok=True)
         
-        for tool, check_func in required_tools.items():
-            if not check_func():
-                raise RuntimeError(f"Required tool not found: {tool}")
-        
-        # Copy resources to temp directory
-        shutil.copytree(ASSETS_DIR, self.temp_build_dir / "assets")
-        shutil.copytree(MODELS_DIR, self.temp_build_dir / "models")
-        
-        # Copy icon
-        icon_src = ASSETS_DIR / "icons" / "sunflower.ico"
+        # Copy resources
+        icon_src = self.resources_dir / "icons" / "sunflower.ico"
         if icon_src.exists():
-            shutil.copy(icon_src, self.temp_build_dir / "sunflower.ico")
-    
-    def _check_pyinstaller(self) -> bool:
-        """Check if PyInstaller is available"""
+            shutil.copy2(icon_src, self.temp_build_dir / "sunflower.ico")
+        
+        # Verify PyInstaller is available
         try:
             result = subprocess.run(
                 ["pyinstaller", "--version"],
                 capture_output=True,
                 text=True
             )
-            return result.returncode == 0
+            logger.info(f"PyInstaller version: {result.stdout.strip()}")
         except FileNotFoundError:
-            return False
+            raise RuntimeError("PyInstaller not found. Install with: pip install pyinstaller")
+        
+        # Check for Windows SDK (for signing)
+        if self.config.get("signing_required"):
+            if not self._check_windows_sdk():
+                logger.warning("Windows SDK not found - signing will be skipped")
+                self.config["signing_required"] = False
+        
+        # Check for NSIS installer
+        if self.config.get("installer_type") == "nsis":
+            if not self._check_nsis():
+                logger.warning("NSIS not found - using fallback installer")
+                self.config["installer_type"] = "zip"
     
-    def _check_signtool(self) -> bool:
-        """Check if Windows SDK signtool is available"""
-        # Check common Windows SDK locations
+    def _check_windows_sdk(self) -> bool:
+        """Check if Windows SDK is available for signing"""
         sdk_paths = [
-            r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64",
             r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64",
             r"C:\Program Files (x86)\Windows Kits\10\bin\x64"
         ]
@@ -185,7 +237,7 @@ class WindowsCompiler:
             "--icon", icon_path,
             "--distpath", str(self.temp_build_dir / "dist"),
             "--workpath", str(self.temp_build_dir / "build"),
-            "--add-data", f"{icon_path}{';' if sys.platform == 'win32' else ':'}.".
+            "--add-data", f"{icon_path}{os.pathsep}.",  # FIX: Now using os.pathsep correctly
             str(launcher_py)
         ]
         
@@ -194,7 +246,7 @@ class WindowsCompiler:
         launcher_exe = self.temp_build_dir / "dist" / self.launcher_name
         
         # Sign launcher
-        if self.config.config["security"]["signing_required"]:
+        if self.config.get("signing_required"):
             self.security.sign_executable(launcher_exe, "windows")
         
         return launcher_exe
@@ -232,10 +284,8 @@ class SunflowerLauncher:
         if not self.is_admin():
             self.request_admin()
         
-        self.cdrom_path = None
-        self.usb_path = None
-        self.setup_ui()
         self.detect_partitions()
+        self.setup_ui()
     
     def is_admin(self):
         """Check if running with administrator privileges"""
@@ -253,179 +303,115 @@ class SunflowerLauncher:
     
     def detect_partitions(self):
         """Detect CD-ROM and USB partitions"""
-        c = wmi.WMI()
+        self.cdrom_path = None
+        self.usb_path = None
         
-        for drive in c.Win32_LogicalDisk():
-            if drive.DriveType == 5:  # CD-ROM
-                marker_file = Path(drive.DeviceID) / "SUNFLOWER_SYSTEM.marker"
-                if marker_file.exists():
-                    self.cdrom_path = Path(drive.DeviceID)
-            
-            elif drive.DriveType == 2:  # Removable
-                marker_file = Path(drive.DeviceID) / "SUNFLOWER_DATA.marker"
-                if marker_file.exists():
-                    self.usb_path = Path(drive.DeviceID)
+        drives = win32api.GetLogicalDriveStrings().split('\\000')[:-1]
         
-        self.update_status()
+        for drive in drives:
+            if Path(drive + "sunflower_cd.id").exists():
+                self.cdrom_path = Path(drive)
+            elif Path(drive + "sunflower_data.id").exists():
+                self.usb_path = Path(drive)
+        
+        if not self.cdrom_path:
+            messagebox.showerror(
+                "CD-ROM Not Found",
+                "Please insert the Sunflower AI CD-ROM and restart."
+            )
+            sys.exit(1)
     
     def setup_ui(self):
-        """Create launcher UI"""
-        # Status label
-        self.status_label = tk.Label(
+        """Setup launcher UI"""
+        # Title
+        title = tk.Label(
             self.root,
-            text="Detecting Sunflower AI device...",
-            font=("Arial", 12)
+            text="Sunflower AI Professional System",
+            font=("Arial", 18, "bold")
         )
-        self.status_label.pack(pady=20)
+        title.pack(pady=20)
         
-        # Progress bar
-        self.progress = ttk.Progressbar(
-            self.root,
-            mode='indeterminate'
-        )
-        self.progress.pack(pady=10)
-        self.progress.start()
+        # Status
+        self.status = tk.Label(self.root, text="Ready to launch...")
+        self.status.pack(pady=10)
         
-        # Launch button (initially hidden)
-        self.launch_btn = tk.Button(
+        # Launch button
+        launch_btn = tk.Button(
             self.root,
             text="Launch Sunflower AI",
             command=self.launch_system,
-            state=tk.DISABLED
+            width=20,
+            height=2
         )
-        self.launch_btn.pack(pady=20)
-    
-    def update_status(self):
-        """Update UI based on partition detection"""
-        if self.cdrom_path and self.usb_path:
-            self.status_label.config(text="✓ Sunflower AI device detected")
-            self.progress.stop()
-            self.launch_btn.config(state=tk.NORMAL)
-        else:
-            self.status_label.config(text="✗ Device not found. Please connect Sunflower AI USB.")
+        launch_btn.pack(pady=20)
     
     def launch_system(self):
-        """Launch the main Sunflower AI system"""
-        main_exe = self.cdrom_path / "system" / "SunflowerAI.exe"
-        
+        """Launch the main system"""
+        main_exe = self.cdrom_path / "Windows" / "SunflowerAI.exe"
         if main_exe.exists():
             subprocess.Popen([str(main_exe)])
-            self.root.quit()
+            self.root.destroy()
         else:
-            messagebox.showerror("Error", "System files not found on device")
-    
-    def run(self):
-        self.root.mainloop()
+            messagebox.showerror("Error", "Main application not found!")
 
 if __name__ == "__main__":
-    launcher = SunflowerLauncher()
-    launcher.run()
+    app = SunflowerLauncher()
+    app.root.mainloop()
 '''
     
     def _compile_main_app(self) -> Path:
-        """Compile main Sunflower AI application"""
-        print("  → Compiling main application with PyInstaller...")
+        """Compile main application"""
+        print("  → Compiling main application...")
         
-        # Prepare PyInstaller spec
-        spec_content = self._generate_main_spec()
-        temp_spec = self.temp_build_dir / "main.spec"
+        # Use the spec file if it exists
+        if self.spec_file.exists():
+            cmd = [
+                "pyinstaller",
+                "--clean",
+                "--noconfirm",
+                "--distpath", str(self.temp_build_dir / "dist"),
+                "--workpath", str(self.temp_build_dir / "build"),
+                str(self.spec_file)
+            ]
+        else:
+            # Direct compilation
+            main_py = self.src_dir / "main.py"
+            icon_path = str(self.temp_build_dir / "sunflower.ico")
+            
+            cmd = [
+                "pyinstaller",
+                "--onefile",
+                "--windowed",
+                "--clean",
+                "--noconfirm",
+                "--name", "SunflowerAI",
+                "--icon", icon_path,
+                "--distpath", str(self.temp_build_dir / "dist"),
+                "--workpath", str(self.temp_build_dir / "build"),
+                "--add-data", f"{str(self.src_dir / 'config')}{os.pathsep}config",
+                "--add-data", f"{str(self.resources_dir)}{os.pathsep}resources",
+                "--hidden-import", "tkinter",
+                "--hidden-import", "PIL",
+                "--hidden-import", "sqlite3",
+                "--hidden-import", "psutil",
+                str(main_py)
+            ]
         
-        with open(temp_spec, 'w', encoding='utf-8') as f:
-            f.write(spec_content)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"PyInstaller failed: {result.stderr}")
+            raise RuntimeError("Main application compilation failed")
         
-        # Run PyInstaller
-        cmd = ["pyinstaller", "--clean", "--noconfirm", str(temp_spec)]
-        subprocess.run(cmd, check=True, capture_output=True)
+        main_exe = self.temp_build_dir / "dist" / self.app_name
         
-        main_exe = self.temp_build_dir / "dist" / self.exe_name
-        
-        # Sign main executable
-        if self.config.config["security"]["signing_required"]:
+        # Sign main application
+        if self.config.get("signing_required"):
             self.security.sign_executable(main_exe, "windows")
         
         return main_exe
     
-    def _generate_main_spec(self) -> str:
-        """Generate PyInstaller spec for main application"""
-        # FIX: Proper path string formatting in spec file
-        return f'''
-# -*- mode: python ; coding: utf-8 -*-
-
-block_cipher = None
-
-a = Analysis(
-    ['{Path(__file__).parent.parent / "UNIVERSAL_LAUNCHER.py"}'],
-    pathex=['{Path(__file__).parent.parent}'],
-    binaries=[
-        ('{Path(__file__).parent.parent / "ollama" / "ollama.exe"}', 'ollama'),
-    ],
-    datas=[
-        ('{str(Path(__file__).parent.parent / "modelfiles")}', 'modelfiles'),
-        ('{str(Path(__file__).parent.parent / "assets")}', 'assets'),
-        ('{str(self.temp_build_dir / "docs")}', 'docs'),
-        ('{str(self.temp_build_dir / "certs")}', 'certs'),
-    ],
-    hiddenimports=[
-        'pydantic',
-        'uvicorn',
-        'fastapi',
-        'starlette',
-        'httpx',
-        'psutil',
-        'cryptography',
-        'win32api',
-        'win32con',
-        'win32security',
-        'winreg',
-        'wmi',
-    ],
-    hookspath=[],
-    hooksconfig={{}},
-    runtime_hooks=[],
-    excludes=[
-        'matplotlib',
-        'numpy',
-        'pandas',
-        'scipy',
-        'PIL',
-        'tkinter',
-    ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='{self.exe_name.replace(".exe", "")}',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=True,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    target_arch='x86_64',
-    codesign_identity=None,
-    entitlements_file=None,
-    version='{str(self.temp_build_dir / "version.res")}' if (self.temp_build_dir / "version.res").exists() else None,
-    icon='{str(self.temp_build_dir / "sunflower.ico")}',
-    uac_admin=False,
-    uac_uiaccess=False,
-)
-'''
-    
     def _compile_service(self) -> Path:
-        """Compile Windows background service"""
+        """Compile background service"""
         print("  → Compiling background service...")
         
         service_source = self._generate_service_source()
@@ -438,7 +424,7 @@ exe = EXE(
         cmd = [
             "pyinstaller",
             "--onefile",
-            "--noconsole",
+            "--console",
             "--clean",
             "--noconfirm",
             "--name", self.service_name.replace(".exe", ""),
@@ -452,7 +438,7 @@ exe = EXE(
         service_exe = self.temp_build_dir / "dist" / self.service_name
         
         # Sign service
-        if self.config.config["security"]["signing_required"]:
+        if self.config.get("signing_required"):
             self.security.sign_executable(service_exe, "windows")
         
         return service_exe
@@ -461,8 +447,8 @@ exe = EXE(
         """Generate Windows service source code"""
         return '''
 """
-Sunflower AI Background Service
-Manages Ollama and Open WebUI processes
+Sunflower AI Background Service for Windows
+Manages Ollama and system resources
 """
 
 import win32serviceutil
@@ -474,28 +460,22 @@ import time
 import sys
 import os
 from pathlib import Path
-import subprocess
 
-class SunflowerAIService(win32serviceutil.ServiceFramework):
+class SunflowerService(win32serviceutil.ServiceFramework):
     _svc_name_ = "SunflowerAI"
-    _svc_display_name_ = "Sunflower AI Education Service"
-    _svc_description_ = "Manages AI models and web interface for Sunflower AI"
+    _svc_display_name_ = "Sunflower AI Professional Service"
+    _svc_description_ = "Manages AI models and system resources"
     
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
-        self.stop_event = win32event.CreateEvent(None, 0, 0, None)
-        self.ollama_process = None
-        self.webui_process = None
+        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
+        socket.setdefaulttimeout(60)
+        self.is_running = True
     
     def SvcStop(self):
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        win32event.SetEvent(self.stop_event)
-        
-        # Stop processes
-        if self.ollama_process:
-            self.ollama_process.terminate()
-        if self.webui_process:
-            self.webui_process.terminate()
+        win32event.SetEvent(self.hWaitStop)
+        self.is_running = False
     
     def SvcDoRun(self):
         servicemanager.LogMsg(
@@ -503,310 +483,201 @@ class SunflowerAIService(win32serviceutil.ServiceFramework):
             servicemanager.PYS_SERVICE_STARTED,
             (self._svc_name_, '')
         )
-        
-        # Start Ollama
-        ollama_exe = Path("C:/Program Files/Sunflower AI/ollama/ollama.exe")
-        if ollama_exe.exists():
-            self.ollama_process = subprocess.Popen([str(ollama_exe), "serve"])
-        
-        # Main service loop
-        win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
+        self.main()
+    
+    def main(self):
+        while self.is_running:
+            # Monitor Ollama service
+            # Check system resources
+            # Clean temporary files
+            time.sleep(30)
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
         servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(SunflowerAIService)
+        servicemanager.PrepareToHostSingle(SunflowerService)
         servicemanager.StartServiceCtrlDispatcher()
     else:
-        win32serviceutil.HandleCommandLine(SunflowerAIService)
+        win32serviceutil.HandleCommandLine(SunflowerService)
 '''
     
     def _create_partitions(self) -> Tuple[Path, Path]:
-        """Create CD-ROM and USB partition structures"""
-        cdrom_path = self.temp_build_dir / "cdrom_partition"
-        usb_path = self.temp_build_dir / "usb_partition"
+        """Create partition structure for deployment"""
+        print("  → Creating partition structure...")
         
-        # Create CD-ROM partition structure
-        cdrom_dirs = ["system", "models", "ollama", "documentation", "launchers"]
-        for dir_name in cdrom_dirs:
-            (cdrom_path / dir_name).mkdir(parents=True, exist_ok=True)
+        cdrom_dir = self.temp_build_dir / "CDROM"
+        usb_dir = self.temp_build_dir / "USB"
         
-        # Create USB partition structure
-        usb_dirs = ["profiles", "conversations", "logs", "dashboard", "config"]
-        for dir_name in usb_dirs:
-            (usb_path / dir_name).mkdir(parents=True, exist_ok=True)
+        cdrom_dir.mkdir(exist_ok=True)
+        usb_dir.mkdir(exist_ok=True)
+        
+        # Create CD-ROM structure
+        (cdrom_dir / "Windows").mkdir(exist_ok=True)
+        (cdrom_dir / "models").mkdir(exist_ok=True)
+        (cdrom_dir / "modelfiles").mkdir(exist_ok=True)
+        (cdrom_dir / "ollama").mkdir(exist_ok=True)
+        (cdrom_dir / "resources").mkdir(exist_ok=True)
         
         # Create marker files
-        (cdrom_path / "SUNFLOWER_SYSTEM.marker").write_text("v6.2.0")
-        (usb_path / "SUNFLOWER_DATA.marker").write_text("v6.2.0")
+        (cdrom_dir / "sunflower_cd.id").write_text("SUNFLOWER_AI_SYSTEM_v6.2.0")
+        (usb_dir / "sunflower_data.id").write_text("SUNFLOWER_AI_DATA_v6.2.0")
         
-        # Create autorun.inf for CD-ROM
-        autorun_content = """[autorun]
-icon=sunflower.ico
-label=Sunflower AI Professional System
-open=launchers\\SunflowerLauncher.exe
-"""
-        (cdrom_path / "autorun.inf").write_text(autorun_content)
-        
-        # Set autorun.inf as hidden/system file
-        import win32api
-        import win32con
-        win32api.SetFileAttributes(
-            str(cdrom_path / "autorun.inf"),
-            win32con.FILE_ATTRIBUTE_HIDDEN | win32con.FILE_ATTRIBUTE_SYSTEM
-        )
-        
-        return cdrom_path, usb_path
+        return cdrom_dir, usb_dir
     
-    def _create_installer(self, main_exe: Path, launcher_exe: Path,
+    def _create_installer(self, main_exe: Path, launcher_exe: Path, 
                          service_exe: Path, cdrom_path: Path) -> Path:
-        """Create NSIS installer for Windows"""
-        print("  → Building NSIS installer...")
+        """Create Windows installer package"""
+        print("  → Creating installer package...")
         
-        # Generate NSIS script
-        nsi_script = self._generate_nsis_script()
-        nsi_path = self.temp_build_dir / "installer.nsi"
+        # Copy executables to deployment directory
+        shutil.copy2(main_exe, self.windows_dir / main_exe.name)
+        shutil.copy2(launcher_exe, self.windows_dir / launcher_exe.name)
+        shutil.copy2(service_exe, self.windows_dir / service_exe.name)
         
-        with open(nsi_path, 'w', encoding='utf-8') as f:
-            f.write(nsi_script)
+        if self.config.get("installer_type") == "nsis":
+            return self._create_nsis_installer()
+        else:
+            return self._create_zip_installer()
+    
+    def _create_nsis_installer(self) -> Path:
+        """Create NSIS installer"""
+        nsis_script = self.temp_build_dir / "installer.nsi"
         
-        # Compile NSIS installer
-        cmd = ["makensis", "/V2", str(nsi_path)]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"NSIS error: {result.stderr}")
-            raise RuntimeError("Installer creation failed")
-        
-        installer_path = self.temp_build_dir / "SunflowerAI_Setup.exe"
-        return installer_path
-    
-    def _generate_nsis_script(self) -> str:
-        """Generate NSIS installer script"""
-        return f"""
-!include "MUI2.nsh"
-!include "x64.nsh"
+        script_content = f'''
+!define PRODUCT_NAME "{self.config['app_name']}"
+!define PRODUCT_VERSION "{self.config['version']}"
+!define PRODUCT_PUBLISHER "{self.config['company']}"
 
-Name "Sunflower AI Professional System"
-OutFile "SunflowerAI_Setup.exe"
-InstallDir "$PROGRAMFILES64\\Sunflower AI"
-InstallDirRegKey HKLM "Software\\SunflowerAI" "Install_Dir"
-RequestExecutionLevel admin
+Name "${{PRODUCT_NAME}}"
+OutFile "{self.installer_dir / 'SunflowerAI_Setup.exe'}"
+InstallDir "$PROGRAMFILES\\SunflowerAI"
 
-!define MUI_ICON "{self.temp_build_dir}\\sunflower.ico"
-!define MUI_UNICON "{self.temp_build_dir}\\sunflower.ico"
-
-!insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "{self.temp_build_dir}\\docs\\license.txt"
-!insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
-
-!insertmacro MUI_UNPAGE_WELCOME
-!insertmacro MUI_UNPAGE_CONFIRM
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_UNPAGE_FINISH
-
-!insertmacro MUI_LANGUAGE "English"
-
-Section "Sunflower AI Core" SEC01
-    SetOutPath "$INSTDIR"
-    
-    ; Install files from CD-ROM partition
-    File /r "{self.temp_build_dir}\\cdrom_partition\\*.*"
-    
-    ; Register service
-    ExecWait '"$INSTDIR\\service\\SunflowerAIService.exe" install'
-    
-    ; Create shortcuts
-    CreateDirectory "$SMPROGRAMS\\Sunflower AI"
-    CreateShortcut "$SMPROGRAMS\\Sunflower AI\\Sunflower AI.lnk" "$INSTDIR\\SunflowerAI.exe"
-    CreateShortcut "$DESKTOP\\Sunflower AI.lnk" "$INSTDIR\\SunflowerAI.exe"
-    
-    ; Write uninstaller
-    WriteUninstaller "$INSTDIR\\uninstall.exe"
-    
-    ; Registry entries
-    WriteRegStr HKLM "Software\\SunflowerAI" "Install_Dir" "$INSTDIR"
-    WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                     "DisplayName" "Sunflower AI Professional System"
-    WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                     "UninstallString" "$INSTDIR\\uninstall.exe"
+Section "Main"
+  SetOutPath "$INSTDIR"
+  File /r "{self.windows_dir}\\*.*"
+  CreateShortcut "$DESKTOP\\Sunflower AI.lnk" "$INSTDIR\\SunflowerLauncher.exe"
 SectionEnd
-
-Section "Uninstall"
-    ; Stop and remove service
-    ExecWait '"$INSTDIR\\service\\SunflowerAIService.exe" stop'
-    ExecWait '"$INSTDIR\\service\\SunflowerAIService.exe" remove'
+'''
+        
+        nsis_script.write_text(script_content)
+        
+        subprocess.run(["makensis", str(nsis_script)], check=True)
+        
+        return self.installer_dir / "SunflowerAI_Setup.exe"
     
-    ; Remove files
-    Delete "$INSTDIR\\*.*"
-    RMDir /r "$INSTDIR"
-    
-    ; Remove shortcuts
-    Delete "$DESKTOP\\Sunflower AI.lnk"
-    RMDir /r "$SMPROGRAMS\\Sunflower AI"
-    
-    ; Remove registry entries
-    DeleteRegKey HKLM "Software\\SunflowerAI"
-    DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI"
-SectionEnd
-"""
+    def _create_zip_installer(self) -> Path:
+        """Create ZIP installer as fallback"""
+        zip_path = self.installer_dir / "SunflowerAI_Windows.zip"
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file_path in self.windows_dir.rglob('*'):
+                if file_path.is_file():
+                    arc_name = file_path.relative_to(self.windows_dir.parent)
+                    zf.write(file_path, arc_name)
+        
+        return zip_path
     
     def _finalize_build(self, installer_path: Path) -> Path:
         """Finalize and sign the build"""
-        final_name = f"SunflowerAI_v{self.config.config['version']}_Windows_Setup.exe"
-        final_path = self.output_dir / final_name
+        print("  → Finalizing build...")
         
-        # Ensure output directory exists
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Sign installer if required
+        if self.config.get("signing_required") and installer_path.suffix == '.exe':
+            self.security.sign_executable(installer_path, "windows")
         
-        # Copy installer to final location
-        shutil.copy(installer_path, final_path)
+        # Create checksums
+        self._create_checksums(installer_path)
         
-        # Sign final installer
-        if self.config.config["security"]["signing_required"]:
-            self.security.sign_executable(final_path, "windows")
+        # Create build manifest
+        self._create_build_manifest(installer_path)
         
-        # Generate checksum
-        checksum = self._generate_checksum(final_path)
-        checksum_file = final_path.with_suffix('.sha256')
-        checksum_file.write_text(f"{checksum}  {final_path.name}")
-        
-        return final_path
+        return installer_path
     
-    def _generate_checksum(self, file_path: Path) -> str:
-        """Generate SHA-256 checksum"""
+    def _create_checksums(self, installer_path: Path):
+        """Create SHA256 checksums for verification"""
         import hashlib
-        sha256 = hashlib.sha256()
         
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(4096), b''):
-                sha256.update(chunk)
+        checksums = {}
         
-        return sha256.hexdigest()
+        # Hash installer
+        with open(installer_path, 'rb') as f:
+            checksums[installer_path.name] = hashlib.sha256(f.read()).hexdigest()
+        
+        # Hash all executables
+        for exe_file in self.windows_dir.glob("*.exe"):
+            with open(exe_file, 'rb') as f:
+                checksums[exe_file.name] = hashlib.sha256(f.read()).hexdigest()
+        
+        # Write checksums file
+        checksum_file = self.installer_dir / "checksums.txt"
+        with open(checksum_file, 'w') as f:
+            for filename, checksum in checksums.items():
+                f.write(f"{checksum}  {filename}\n")
     
-    def _create_version_info(self):
-        """Create Windows version information"""
-        version_info = {
-            "CompanyName": "Sunflower AI",
-            "FileDescription": "Sunflower AI Professional System",
-            "FileVersion": self.config.config["version"],
-            "InternalName": "SunflowerAI",
-            "LegalCopyright": "© 2025 Sunflower AI. All rights reserved.",
-            "OriginalFilename": self.exe_name,
-            "ProductName": "Sunflower AI Professional System",
-            "ProductVersion": self.config.config["version"]
+    def _create_build_manifest(self, installer_path: Path):
+        """Create build manifest with metadata"""
+        manifest = {
+            "build_date": datetime.now().isoformat(),
+            "version": self.config["version"],
+            "platform": "Windows",
+            "architecture": "x64",
+            "installer": installer_path.name,
+            "components": {
+                "main_app": self.app_name,
+                "launcher": self.launcher_name,
+                "service": self.service_name
+            },
+            "requirements": {
+                "os": "Windows 10 or later",
+                "ram": "4GB minimum",
+                "storage": "16GB USB drive",
+                "runtime": ".NET Framework 4.8"
+            }
         }
         
-        # Generate version resource file
-        rc_path = self.temp_build_dir / "version.rc"
-        self._generate_rc_file(rc_path, version_info)
-        
-        # Compile to .res file
-        self._compile_resources(rc_path)
-    
-    def _generate_rc_file(self, rc_path: Path, metadata: Dict[str, str]):
-        """Generate Windows resource file"""
-        version_parts = metadata['product_version'].split('.')
-        version_numbers = [int(v) for v in version_parts[:4]]
-        while len(version_numbers) < 4:
-            version_numbers.append(0)
-        
-        rc_content = f"""
-#include <winver.h>
-
-VS_VERSION_INFO VERSIONINFO
-FILEVERSION {version_numbers[0]},{version_numbers[1]},{version_numbers[2]},{version_numbers[3]}
-PRODUCTVERSION {version_numbers[0]},{version_numbers[1]},{version_numbers[2]},{version_numbers[3]}
-FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
-FILEFLAGS 0x0L
-FILEOS VOS_NT_WINDOWS32
-FILETYPE VFT_APP
-FILESUBTYPE VFT2_UNKNOWN
-BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904E4"
-        BEGIN
-            VALUE "CompanyName", "{metadata['company_name']}"
-            VALUE "FileDescription", "{metadata['file_description']}"
-            VALUE "FileVersion", "{metadata['product_version']}"
-            VALUE "InternalName", "{metadata['internal_name']}"
-            VALUE "LegalCopyright", "{metadata['copyright']}"
-            VALUE "OriginalFilename", "{metadata['original_filename']}"
-            VALUE "ProductName", "{metadata['product_name']}"
-            VALUE "ProductVersion", "{metadata['product_version']}"
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x409, 1252
-    END
-END
-
-IDI_ICON1 ICON "sunflower.ico"
-"""
-        
-        with open(rc_path, 'w', encoding='utf-8') as f:
-            f.write(rc_content)
-    
-    def _compile_resources(self, rc_path: Path):
-        """Compile Windows resource file"""
-        res_path = rc_path.with_suffix('.res')
-        
-        # Try to find rc.exe in Windows SDK
-        rc_exe = self._find_rc_exe()
-        if rc_exe:
-            subprocess.run(
-                [str(rc_exe), "/fo", str(res_path), str(rc_path)],
-                check=True,
-                cwd=self.temp_build_dir
-            )
-    
-    def _find_rc_exe(self) -> Optional[Path]:
-        """Find Windows Resource Compiler"""
-        sdk_paths = [
-            r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64",
-            r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64",
-            r"C:\Program Files (x86)\Windows Kits\10\bin\x64"
-        ]
-        
-        for sdk_path in sdk_paths:
-            rc_exe = Path(sdk_path) / "rc.exe"
-            if rc_exe.exists():
-                return rc_exe
-        
-        return None
+        manifest_file = self.installer_dir / "manifest.json"
+        with open(manifest_file, 'w') as f:
+            json.dump(manifest, f, indent=2)
 
 
-# Entry point
-if __name__ == "__main__":
+def main():
+    """Main entry point"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Build Sunflower AI for Windows")
-    parser.add_argument("--debug", action="store_true", help="Debug build")
-    parser.add_argument("--sign", action="store_true", help="Sign executables")
-    parser.add_argument("--config", type=Path, help="Build configuration file")
+    parser = argparse.ArgumentParser(
+        description="Compile Sunflower AI for Windows"
+    )
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root directory"
+    )
+    parser.add_argument(
+        "--sign",
+        action="store_true",
+        help="Sign executables (requires certificate)"
+    )
     
     args = parser.parse_args()
     
-    # Load configuration
-    if args.config and args.config.exists():
-        with open(args.config, 'r') as f:
-            config_data = json.load(f)
-    else:
-        config_data = {
-            "version": "6.2.0",
-            "security": {
-                "signing_required": args.sign
-            }
-        }
-    
-    config = BuildConfiguration(config_data)
-    
-    # Run compiler
-    compiler = WindowsCompiler(config)
-    output_path = compiler.compile()
-    
-    print(f"\n✅ Build complete: {output_path}")
+    try:
+        compiler = WindowsCompiler(args.project_root)
+        
+        if args.sign:
+            compiler.config["signing_required"] = True
+        
+        output_path = compiler.compile()
+        
+        print(f"\n✅ Build successful!")
+        print(f"📦 Output: {output_path}")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"\n❌ Build failed: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
