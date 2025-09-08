@@ -177,7 +177,7 @@ webui_uploads/
 static/generated/
 templates/compiled/
 
-# Logs
+# Logs - FIXED: Complete this section properly
 *.log
 *.log.*
 logs/
