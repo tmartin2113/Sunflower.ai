@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import logging
+import platform  # FIX: Added missing import
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -91,7 +92,7 @@ def check_python_version():
 
 def check_platform():
     """Verify platform is supported"""
-    current_platform = platform.system()
+    current_platform = platform.system()  # Now 'platform' is properly imported
     if current_platform not in SUPPORTED_PLATFORMS:
         raise RuntimeError(
             f"Unsupported platform: {current_platform}. "
@@ -100,154 +101,92 @@ def check_platform():
     return current_platform
 
 
-def get_app_directory() -> Path:
-    """Get application root directory"""
-    if getattr(sys, 'frozen', False):
-        # Running as compiled executable
-        return Path(sys.executable).parent
-    else:
-        # Running as script
-        return Path(__file__).parent.parent
-
-
-def get_data_directory() -> Path:
-    """Get user data directory (on USB partition)"""
-    from .partition_manager import PartitionManager
-    pm = PartitionManager()
-    usb_path = pm.find_usb_partition()
-    if not usb_path:
-        raise PartitionError("USB data partition not found")
-    return usb_path
-
-
-def get_config_path() -> Path:
-    """Get configuration file path"""
-    return get_app_directory() / "config"
-
-
-def load_system_config() -> Dict[str, Any]:
-    """Load system configuration from CD-ROM partition"""
-    config_path = get_config_path() / "version.json"
-    if not config_path.exists():
-        logger.warning(f"Configuration file not found: {config_path}")
-        return get_default_config()
-    
+def get_hardware_tier():
+    """Determine hardware tier based on system capabilities"""
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        import psutil
+        
+        # Get system RAM in GB
+        ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+        
+        # Get CPU core count
+        cpu_cores = psutil.cpu_count(logical=False) or 2
+        
+        # Determine tier
+        if ram_gb >= 16 and cpu_cores >= 8:
+            return "ultra"
+        elif ram_gb >= 8 and cpu_cores >= 4:
+            return "high"
+        elif ram_gb >= 4:
+            return "standard"
+        else:
+            return "minimum"
+            
+    except ImportError:
+        logger.warning("psutil not available, defaulting to standard tier")
+        return "standard"
     except Exception as e:
-        logger.error(f"Failed to load configuration: {e}")
-        return get_default_config()
+        logger.error(f"Error determining hardware tier: {e}")
+        return "standard"
 
 
-def get_default_config() -> Dict[str, Any]:
-    """Get default system configuration"""
+def get_age_group(age: int) -> Dict[str, Any]:
+    """Get age group configuration for a given age"""
+    for group_key, group_config in AGE_GROUPS.items():
+        if group_config["min"] <= age <= group_config["max"]:
+            return {
+                "key": group_key,
+                **group_config
+            }
+    
+    # Default to high school for ages above 18
     return {
-        "version": __version__,
-        "app_name": "Sunflower AI Professional",
-        "company": "Sunflower AI",
-        "build_date": datetime.now().isoformat(),
-        "features": {
-            "offline_mode": True,
-            "multi_profile": True,
-            "parent_dashboard": True,
-            "age_adaptation": True,
-            "safety_filter": True
-        },
-        "requirements": {
-            "min_ram_gb": 4,
-            "min_cores": 2,
-            "min_python": "3.8",
-            "platforms": SUPPORTED_PLATFORMS
-        }
+        "key": "high",
+        **AGE_GROUPS["high"]
     }
 
 
-def initialize_system() -> bool:
+def initialize_system():
     """Initialize the Sunflower AI system"""
-    try:
-        logger.info("=" * 60)
-        logger.info("Sunflower AI Professional System Initializing")
-        logger.info(f"Version: {__version__}")
-        logger.info("=" * 60)
-        
-        # Check Python version
-        check_python_version()
-        logger.info(f"✓ Python version: {sys.version_info.major}.{sys.version_info.minor}")
-        
-        # Check platform
-        platform_name = check_platform()
-        logger.info(f"✓ Platform: {platform_name}")
-        
-        # Load configuration
-        config = load_system_config()
-        logger.info(f"✓ Configuration loaded: {config['app_name']} v{config['version']}")
-        
-        # Initialize partition manager
-        from .partition_manager import PartitionManager
-        pm = PartitionManager()
-        
-        # Find CD-ROM partition
-        cdrom = pm.find_cdrom_partition()
-        if cdrom:
-            logger.info(f"✓ CD-ROM partition found: {cdrom}")
-        else:
-            logger.warning("⚠ CD-ROM partition not found - development mode")
-        
-        # Find USB partition
-        usb = pm.find_usb_partition()
-        if usb:
-            logger.info(f"✓ USB partition found: {usb}")
-        else:
-            logger.warning("⚠ USB partition not found - will create on first run")
-        
-        # Detect hardware
-        from .hardware_detector import HardwareDetector
-        hw = HardwareDetector()
-        tier = hw.get_hardware_tier()
-        logger.info(f"✓ Hardware tier: {tier}")
-        
-        # Initialize security
-        from .security import SecurityManager
-        sm = SecurityManager()
-        if sm.initialize():
-            logger.info("✓ Security system initialized")
-        
-        logger.info("=" * 60)
-        logger.info("System initialization complete")
-        logger.info("=" * 60)
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"System initialization failed: {e}")
-        return False
+    logger.info("=" * 60)
+    logger.info(f"Sunflower AI Professional System v{__version__}")
+    logger.info(f"Copyright {__copyright__}")
+    logger.info("=" * 60)
+    
+    # Check Python version
+    check_python_version()
+    logger.info(f"Python version: {sys.version}")
+    
+    # Check platform
+    platform_name = check_platform()
+    logger.info(f"Platform: {platform_name}")
+    
+    # Determine hardware tier
+    hardware_tier = get_hardware_tier()
+    logger.info(f"Hardware tier: {hardware_tier}")
+    logger.info(f"Selected model: {HARDWARE_TIERS[hardware_tier]['model']}")
+    
+    return {
+        "version": __version__,
+        "platform": platform_name,
+        "hardware_tier": hardware_tier,
+        "model": HARDWARE_TIERS[hardware_tier]["model"]
+    }
 
 
-# Auto-initialize on import in production mode
-if os.environ.get('SUNFLOWER_ENV') != 'development':
-    try:
-        import platform
-        # Only auto-initialize if not being imported by build tools
-        if not any(tool in sys.argv[0] for tool in ['pyinstaller', 'setup.py', 'pip']):
-            initialize_system()
-    except Exception as e:
-        logger.warning(f"Auto-initialization skipped: {e}")
-
-
-# Public API exports
+# Export main components
 __all__ = [
-    '__version__',
     'SunflowerAIError',
-    'PartitionError', 
+    'PartitionError',
     'ProfileError',
     'SecurityError',
     'ModelError',
+    'check_python_version',
+    'check_platform',
+    'get_hardware_tier',
+    'get_age_group',
+    'initialize_system',
     'HARDWARE_TIERS',
     'AGE_GROUPS',
-    'initialize_system',
-    'get_app_directory',
-    'get_data_directory',
-    'get_config_path',
-    'load_system_config'
+    '__version__'
 ]
