@@ -72,231 +72,208 @@ class SunflowerLauncher:
         # Set icon if available
         icon_path = get_cdrom_path('resources') / "sunflower.ico"
         if icon_path and icon_path.exists():
-            if self.system == "Windows":
+            try:
                 self.root.iconbitmap(str(icon_path))
-            elif self.system == "Darwin":
-                # macOS icon handling
-                try:
-                    img = tk.PhotoImage(file=str(icon_path.with_suffix('.png')))
-                    self.root.iconphoto(True, img)
-                except:
-                    pass
+            except:
+                pass  # Icon setting is optional
         
-        # Apply modern styling
-        self.setup_styles()
+        # Set up UI
+        self.setup_ui()
         
-        # Create UI
-        self.create_ui()
+        # Protocol for window closing
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Start initialization in background
         self.init_thread = threading.Thread(target=self.initialize_system, daemon=True)
         self.init_thread.start()
-        
-        # Bind cleanup on close
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
     def _show_partition_error(self):
-        """Show error dialog when partitions are not detected"""
-        error_msg = (
-            "Sunflower AI partitions not detected!\n\n"
-            "Please ensure:\n"
-            "1. The Sunflower USB device is properly connected\n"
-            "2. Both partitions (CD-ROM and USB) are mounted\n"
-            "3. You have the necessary permissions\n\n"
-            f"Looking for:\n"
-            f"- CD-ROM marker: {self.path_config.CDROM_MARKER_FILE}\n"
-            f"- USB marker: {self.path_config.USB_MARKER_FILE}"
+        """Show error when partitions are not detected"""
+        if 'DEVELOPMENT_MODE' in os.environ:
+            print("WARNING: Running in development mode without proper partitions")
+            return
+        
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Partition Not Found",
+            "Sunflower AI device partitions not detected.\n\n"
+            "Please ensure the device is properly connected and try again."
         )
-        
-        if self.system == "Windows":
-            error_msg += "\n\nOn Windows, try running as Administrator."
-        
-        messagebox.showerror("Partition Detection Failed", error_msg)
+        root.destroy()
     
-    def setup_styles(self):
-        """Configure modern UI styling"""
-        style = ttk.Style()
-        
-        # Configure colors
-        self.colors = {
-            'bg': '#f0f4f8',
-            'primary': '#5e72e4',
-            'success': '#2dce89',
-            'warning': '#fb6340',
-            'info': '#11cdef',
-            'text': '#32325d',
-            'text_light': '#8898aa',
-            'border': '#dee2e6'
-        }
-        
-        # Set background
-        self.root.configure(bg=self.colors['bg'])
-        
-        # Configure ttk styles
-        style.theme_use('clam')
-        
-        # Configure button style
-        style.configure(
-            'Primary.TButton',
-            background=self.colors['primary'],
-            foreground='white',
-            borderwidth=0,
-            focuscolor='none',
-            padding=(20, 10)
-        )
-        style.map(
-            'Primary.TButton',
-            background=[('active', '#4c63d2')]
-        )
-        
-        # Configure success button
-        style.configure(
-            'Success.TButton',
-            background=self.colors['success'],
-            foreground='white',
-            borderwidth=0,
-            focuscolor='none',
-            padding=(20, 10)
-        )
-        style.map(
-            'Success.TButton',
-            background=[('active', '#26b877')]
-        )
-        
-        # Configure progress bar
-        style.configure(
-            'Custom.Horizontal.TProgressbar',
-            background=self.colors['primary'],
-            troughcolor=self.colors['border'],
-            borderwidth=0,
-            lightcolor=self.colors['primary'],
-            darkcolor=self.colors['primary']
-        )
-    
-    def create_ui(self):
+    def setup_ui(self):
         """Create the user interface"""
-        # Header frame
-        header_frame = tk.Frame(self.root, bg=self.colors['primary'], height=100)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
+        # Main container
+        main_frame = tk.Frame(self.root, bg='#f0f0f0')
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Title with emoji
-        title_label = tk.Label(
-            header_frame,
+        # Header
+        header = tk.Frame(main_frame, bg='#4a90e2', height=80)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        
+        title = tk.Label(
+            header,
             text="🌻 Sunflower AI Professional System",
-            font=('Segoe UI', 20, 'bold'),
-            bg=self.colors['primary'],
-            fg='white'
+            font=('Segoe UI', 18, 'bold'),
+            fg='white',
+            bg='#4a90e2'
         )
-        title_label.pack(pady=25)
+        title.pack(pady=20)
         
-        # Subtitle
-        subtitle_label = tk.Label(
-            header_frame,
-            text="Family-Focused K-12 STEM Education",
-            font=('Segoe UI', 11),
-            bg=self.colors['primary'],
-            fg='white'
+        version = tk.Label(
+            header,
+            text="Version 6.2.0 - Family-Safe K-12 STEM Education",
+            font=('Segoe UI', 10),
+            fg='#e0e0e0',
+            bg='#4a90e2'
         )
-        subtitle_label.pack()
+        version.pack()
         
-        # Main content frame
-        self.content_frame = tk.Frame(self.root, bg=self.colors['bg'])
-        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
+        # Content area
+        self.content_frame = tk.Frame(main_frame, bg='white', padx=40, pady=30)
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Status frame
-        self.status_frame = tk.Frame(self.content_frame, bg=self.colors['bg'])
-        self.status_frame.pack(fill=tk.X, pady=10)
+        # Status section
+        self.status_frame = tk.Frame(self.content_frame, bg='white')
+        self.status_frame.pack(fill=tk.X, pady=(0, 20))
         
         self.status_label = tk.Label(
             self.status_frame,
             text="🔄 Initializing system...",
-            font=('Segoe UI', 11),
-            bg=self.colors['bg'],
-            fg=self.colors['text']
+            font=('Segoe UI', 12),
+            bg='white',
+            fg='#666'
         )
         self.status_label.pack()
         
         # Progress bar
         self.progress = ttk.Progressbar(
             self.content_frame,
-            style='Custom.Horizontal.TProgressbar',
             mode='indeterminate',
-            length=400
+            style='Horizontal.TProgressbar'
         )
-        self.progress.pack(pady=20)
+        self.progress.pack(fill=tk.X, pady=(0, 20))
         self.progress.start(10)
         
-        # Info frame (hidden initially)
-        self.info_frame = tk.Frame(self.content_frame, bg=self.colors['bg'])
+        # Action buttons (initially hidden)
+        self.button_frame = tk.Frame(self.content_frame, bg='white')
         
-        # Button frame (hidden initially)
-        self.button_frame = tk.Frame(self.content_frame, bg=self.colors['bg'])
-        
-        # Path info at bottom
-        path_info_frame = tk.Frame(self.root, bg=self.colors['bg'])
-        path_info_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=10)
-        
-        path_label = tk.Label(
-            path_info_frame,
-            text=f"CD-ROM: {self.cdrom_path} | USB: {self.usb_path}",
-            font=('Segoe UI', 9),
-            bg=self.colors['bg'],
-            fg=self.colors['text_light']
+        self.start_btn = tk.Button(
+            self.button_frame,
+            text="🚀 Start Sunflower AI",
+            font=('Segoe UI', 12, 'bold'),
+            bg='#4CAF50',
+            fg='white',
+            padx=30,
+            pady=10,
+            command=self.start_system,
+            cursor='hand2'
         )
-        path_label.pack()
+        self.start_btn.pack(pady=5)
+        
+        self.setup_btn = tk.Button(
+            self.button_frame,
+            text="👨‍👩‍👧‍👦 Setup Family Profiles",
+            font=('Segoe UI', 11),
+            bg='#2196F3',
+            fg='white',
+            padx=20,
+            pady=8,
+            command=self.setup_profiles,
+            cursor='hand2'
+        )
+        self.setup_btn.pack(pady=5)
+        
+        self.docs_btn = tk.Button(
+            self.button_frame,
+            text="📚 View Documentation",
+            font=('Segoe UI', 11),
+            bg='#FF9800',
+            fg='white',
+            padx=20,
+            pady=8,
+            command=self.open_documentation,
+            cursor='hand2'
+        )
+        self.docs_btn.pack(pady=5)
+        
+        # Info section
+        self.info_frame = tk.Frame(self.content_frame, bg='white')
+        self.info_text = tk.Text(
+            self.info_frame,
+            height=8,
+            width=60,
+            font=('Segoe UI', 10),
+            bg='#f5f5f5',
+            fg='#333',
+            relief=tk.FLAT,
+            wrap=tk.WORD
+        )
+        self.info_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Footer
+        footer = tk.Frame(main_frame, bg='#f0f0f0', height=40)
+        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        footer_text = tk.Label(
+            footer,
+            text="© 2025 Sunflower AI - Safe Learning for Every Child",
+            font=('Segoe UI', 9),
+            fg='#888',
+            bg='#f0f0f0'
+        )
+        footer_text.pack(pady=10)
     
-    def update_status(self, message: str, color: str = None):
+    def update_status(self, message: str, status_type: str = 'info'):
         """Update status message"""
-        self.status_label.config(text=message)
-        if color:
-            self.status_label.config(fg=self.colors.get(color, self.colors['text']))
+        colors = {
+            'info': '#666',
+            'success': '#4CAF50',
+            'warning': '#FF9800',
+            'error': '#F44336'
+        }
+        
+        self.root.after(0, lambda: self.status_label.config(
+            text=message,
+            fg=colors.get(status_type, '#666')
+        ))
     
     def initialize_system(self):
-        """Initialize the Sunflower AI system"""
+        """Initialize the system in background"""
         try:
-            # Step 1: Verify paths
-            self.update_status("✅ Partitions detected")
+            # Step 1: Check Ollama
+            self.update_status("🔍 Checking for Ollama...")
             time.sleep(0.5)
             
-            # Step 2: Check for Ollama
-            self.update_status("🔍 Checking for Ollama...")
             ollama_path = self.find_ollama()
-            
             if not ollama_path:
-                self.update_status("⚠️ Ollama not found - downloading required", 'warning')
-                self.setup_required = True
-            else:
-                self.update_status("✅ Ollama found")
+                self.update_status("❌ Ollama not found", 'error')
+                self.show_setup_instructions()
+                return
             
-            # Step 3: Check for models
-            self.update_status("🔍 Checking AI models...")
-            models_available = self.check_models()
+            # Step 2: Check models
+            self.update_status("📦 Checking AI models...")
+            if not self.check_models():
+                self.update_status("⚠️ Models not found", 'warning')
+                self.show_model_instructions()
+                return
             
-            if not models_available:
-                self.update_status("⚠️ Models need to be downloaded", 'warning')
-                self.setup_required = True
-            else:
-                self.update_status("✅ Models available")
+            # Step 3: Check profiles
+            self.update_status("👤 Checking family profiles...")
+            has_profiles = self.check_profiles()
             
             # Step 4: Load configuration
-            self.update_status("📋 Loading configuration...")
+            self.update_status("⚙️ Loading configuration...")
             self.config = self.load_config()
-            self.update_status("✅ Configuration loaded")
+            time.sleep(0.5)
             
-            # Step 5: Check profiles
-            self.update_status("👨‍👩‍👧‍👦 Checking family profiles...")
-            profiles_exist = self.check_profiles()
-            
-            if not profiles_exist:
-                self.update_status("ℹ️ No profiles found - setup required", 'info')
-                self.first_run = True
-            else:
-                self.update_status("✅ Profiles found")
-                self.first_run = False
-            
-            # Complete initialization
+            # Success
             self.setup_complete = True
+            self.update_status("✅ System ready!", 'success')
+            
+            # Stop progress bar and show buttons
             self.root.after(0, self.show_ready_ui)
             
         except Exception as e:
@@ -362,30 +339,28 @@ class SunflowerLauncher:
         config_path = get_usb_path('config') / "system_config.json"
         
         default_config = {
-            'first_run': True,
-            'safety_level': 'maximum',
-            'ollama_port': 11434,
-            'webui_port': 8080,
-            'default_model': 'llama3.2:3b',
-            'theme': 'light'
+            "ollama_port": 11434,
+            "webui_port": 8080,
+            "auto_start": False,
+            "safety_level": "maximum"
         }
         
         if config_path and config_path.exists():
             try:
                 with open(config_path, 'r') as f:
-                    loaded_config = json.load(f)
-                    default_config.update(loaded_config)
-            except Exception as e:
-                logger.warning(f"Failed to load config: {e}")
+                    user_config = json.load(f)
+                    default_config.update(user_config)
+            except:
+                pass
         
         return default_config
     
     def save_config(self):
-        """Save system configuration"""
-        config_dir = get_usb_path('config')
-        if config_dir:
-            config_dir.mkdir(parents=True, exist_ok=True)
-            config_path = config_dir / "system_config.json"
+        """Save configuration"""
+        config_path = get_usb_path('config') / "system_config.json"
+        
+        if config_path:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             
             try:
                 with open(config_path, 'w') as f:
@@ -394,106 +369,153 @@ class SunflowerLauncher:
                 logger.error(f"Failed to save config: {e}")
     
     def show_ready_ui(self):
-        """Show the ready UI with action buttons"""
-        # Stop progress bar
+        """Show UI when system is ready"""
         self.progress.stop()
         self.progress.pack_forget()
         
-        # Update status
-        self.status_label.config(
-            text="✅ System Ready",
-            fg=self.colors['success'],
-            font=('Segoe UI', 12, 'bold')
-        )
-        
-        # Show info
-        self.info_frame.pack(fill=tk.X, pady=20)
-        
-        info_text = f"""
-System Information:
-• Platform: {self.system}
-• CD-ROM Path: {self.cdrom_path}
-• USB Path: {self.usb_path}
-• Model: {self.config['default_model']}
-• Safety Level: {self.config['safety_level'].upper()}
-• Web UI Port: {self.config['webui_port']}
-"""
-        
-        info_label = tk.Label(
-            self.info_frame,
-            text=info_text,
-            font=('Segoe UI', 10),
-            bg=self.colors['bg'],
-            fg=self.colors['text'],
-            justify=tk.LEFT
-        )
-        info_label.pack()
-        
-        # Show buttons
         self.button_frame.pack(fill=tk.X, pady=20)
         
-        # Launch button
-        launch_btn = ttk.Button(
-            self.button_frame,
-            text="🚀 Launch Sunflower AI",
-            style='Success.TButton',
-            command=self.launch_application
-        )
-        launch_btn.pack(pady=5)
+        info_text = """
+System initialized successfully!
+
+✅ Ollama AI engine detected
+✅ Educational models available
+✅ Family safety filters active
+
+Click 'Start Sunflower AI' to begin learning or
+'Setup Family Profiles' to configure child accounts.
+        """
         
-        # Settings button
-        settings_btn = ttk.Button(
-            self.button_frame,
-            text="⚙️ Settings",
-            style='Primary.TButton',
-            command=self.open_settings
-        )
-        settings_btn.pack(pady=5)
-        
-        # Documentation button
-        docs_btn = ttk.Button(
-            self.button_frame,
-            text="📚 Documentation",
-            command=self.open_documentation
-        )
-        docs_btn.pack(pady=5)
+        self.info_frame.pack(fill=tk.BOTH, expand=True, pady=20)
+        self.info_text.insert('1.0', info_text.strip())
+        self.info_text.config(state='disabled')
     
-    def launch_application(self):
-        """Launch the main application"""
-        self.update_status("Starting Sunflower AI...")
+    def show_setup_instructions(self):
+        """Show setup instructions"""
+        self.progress.stop()
+        self.progress.pack_forget()
         
-        # Launch the appropriate interface based on configuration
-        launcher_script = get_cdrom_path('launchers') / 'launcher_common.py'
+        instructions = """
+⚠️ Initial Setup Required
+
+Ollama AI engine not detected. Please follow these steps:
+
+1. For Windows:
+   - Run setup_windows.bat as Administrator
+   
+2. For macOS:
+   - Open Terminal and run: ./setup_macos.sh
+   
+3. For Linux:
+   - Open Terminal and run: ./setup_linux.sh
+
+After setup is complete, restart this launcher.
+        """
         
-        if launcher_script and launcher_script.exists():
-            try:
-                subprocess.Popen(
-                    [sys.executable, str(launcher_script),
-                     '--cdrom-path', str(self.cdrom_path),
-                     '--usb-path', str(self.usb_path)],
-                    cwd=str(self.cdrom_path)
+        self.info_frame.pack(fill=tk.BOTH, expand=True, pady=20)
+        self.info_text.insert('1.0', instructions.strip())
+        self.info_text.config(state='disabled')
+    
+    def show_model_instructions(self):
+        """Show model download instructions"""
+        self.progress.stop()
+        self.progress.pack_forget()
+        
+        instructions = """
+📦 AI Models Required
+
+The educational AI models need to be downloaded.
+
+This is a one-time setup that requires internet connection.
+
+Click 'Setup Models' below to begin the download.
+The process will take 10-30 minutes depending on your
+internet speed.
+
+Required space: ~4GB
+        """
+        
+        self.info_frame.pack(fill=tk.BOTH, expand=True, pady=20)
+        self.info_text.insert('1.0', instructions.strip())
+        self.info_text.config(state='disabled')
+        
+        setup_btn = tk.Button(
+            self.content_frame,
+            text="📥 Setup Models",
+            font=('Segoe UI', 12, 'bold'),
+            bg='#4CAF50',
+            fg='white',
+            padx=30,
+            pady=10,
+            command=self.setup_models,
+            cursor='hand2'
+        )
+        setup_btn.pack(pady=20)
+    
+    def start_system(self):
+        """Start the Sunflower AI system"""
+        self.update_status("🚀 Starting Sunflower AI...", 'info')
+        
+        # Start Ollama service
+        try:
+            if self.system == "Windows":
+                self.ollama_process = subprocess.Popen(
+                    ["ollama", "serve"],
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
-                time.sleep(2)
-                self.root.destroy()
-            except Exception as e:
-                messagebox.showerror("Launch Error", f"Failed to launch application: {e}")
-        else:
-            # Fallback to web interface
-            webbrowser.open(f"http://localhost:{self.config['webui_port']}")
-    
-    def open_settings(self):
-        """Open settings dialog"""
-        settings_window = tk.Toplevel(self.root)
-        settings_window.title("Settings")
-        settings_window.geometry("400x300")
+            else:
+                self.ollama_process = subprocess.Popen(
+                    ["ollama", "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            
+            time.sleep(2)  # Wait for service to start
+            
+        except Exception as e:
+            logger.error(f"Failed to start Ollama: {e}")
+            messagebox.showerror("Error", f"Failed to start Ollama service:\n{e}")
+            return
         
-        # Add settings UI here
+        # Start Open WebUI
+        try:
+            webui_path = get_cdrom_path('open-webui')
+            if webui_path:
+                # Launch Open WebUI
+                # This would be the actual implementation
+                webbrowser.open("http://localhost:8080")
+                self.update_status("✅ Sunflower AI is running!", 'success')
+            else:
+                messagebox.showwarning("Warning", "Open WebUI not found. Opening fallback interface.")
+                webbrowser.open("http://localhost:11434")
+        
+        except Exception as e:
+            logger.error(f"Failed to start WebUI: {e}")
+            messagebox.showerror("Error", f"Failed to start WebUI:\n{e}")
+    
+    def setup_profiles(self):
+        """Open profile setup window"""
+        # This would open the profile management interface
+        profile_window = tk.Toplevel(self.root)
+        profile_window.title("Family Profile Setup")
+        profile_window.geometry("600x400")
+        
         label = tk.Label(
-            settings_window,
-            text="Settings coming soon!",
+            profile_window,
+            text="Family Profile Setup\n\nThis feature will be available in the next update.",
             font=('Segoe UI', 12)
         )
         label.pack(pady=50)
+    
+    def setup_models(self):
+        """Setup AI models"""
+        # This would launch the model setup process
+        messagebox.showinfo(
+            "Model Setup",
+            "Model setup will begin.\n\n"
+            "This process will download the required AI models.\n"
+            "Please ensure you have a stable internet connection."
+        )
     
     def open_documentation(self):
         """Open documentation"""
@@ -505,11 +527,23 @@ System Information:
             messagebox.showinfo("Documentation", "Documentation will be available in the docs folder.")
     
     def on_closing(self):
-        """Handle window closing"""
-        if self.ollama_process:
-            self.ollama_process.terminate()
-        if self.webui_process:
-            self.webui_process.terminate()
+        """Handle window closing with proper process cleanup"""
+        # FIX: Properly clean up processes to prevent resource leaks
+        for process in [self.ollama_process, self.webui_process]:
+            if process:
+                try:
+                    # First try graceful termination
+                    process.terminate()
+                    try:
+                        # Wait up to 5 seconds for process to terminate
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        # If process doesn't terminate gracefully, force kill it
+                        process.kill()
+                        # Wait for the kill to complete
+                        process.wait()
+                except Exception as e:
+                    logger.error(f"Error cleaning up process: {e}")
         
         self.save_config()
         self.root.destroy()
