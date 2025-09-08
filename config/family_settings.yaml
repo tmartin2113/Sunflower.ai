@@ -1,5 +1,6 @@
 # Sunflower AI Family Settings Template
 # This file is stored on the USB partition at: /profiles/family_settings.yaml
+# Version: 6.2.0 - Security Enhanced
 
 version: '6.2.0'
 created: null  # Set on first initialization
@@ -10,8 +11,57 @@ family:
   name: null  # Set during setup
   id: null  # Generated UUID
   created_date: null
-  parent_password_hash: null  # SHA-256 hash
-  parent_email: null  # Optional
+  
+  # FIX: Enhanced password security using argon2id
+  # Password is never stored in plain text or simple hash
+  parent_auth:
+    # Uses argon2id with the following parameters:
+    # - Time cost: 2 iterations
+    # - Memory cost: 64 MB
+    # - Parallelism: 4 threads
+    # - Salt length: 16 bytes
+    # - Hash length: 32 bytes
+    password_hash: null  # argon2id hash with embedded salt
+    hash_algorithm: 'argon2id'  # Algorithm identifier
+    hash_params:  # Configurable security parameters
+      time_cost: 2
+      memory_cost: 65536  # in KB
+      parallelism: 4
+      hash_length: 32
+      salt_length: 16
+    
+    # Additional security features
+    password_history: []  # List of previous password hashes (max 5)
+    password_changed_date: null
+    password_expires_days: 90  # 0 = never expires
+    min_password_length: 12
+    require_uppercase: true
+    require_lowercase: true
+    require_numbers: true
+    require_special: true
+    max_password_age_days: 90
+    password_complexity_score: 0  # 0-100 score
+    
+    # Account security
+    two_factor_enabled: false
+    two_factor_method: null  # 'totp', 'email', 'sms'
+    two_factor_secret: null  # Encrypted TOTP secret
+    recovery_codes: []  # Encrypted recovery codes
+    
+    # Session security
+    session_timeout_minutes: 30
+    max_concurrent_sessions: 3
+    require_reauthentication_for_changes: true
+    
+    # Failed login protection
+    max_login_attempts: 5
+    lockout_duration_minutes: 15
+    progressive_delay_enabled: true  # Increases delay after each failed attempt
+    
+  # Parent contact info (optional)
+  parent_email: null  # For password recovery
+  parent_phone: null  # For 2FA SMS
+  recovery_email: null  # Backup recovery email
   timezone: 'UTC'
   language: 'en-US'
 
@@ -24,6 +74,16 @@ child_profile_template:
   avatar: '🦄'  # Default avatar
   created_date: null
   last_active: null
+  
+  # Authentication for older children (optional, 13+)
+  child_auth:
+    enabled: false
+    username: null
+    # Uses same secure hashing as parent
+    password_hash: null  # argon2id hash
+    require_parent_approval: true
+    can_view_own_data: false
+    can_export_own_data: false
   
   # Learning Preferences
   learning:
@@ -38,6 +98,12 @@ child_profile_template:
     session_time_limit_minutes: 30
     break_reminder_enabled: true
     parent_notification_enabled: true
+    
+    # Enhanced safety monitoring
+    monitor_keywords: true
+    flag_concerning_patterns: true
+    block_personal_info_sharing: true
+    safe_search_enforced: true
     
   # Progress Tracking
   progress:
@@ -55,6 +121,11 @@ child_profile_template:
     enable_voice: false
     enable_images: true
     
+    # Session recording (for parent review)
+    record_sessions: true
+    session_retention_days: 30
+    auto_summarize_sessions: true
+
 # Global Safety Rules
 safety_rules:
   block_personal_info: true
@@ -63,6 +134,12 @@ safety_rules:
   block_scary_content: true  # For ages < 10
   redirect_commercial_content: true
   educational_focus: true
+  
+  # Enhanced safety features
+  realtime_monitoring: true
+  ai_safety_review: true
+  escalation_to_parent: true
+  emergency_shutdown_enabled: true
   
 # Achievement System
 achievements:
@@ -74,23 +151,69 @@ achievements:
     - curiosity  # Asking questions
     - problem_solving  # Completing challenges
     
+  # Rewards and gamification
+  points_enabled: true
+  badges_enabled: true
+  leaderboard_enabled: false  # Privacy-first: family-only leaderboard
+  certificates_enabled: true
+    
 # Parent Dashboard Settings
 parent_dashboard:
   enabled: true
   require_password: true
+  require_2fa_for_sensitive: false  # Require 2FA for viewing conversations
+  
+  # Dashboard features
   show_conversation_logs: true
   show_safety_incidents: true
   show_progress_reports: true
-  email_weekly_summary: false
+  show_usage_analytics: true
+  show_achievement_history: true
+  
+  # Notifications
+  email_notifications:
+    weekly_summary: false
+    safety_alerts: true
+    achievement_unlocked: true
+    session_completed: false
+    unusual_activity: true
+  
+  # Export options
+  allow_data_export: true
+  export_formats: ['json', 'csv', 'pdf']
+  include_conversations_in_export: false  # Privacy protection
   
 # Data Management
 data_management:
-  auto_backup: true
-  backup_frequency_days: 7
-  conversation_retention_days: 90
-  anonymize_old_data: false
-  export_format: 'json'  # json, csv
-  
+  # Encryption settings
+  encryption:
+    enabled: true
+    algorithm: 'AES-256-GCM'
+    key_derivation: 'PBKDF2-SHA256'
+    iterations: 100000
+    
+  # Backup settings
+  backup:
+    auto_backup: true
+    backup_frequency_days: 7
+    backup_retention_count: 4
+    backup_encryption: true
+    backup_location: 'local'  # 'local' or 'external'
+    
+  # Data retention
+  retention:
+    conversation_retention_days: 90
+    safety_log_retention_days: 180
+    analytics_retention_days: 365
+    anonymize_old_data: true
+    
+  # Privacy settings
+  privacy:
+    anonymize_exports: true
+    redact_personal_info: true
+    compliance_mode: 'COPPA'  # COPPA, GDPR, or BOTH
+    consent_required_age: 13
+    
 # System Preferences
 system:
   theme: 'light'  # light, dark, auto
@@ -98,3 +221,52 @@ system:
   animations_enabled: true
   font_size: 'medium'  # small, medium, large
   high_contrast: false
+  
+  # Performance settings
+  performance:
+    cache_enabled: true
+    preload_models: false
+    low_bandwidth_mode: false
+    battery_saver_mode: false
+    
+  # Accessibility
+  accessibility:
+    screen_reader_support: true
+    keyboard_navigation: true
+    voice_control: false
+    simplified_interface: false
+
+# Security Audit Log Settings
+audit_log:
+  enabled: true
+  log_login_attempts: true
+  log_password_changes: true
+  log_permission_changes: true
+  log_data_exports: true
+  log_safety_overrides: true
+  retention_days: 365
+  
+# Compliance and Legal
+compliance:
+  coppa_compliant: true
+  gdpr_compliant: true
+  ccpa_compliant: true
+  data_processor_agreement: false
+  third_party_sharing: false
+  analytics_enabled: false  # Only local analytics
+  
+# Emergency Procedures
+emergency:
+  emergency_shutdown_hotkey: 'Ctrl+Shift+E'
+  emergency_contact_enabled: false
+  emergency_contact_info: null
+  auto_lock_on_violation: true
+  violation_threshold: 3
+  
+# Development and Debug (disabled in production)
+debug:
+  enabled: false
+  verbose_logging: false
+  show_internal_errors: false
+  allow_unsafe_operations: false
+  bypass_safety_checks: false  # NEVER enable in production
