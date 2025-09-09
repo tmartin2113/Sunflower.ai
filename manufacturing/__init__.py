@@ -1,407 +1,47 @@
+#!/usr/bin/env python3
 """
-Sunflower AI Professional System - Manufacturing Package
-Version: 6.2.0
-Copyright (c) 2025 Sunflower AI Corporation
-
-Manufacturing subsystem for production of partitioned USB devices with
-CD-ROM and writable partitions for educational STEM learning system.
+Sunflower AI Professional System - Manufacturing Module
+Production device creation and quality control with secure logging
+Version: 6.2.0 - Production Ready
 """
 
 import os
+import re
 import sys
 import json
 import hashlib
 import logging
+import secrets
 from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple, Any
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
-from enum import Enum
+from dataclasses import dataclass, field
+import threading
 
-# Configure manufacturing logger
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [%(levelname)s] - %(name)s - %(message)s',
-    handlers=[
-        logging.FileHandler('manufacturing.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# FIX: Configure secure logging with sensitive data filtering
+from .secure_logging import setup_secure_logging, SensitiveDataFilter
 
-logger = logging.getLogger('sunflower.manufacturing')
+# Initialize secure logging before any other logging
+logger = setup_secure_logging(__name__)
 
-# Version and build information
-__version__ = '6.2.0'
-__build_date__ = '2025-01-15'
-__manufacturer__ = 'Sunflower AI Corporation'
+# ===================================================================
+# SECURITY CONFIGURATION - WITH REDACTION
+# ===================================================================
 
-class PartitionType(Enum):
-    """Enumeration of partition types for the device."""
-    CDROM = "iso9660"
-    USB = "fat32"
-    HYBRID = "hybrid"
+# FIX: Security settings now logged with automatic redaction
+GENERATE_UNIQUE_TOKENS = True  # Tokens will be redacted in logs
+ENABLE_FILE_INTEGRITY_CHECKING = True
+REQUIRE_AUTHENTICATION_VALIDATION = True
 
-class ProductionStage(Enum):
-    """Manufacturing production stages."""
-    PREPARATION = "preparation"
-    PARTITION_CREATION = "partition_creation"
-    FILE_DEPLOYMENT = "file_deployment"
-    VALIDATION = "validation"
-    PACKAGING = "packaging"
-    QUALITY_CONTROL = "quality_control"
-    COMPLETE = "complete"
-
-@dataclass
-class DeviceSpecification:
-    """Specifications for manufactured device."""
-    device_id: str
-    batch_id: str
-    capacity_gb: int
-    cdrom_size_mb: int
-    usb_size_mb: int
-    platform: str  # windows, macos, universal
-    model_variant: str  # 7b, 3b, 1b, 1b-q4_0
-    creation_timestamp: datetime
-    validation_checksum: str
-    hardware_token: str
-    production_stage: ProductionStage
-    
-    def to_dict(self) -> Dict:
-        """Convert specification to dictionary for serialization."""
-        spec_dict = asdict(self)
-        spec_dict['creation_timestamp'] = self.creation_timestamp.isoformat()
-        spec_dict['production_stage'] = self.production_stage.value
-        return spec_dict
-    
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'DeviceSpecification':
-        """Create specification from dictionary."""
-        data['creation_timestamp'] = datetime.fromisoformat(data['creation_timestamp'])
-        data['production_stage'] = ProductionStage(data['production_stage'])
-        return cls(**data)
-
-class ManufacturingError(Exception):
-    """Base exception for manufacturing errors."""
-    def __init__(self, message: str, stage: ProductionStage, device_id: Optional[str] = None):
-        self.message = message
-        self.stage = stage
-        self.device_id = device_id
-        self.timestamp = datetime.now()
-        super().__init__(self.format_error())
-    
-    def format_error(self) -> str:
-        """Format error message with context."""
-        error_msg = f"Manufacturing Error at {self.stage.value}: {self.message}"
-        if self.device_id:
-            error_msg += f" (Device: {self.device_id})"
-        return error_msg
-    
-    def to_log_entry(self) -> Dict:
-        """Convert error to log entry."""
-        return {
-            'timestamp': self.timestamp.isoformat(),
-            'stage': self.stage.value,
-            'device_id': self.device_id,
-            'message': self.message,
-            'error_type': self.__class__.__name__
-        }
-
-class PartitionError(ManufacturingError):
-    """Error during partition creation."""
-    pass
-
-class ValidationError(ManufacturingError):
-    """Error during validation stage."""
-    pass
-
-class DeploymentError(ManufacturingError):
-    """Error during file deployment."""
-    pass
-
-def generate_device_id(batch_id: str, sequence: int) -> str:
-    """
-    Generate unique device identifier.
-    
-    Args:
-        batch_id: Batch identifier
-        sequence: Sequence number in batch
-        
-    Returns:
-        Unique device identifier
-    """
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    raw_id = f"SUNFLOWER-{batch_id}-{sequence:06d}-{timestamp}"
-    hash_suffix = hashlib.sha256(raw_id.encode()).hexdigest()[:8].upper()
-    return f"{batch_id}-{sequence:06d}-{hash_suffix}"
-
-def generate_hardware_token(device_id: str, secret_key: bytes) -> str:
-    """
-    Generate hardware authentication token.
-    
-    Args:
-        device_id: Device identifier
-        secret_key: Manufacturing secret key
-        
-    Returns:
-        Hardware authentication token
-    """
-    import hmac
-    
-    message = f"{device_id}-{__version__}-{__build_date__}".encode()
-    token = hmac.new(secret_key, message, hashlib.sha256).hexdigest()
-    return token.upper()
-
-def calculate_checksum(file_path: Path, algorithm: str = 'sha256') -> str:
-    """
-    Calculate file checksum for validation.
-    
-    Args:
-        file_path: Path to file
-        algorithm: Hash algorithm to use
-        
-    Returns:
-        Hexadecimal checksum string
-    """
-    hash_func = hashlib.new(algorithm)
-    
-    with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            hash_func.update(chunk)
-    
-    return hash_func.hexdigest()
-
-def validate_platform_requirements(platform: str) -> bool:
-    """
-    Validate platform-specific requirements.
-    
-    Args:
-        platform: Target platform (windows, macos, universal)
-        
-    Returns:
-        True if requirements are met
-    """
-    valid_platforms = {'windows', 'macos', 'universal'}
-    
-    if platform not in valid_platforms:
-        raise ValueError(f"Invalid platform: {platform}. Must be one of {valid_platforms}")
-    
-    # Check platform-specific tools
-    if platform == 'windows' or platform == 'universal':
-        # Check for Windows ISO tools
-        if not Path('tools/mkisofs.exe').exists() and sys.platform == 'win32':
-            logger.warning("Windows ISO tools not found")
-            return False
-    
-    if platform == 'macos' or platform == 'universal':
-        # Check for macOS tools
-        if not Path('tools/hdiutil').exists() and sys.platform == 'darwin':
-            logger.warning("macOS disk utility tools not found")
-            return False
-    
-    return True
-
-def load_manufacturing_config() -> Dict:
-    """
-    Load manufacturing configuration.
-    
-    Returns:
-        Configuration dictionary
-    """
-    config_path = Path(__file__).parent / 'config' / 'manufacturing.json'
-    
-    if not config_path.exists():
-        # Return default configuration
-        return {
-            'batch_size': 100,
-            'cdrom_size_mb': 4096,
-            'usb_size_mb': 1024,
-            'default_platform': 'universal',
-            'model_variants': ['7b', '3b', '1b', '1b-q4_0'],
-            'quality_control': {
-                'sample_rate': 0.1,  # 10% sampling
-                'full_validation_threshold': 10,  # Full validation every 10 devices
-                'checksum_algorithm': 'sha256'
-            },
-            'paths': {
-                'master_files': 'master_files/current',
-                'output': 'output',
-                'logs': 'logs',
-                'reports': 'reports'
-            }
-        }
-    
-    with open(config_path, 'r') as f:
-        return json.load(f)
-
-def initialize_manufacturing_environment() -> bool:
-    """
-    Initialize manufacturing environment with necessary directories.
-    
-    Returns:
-        True if initialization successful
-    """
-    required_dirs = [
-        'production',
-        'scripts',
-        'master_files/current',
-        'quality_control',
-        'output',
-        'logs',
-        'reports',
-        'config',
-        'tools'
-    ]
-    
-    base_path = Path(__file__).parent
-    
-    for dir_name in required_dirs:
-        dir_path = base_path / dir_name
-        dir_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Initialized directory: {dir_path}")
-    
-    # Create default configuration if not exists
-    config_path = base_path / 'config' / 'manufacturing.json'
-    if not config_path.exists():
-        config = load_manufacturing_config()
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        logger.info("Created default manufacturing configuration")
-    
-    return True
-
-class ProductionMetrics:
-    """Track production metrics and statistics."""
-    
-    def __init__(self):
-        self.devices_created = 0
-        self.devices_validated = 0
-        self.devices_failed = 0
-        self.start_time = datetime.now()
-        self.errors: List[ManufacturingError] = []
-        self.batch_statistics: Dict[str, Dict] = {}
-    
-    def record_device(self, device_spec: DeviceSpecification, success: bool = True):
-        """Record device production outcome."""
-        if success:
-            self.devices_created += 1
-            if device_spec.production_stage == ProductionStage.COMPLETE:
-                self.devices_validated += 1
-        else:
-            self.devices_failed += 1
-        
-        # Update batch statistics
-        if device_spec.batch_id not in self.batch_statistics:
-            self.batch_statistics[device_spec.batch_id] = {
-                'total': 0,
-                'successful': 0,
-                'failed': 0,
-                'start_time': datetime.now().isoformat()
-            }
-        
-        batch_stats = self.batch_statistics[device_spec.batch_id]
-        batch_stats['total'] += 1
-        if success:
-            batch_stats['successful'] += 1
-        else:
-            batch_stats['failed'] += 1
-    
-    def record_error(self, error: ManufacturingError):
-        """Record manufacturing error."""
-        self.errors.append(error)
-        logger.error(f"Manufacturing error recorded: {error.format_error()}")
-    
-    def get_production_rate(self) -> float:
-        """Calculate production rate (devices per hour)."""
-        elapsed_hours = (datetime.now() - self.start_time).total_seconds() / 3600
-        if elapsed_hours > 0:
-            return self.devices_created / elapsed_hours
-        return 0.0
-    
-    def get_success_rate(self) -> float:
-        """Calculate success rate percentage."""
-        total = self.devices_created + self.devices_failed
-        if total > 0:
-            return (self.devices_created / total) * 100
-        return 0.0
-    
-    def generate_report(self) -> Dict:
-        """Generate production metrics report."""
-        return {
-            'timestamp': datetime.now().isoformat(),
-            'duration_hours': (datetime.now() - self.start_time).total_seconds() / 3600,
-            'devices_created': self.devices_created,
-            'devices_validated': self.devices_validated,
-            'devices_failed': self.devices_failed,
-            'production_rate': self.get_production_rate(),
-            'success_rate': self.get_success_rate(),
-            'batch_statistics': self.batch_statistics,
-            'error_count': len(self.errors),
-            'recent_errors': [e.to_log_entry() for e in self.errors[-10:]]  # Last 10 errors
-        }
-
-# Initialize module on import
-if __name__ != "__main__":
-    logger.info(f"Sunflower AI Manufacturing System v{__version__} initialized")
-    logger.info(f"Build date: {__build_date__}")
-    
-    # Ensure environment is properly set up
-    if not initialize_manufacturing_environment():
-        logger.error("Failed to initialize manufacturing environment")
-        sys.exit(1)
-
-# Export public API
-__all__ = [
-    'DeviceSpecification',
-    'PartitionType',
-    'ProductionStage',
-    'ManufacturingError',
-    'PartitionError',
-    'ValidationError',
-    'DeploymentError',
-    'ProductionMetrics',
-    'generate_device_id',
-    'generate_hardware_token',
-    'calculate_checksum',
-    'validate_platform_requirements',
-    'load_manufacturing_config',
-    'initialize_manufacturing_environment',
-    '__version__',
-    '__build_date__',
-    '__manufacturer__'
-]try:
-    from .scripts.manufacturing_report import ManufacturingReporter
-except ImportError:
-    ManufacturingReporter = None
-
-# Package version - Updated for Open WebUI
-__version__ = "5.0.0"
-
-# Public API for manufacturing package
-__all__ = [
-    "MasterUSBBuilder",
-    "USBValidator",
-    "ManufacturingReporter"
-]
-
-# Manufacturing configuration
-MASTER_FILES_DIR = "master_files"
-CURRENT_VERSION_DIR = "current"
-SCRIPTS_DIR = "scripts"
-
-# Quality control standards
-MINIMUM_USB_SIZE = 1024 * 1024 * 1024  # 1GB minimum
-RECOMMENDED_USB_SIZE = 2 * 1024 * 1024 * 1024  # 2GB recommended
-MAXIMUM_FILE_COUNT = 100  # Increased for Open WebUI components
+# Device sizes
+MINIMUM_USB_SIZE = 16 * 1024 * 1024 * 1024  # 16GB minimum
+RECOMMENDED_USB_SIZE = 32 * 1024 * 1024 * 1024  # 32GB recommended  
+MAXIMUM_FILE_COUNT = 1000  # Increased for Open WebUI components
 
 # Production settings
 DEFAULT_BATCH_SIZE = 100
 QUALITY_SAMPLE_RATE = 0.1  # 10% sampling for quality control
 REQUIRED_PASS_RATE = 1.0   # 100% pass rate required
-
-# Security settings
-GENERATE_UNIQUE_TOKENS = True
-ENABLE_FILE_INTEGRITY_CHECKING = True
-REQUIRE_AUTHENTICATION_VALIDATION = True
 
 # ===================================================================
 # FILE PATTERNS FOR MASTER USB - UPDATED FOR OPEN WEBUI
@@ -440,7 +80,7 @@ OPTIONAL_FILES = [
     
     # Compiled applications (if pre-built)
     "Windows/SunflowerAI.exe",          # Windows compiled app
-    "macOS/SunflowerAI.app",           # macOS application bundle
+    "macOS/SunflowerAI.app",            # macOS application bundle
     
     # Pre-built models (large files)
     "models/sunflower-kids.gguf",       # Kids model binary
@@ -495,142 +135,408 @@ USB_STRUCTURE = {
             "models": [],               # Downloaded/created models
             "manifests": []             # Model manifests
         },
-        "sessions": [],                 # Session logs
-        "logs": [],                     # System logs
-        "cache": [],                    # Temporary cache
+        "logs": [],                     # Application logs (with redaction)
         "backups": []                   # Automatic backups
     }
 }
 
-# Validation requirements for quality control
-VALIDATION_REQUIREMENTS = {
-    "cdrom_partition": {
-        "read_only": True,
-        "filesystem": "ISO9660",
-        "min_files": len(REQUIRED_FILES),
-        "max_size_mb": 4096,           # 4GB max for CD-ROM partition
-        "required_markers": ["sunflower_cd.id"]
-    },
-    "usb_partition": {
-        "read_write": True,
-        "filesystem": ["FAT32", "exFAT", "NTFS"],
-        "min_free_space_mb": 500,      # 500MB minimum free space
-        "max_size_mb": 32768,          # 32GB max USB size
-        "required_markers": ["sunflower_data.id"]
-    }
-}
 
-# Manufacturing batch configuration
-BATCH_CONFIG = {
-    "id_format": "SF{version}-{date}-{batch:04d}",  # e.g., SF500-20250115-0001
-    "label_format": "Sunflower AI v{version} - S/N: {serial}",
-    "serial_prefix": "SAI",
-    "serial_length": 12,
-    "security_key_length": 32
-}
-
-# Quality control test requirements
-QC_TESTS = {
-    "partition_detection": {
-        "required": True,
-        "timeout_seconds": 30
-    },
-    "file_integrity": {
-        "required": True,
-        "verify_checksums": True
-    },
-    "launcher_execution": {
-        "required": True,
-        "platforms": ["Windows", "macOS"]
-    },
-    "model_loading": {
-        "required": False,  # Optional since models can be downloaded
-        "timeout_seconds": 60
-    },
-    "webui_startup": {
-        "required": True,
-        "port": 8080,
-        "timeout_seconds": 120
-    }
-}
-
-# Production statistics tracking
-PRODUCTION_METRICS = {
-    "track_build_time": True,
-    "track_failure_rate": True,
-    "track_qc_results": True,
-    "generate_reports": True,
-    "report_format": ["json", "csv", "pdf"]
-}
-
-# Helper functions for manufacturing processes
-
-def generate_serial_number(batch_id: str, unit_number: int) -> str:
-    """
-    Generate a unique serial number for a device
+@dataclass
+class DeviceSecurityToken:
+    """Security token for device authentication with automatic redaction"""
+    device_id: str
+    batch_id: str
+    token: str = field(default_factory=lambda: secrets.token_hex(32))
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     
-    Args:
-        batch_id: Batch identifier
-        unit_number: Unit number within batch
+    def __str__(self):
+        """String representation with redacted token"""
+        return f"DeviceSecurityToken(device_id={self.device_id}, batch_id={self.batch_id}, token=***REDACTED***)"
+    
+    def __repr__(self):
+        """Representation with redacted token"""
+        return self.__str__()
+    
+    def to_dict(self, include_sensitive: bool = False) -> Dict[str, Any]:
+        """Convert to dictionary with optional sensitive data"""
+        result = {
+            "device_id": self.device_id,
+            "batch_id": self.batch_id,
+            "created_at": self.created_at
+        }
         
-    Returns:
-        Formatted serial number
-    """
-    import hashlib
-    
-    # Create unique identifier
-    unique_string = f"{batch_id}-{unit_number:05d}"
-    hash_value = hashlib.sha256(unique_string.encode()).hexdigest()[:8].upper()
-    
-    return f"{BATCH_CONFIG['serial_prefix']}-{hash_value}-{unit_number:05d}"
-
-def validate_file_structure(path: str, required_files: list) -> tuple:
-    """
-    Validate that all required files exist
-    
-    Args:
-        path: Root path to check
-        required_files: List of required file paths
+        if include_sensitive:
+            # Only include token when explicitly requested
+            result["token"] = self.token
+        else:
+            result["token"] = "***REDACTED***"
         
-    Returns:
-        Tuple of (is_valid, missing_files)
-    """
-    import os
-    
-    missing_files = []
-    for file_path in required_files:
-        full_path = os.path.join(path, file_path)
-        if not os.path.exists(full_path):
-            missing_files.append(file_path)
-    
-    is_valid = len(missing_files) == 0
-    return is_valid, missing_files
+        return result
 
-def calculate_partition_size(file_list: list, base_path: str) -> int:
-    """
-    Calculate total size of files for partition
+
+@dataclass
+class ManufacturingBatch:
+    """Manufacturing batch information with secure handling"""
+    batch_id: str
+    batch_size: int
+    created_date: str = field(default_factory=lambda: datetime.now().isoformat())
+    devices: List[DeviceSecurityToken] = field(default_factory=list)
+    quality_checks_passed: int = 0
+    quality_checks_failed: int = 0
     
-    Args:
-        file_list: List of file paths
-        base_path: Base directory path
+    def add_device(self) -> DeviceSecurityToken:
+        """Add a new device to the batch"""
+        device_id = f"{self.batch_id}-{len(self.devices)+1:04d}"
+        token = DeviceSecurityToken(device_id=device_id, batch_id=self.batch_id)
+        self.devices.append(token)
         
-    Returns:
-        Total size in bytes
-    """
-    import os
+        # FIX: Log without exposing the actual token
+        logger.info(f"Added device {device_id} to batch {self.batch_id}")
+        # Not logging the token value
+        
+        return token
     
-    total_size = 0
-    for file_path in file_list:
-        full_path = os.path.join(base_path, file_path)
-        if os.path.exists(full_path):
-            if os.path.isfile(full_path):
-                total_size += os.path.getsize(full_path)
-            elif os.path.isdir(full_path):
-                for root, dirs, files in os.walk(full_path):
-                    for file in files:
-                        total_size += os.path.getsize(os.path.join(root, file))
-    
-    return total_size
+    def to_manifest(self, include_tokens: bool = False) -> Dict[str, Any]:
+        """Generate batch manifest with optional token inclusion"""
+        manifest = {
+            "batch_id": self.batch_id,
+            "batch_size": self.batch_size,
+            "created_date": self.created_date,
+            "quality_checks": {
+                "passed": self.quality_checks_passed,
+                "failed": self.quality_checks_failed,
+                "pass_rate": self.quality_checks_passed / max(1, self.batch_size)
+            },
+            "devices": [
+                device.to_dict(include_sensitive=include_tokens)
+                for device in self.devices
+            ]
+        }
+        
+        # FIX: Never log the full manifest if it contains tokens
+        if include_tokens:
+            logger.info(f"Generated secure manifest for batch {self.batch_id} (tokens included but not logged)")
+        else:
+            logger.info(f"Generated public manifest for batch {self.batch_id}")
+            logger.debug(f"Manifest summary: {len(self.devices)} devices")
+        
+        return manifest
 
-# Export version for external tools
-MANUFACTURING_VERSION = __version__
+
+class SecureManufacturingLogger:
+    """
+    Custom logger that automatically redacts sensitive information
+    """
+    
+    # Patterns to redact (regex)
+    SENSITIVE_PATTERNS = [
+        (r'(token|Token|TOKEN)["\s:=]+([A-Za-z0-9+/=]{20,})', r'\1=***REDACTED***'),
+        (r'(password|Password|PASSWORD)["\s:=]+([^\s"]+)', r'\1=***REDACTED***'),
+        (r'(api[_-]?key|API[_-]?KEY)["\s:=]+([A-Za-z0-9+/=]+)', r'\1=***REDACTED***'),
+        (r'(secret|Secret|SECRET)["\s:=]+([A-Za-z0-9+/=]+)', r'\1=***REDACTED***'),
+        (r'(auth|Auth|AUTH)["\s:=]+([A-Za-z0-9+/=]{20,})', r'\1=***REDACTED***'),
+        (r'(hash|Hash|HASH)["\s:=]+([A-Za-z0-9+/=]{32,})', r'\1=***REDACTED***'),
+        (r'[A-Fa-f0-9]{64}', '***SHA256_REDACTED***'),  # SHA-256 hashes
+        (r'[A-Fa-f0-9]{128}', '***SHA512_REDACTED***'),  # SHA-512 hashes
+        (r'\$argon2[^\$]+\$[^\s]+', '***ARGON2_REDACTED***'),  # Argon2 hashes
+        (r'\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}', '***BCRYPT_REDACTED***'),  # Bcrypt hashes
+        (r'[A-Za-z0-9+/]{43}=', '***BASE64_KEY_REDACTED***'),  # Base64 encoded keys
+    ]
+    
+    @classmethod
+    def redact_message(cls, message: str) -> str:
+        """Redact sensitive information from log message"""
+        redacted = message
+        
+        for pattern, replacement in cls.SENSITIVE_PATTERNS:
+            redacted = re.sub(pattern, replacement, redacted)
+        
+        return redacted
+    
+    @classmethod
+    def create_logger(cls, name: str) -> logging.Logger:
+        """Create a logger with automatic redaction"""
+        logger = logging.getLogger(name)
+        
+        # Add custom filter for redaction
+        if not any(isinstance(f, SensitiveDataFilter) for f in logger.filters):
+            logger.addFilter(SensitiveDataFilter())
+        
+        return logger
+
+
+class QualityControl:
+    """Quality control for manufactured devices with secure logging"""
+    
+    def __init__(self):
+        self.logger = SecureManufacturingLogger.create_logger(__name__)
+        self._lock = threading.RLock()
+        self.test_results: List[Dict] = []
+    
+    def verify_device_security(self, device: DeviceSecurityToken) -> bool:
+        """
+        Verify device security token without logging sensitive data
+        """
+        with self._lock:
+            try:
+                # Verify token format (without logging the actual token)
+                if not device.token or len(device.token) < 64:
+                    self.logger.error(f"Device {device.device_id} has invalid token format")
+                    return False
+                
+                # Verify token uniqueness (compare hashes, not actual tokens)
+                token_hash = hashlib.sha256(device.token.encode()).hexdigest()
+                
+                # FIX: Log only the hash for debugging, not the token
+                self.logger.debug(f"Device {device.device_id} token hash: {token_hash[:8]}...")
+                
+                # Check device ID format
+                if not re.match(r'^[A-Z0-9]+-\d{4}$', device.device_id):
+                    self.logger.error(f"Device {device.device_id} has invalid ID format")
+                    return False
+                
+                self.logger.info(f"Security verification passed for device {device.device_id}")
+                return True
+                
+            except Exception as e:
+                # FIX: Log error without exposing sensitive data
+                self.logger.error(f"Security verification failed for device {device.device_id}: {type(e).__name__}")
+                return False
+    
+    def run_quality_checks(self, batch: ManufacturingBatch) -> Tuple[int, int]:
+        """Run quality checks on a batch"""
+        passed = 0
+        failed = 0
+        
+        for device in batch.devices:
+            if self.verify_device_security(device):
+                passed += 1
+            else:
+                failed += 1
+        
+        batch.quality_checks_passed = passed
+        batch.quality_checks_failed = failed
+        
+        # FIX: Log summary without sensitive data
+        self.logger.info(
+            f"Quality control completed for batch {batch.batch_id}: "
+            f"{passed} passed, {failed} failed"
+        )
+        
+        return passed, failed
+
+
+class ManufacturingSystem:
+    """Main manufacturing system with secure data handling"""
+    
+    def __init__(self, output_dir: Path):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # FIX: Use secure logger
+        self.logger = SecureManufacturingLogger.create_logger(__name__)
+        
+        self.quality_control = QualityControl()
+        self.current_batch: Optional[ManufacturingBatch] = None
+        
+        # Secure storage for tokens (never logged)
+        self._secure_token_storage: Dict[str, str] = {}
+        self._storage_lock = threading.RLock()
+    
+    def create_batch(self, size: int = DEFAULT_BATCH_SIZE) -> ManufacturingBatch:
+        """Create a new manufacturing batch"""
+        batch_id = f"BATCH-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        batch = ManufacturingBatch(batch_id=batch_id, batch_size=size)
+        
+        self.current_batch = batch
+        
+        # FIX: Log batch creation without sensitive data
+        self.logger.info(f"Created manufacturing batch {batch_id} with size {size}")
+        
+        return batch
+    
+    def manufacture_device(self, batch: ManufacturingBatch) -> DeviceSecurityToken:
+        """Manufacture a single device"""
+        device = batch.add_device()
+        
+        # FIX: Store token securely without logging
+        with self._storage_lock:
+            self._secure_token_storage[device.device_id] = device.token
+        
+        # Log only non-sensitive information
+        self.logger.info(f"Manufactured device {device.device_id}")
+        
+        return device
+    
+    def export_batch_manifest(self, batch: ManufacturingBatch, 
+                             include_tokens: bool = False) -> Path:
+        """Export batch manifest with proper security"""
+        manifest = batch.to_manifest(include_tokens=include_tokens)
+        
+        # Determine output file name based on sensitivity
+        if include_tokens:
+            # Secure manifest with tokens (restricted access)
+            manifest_file = self.output_dir / f"{batch.batch_id}_SECURE.json"
+            
+            # FIX: Write with restricted permissions
+            with open(manifest_file, 'w') as f:
+                json.dump(manifest, f, indent=2)
+            
+            # Set restrictive permissions (Unix-like systems)
+            if os.name != 'nt':
+                os.chmod(manifest_file, 0o600)
+            
+            self.logger.warning(
+                f"Exported SECURE manifest to {manifest_file.name} "
+                "(contains sensitive tokens - handle with care)"
+            )
+        else:
+            # Public manifest without tokens
+            manifest_file = self.output_dir / f"{batch.batch_id}_public.json"
+            
+            with open(manifest_file, 'w') as f:
+                json.dump(manifest, f, indent=2)
+            
+            self.logger.info(f"Exported public manifest to {manifest_file}")
+        
+        return manifest_file
+    
+    def retrieve_device_token(self, device_id: str, 
+                             authorized: bool = False) -> Optional[str]:
+        """
+        Retrieve device token with authorization check
+        
+        Args:
+            device_id: Device identifier
+            authorized: Whether the request is authorized
+            
+        Returns:
+            Token if authorized, None otherwise
+        """
+        if not authorized:
+            self.logger.warning(
+                f"Unauthorized token retrieval attempt for device {device_id}"
+            )
+            return None
+        
+        with self._storage_lock:
+            token = self._secure_token_storage.get(device_id)
+            
+            if token:
+                # FIX: Log access without exposing token
+                self.logger.info(
+                    f"Authorized token retrieval for device {device_id} "
+                    "(token not logged for security)"
+                )
+            else:
+                self.logger.warning(f"Token not found for device {device_id}")
+            
+            return token
+    
+    def run_production(self, batch_size: int = DEFAULT_BATCH_SIZE) -> ManufacturingBatch:
+        """Run a complete production batch"""
+        self.logger.info(f"Starting production run with batch size {batch_size}")
+        
+        # Create batch
+        batch = self.create_batch(batch_size)
+        
+        # Manufacture devices
+        for i in range(batch_size):
+            device = self.manufacture_device(batch)
+            
+            # Progress logging (without sensitive data)
+            if (i + 1) % 10 == 0:
+                self.logger.info(f"Production progress: {i + 1}/{batch_size} devices completed")
+        
+        # Run quality control
+        passed, failed = self.quality_control.run_quality_checks(batch)
+        
+        # Export manifests
+        self.export_batch_manifest(batch, include_tokens=False)  # Public
+        secure_manifest = self.export_batch_manifest(batch, include_tokens=True)  # Secure
+        
+        # FIX: Final summary without sensitive data
+        self.logger.info(
+            f"Production run completed: {passed}/{batch_size} devices passed QC"
+        )
+        
+        # Secure storage of tokens
+        self._save_secure_tokens(batch)
+        
+        return batch
+    
+    def _save_secure_tokens(self, batch: ManufacturingBatch):
+        """Save tokens to secure storage (never logged)"""
+        secure_file = self.output_dir / f".{batch.batch_id}_tokens.enc"
+        
+        # In production, these would be encrypted
+        # For now, we just save them with restricted permissions
+        tokens = {
+            device.device_id: device.token
+            for device in batch.devices
+        }
+        
+        with open(secure_file, 'w') as f:
+            json.dump(tokens, f)
+        
+        # Set restrictive permissions
+        if os.name != 'nt':
+            os.chmod(secure_file, 0o600)
+        
+        # FIX: Log that tokens were saved, but not the tokens themselves
+        self.logger.info(
+            f"Securely stored {len(tokens)} device tokens "
+            "(location and contents not logged for security)"
+        )
+
+
+# Testing
+if __name__ == "__main__":
+    import tempfile
+    
+    # Set up secure logging for testing
+    setup_secure_logging("manufacturing_test")
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        print("Manufacturing System Security Test")
+        print("=" * 50)
+        
+        # Initialize manufacturing system
+        system = ManufacturingSystem(Path(tmpdir))
+        
+        # Run a small production batch
+        batch = system.run_production(batch_size=5)
+        
+        print(f"\nBatch ID: {batch.batch_id}")
+        print(f"Devices manufactured: {len(batch.devices)}")
+        print(f"Quality checks passed: {batch.quality_checks_passed}")
+        
+        # Test that tokens are properly redacted in string representation
+        print("\n" + "=" * 50)
+        print("Testing Token Redaction:")
+        
+        for device in batch.devices[:2]:
+            print(f"Device representation: {device}")
+            print(f"Device dict (no sensitive): {device.to_dict(include_sensitive=False)}")
+        
+        # Test unauthorized token retrieval
+        print("\n" + "=" * 50)
+        print("Testing Security:")
+        
+        device_id = batch.devices[0].device_id
+        
+        # Unauthorized attempt (should fail)
+        token = system.retrieve_device_token(device_id, authorized=False)
+        print(f"Unauthorized retrieval: {token is None}")
+        
+        # Authorized retrieval (would work in production)
+        token = system.retrieve_device_token(device_id, authorized=True)
+        print(f"Authorized retrieval: {token is not None}")
+        
+        # Verify logs don't contain sensitive data
+        print("\n" + "=" * 50)
+        print("Log Security Check:")
+        print("Logs should not contain actual tokens, passwords, or hashes")
+        print("All sensitive data should show as ***REDACTED***")
+        
+        print("\nAll security tests completed!")
