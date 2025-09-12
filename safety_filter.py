@@ -1,89 +1,24 @@
-#!/usr/bin/env python3
 """
-Sunflower AI Professional System - Safety Filter Module
-Production-ready content moderation and child safety system
-Version: 6.2.0 - Fixed age boundary validation
+Sunflower AI Safety Filter System
+Version: 6.2
+Production-ready implementation with comprehensive child safety features
 """
 
 import re
 import json
+import sqlite3
 import hashlib
 import logging
 import threading
-from typing import Dict, List, Tuple, Optional, Any, Set
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
 from pathlib import Path
-import unicodedata
-from collections import defaultdict
-import sqlite3
-from enum import Enum, IntEnum
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any, Set
+from dataclasses import dataclass, field
+from enum import Enum
+from contextlib import contextmanager
+import uuid
 
 logger = logging.getLogger(__name__)
-
-
-class AgeGroup(IntEnum):
-    """
-    Age groups with explicit boundaries to prevent off-by-one errors.
-    Each group includes the lower bound and excludes the upper bound [lower, upper)
-    except for the last group which includes the upper bound.
-    """
-    TODDLER = 2      # Ages 2-4 (inclusive of 2, 3, 4)
-    PRESCHOOL = 5    # Ages 5-6 (inclusive of 5, 6)
-    EARLY_ELEM = 7   # Ages 7-8 (inclusive of 7, 8)
-    LATE_ELEM = 9    # Ages 9-10 (inclusive of 9, 10)
-    MIDDLE = 11      # Ages 11-13 (inclusive of 11, 12, 13)
-    HIGH = 14        # Ages 14-17 (inclusive of 14, 15, 16, 17)
-    ADULT = 18       # Age 18 (inclusive of 18)
-    
-    @classmethod
-    def from_age(cls, age: int) -> 'AgeGroup':
-        """
-        Get age group from specific age with proper boundary handling.
-        
-        FIX: Clear boundary definitions to prevent off-by-one errors
-        """
-        if age < 2:
-            raise ValueError(f"Age {age} is below minimum supported age of 2")
-        elif age > 18:
-            raise ValueError(f"Age {age} is above maximum supported age of 18")
-        
-        # FIX: Explicit boundary checks with clear inclusive ranges
-        if 2 <= age <= 4:
-            return cls.TODDLER
-        elif 5 <= age <= 6:
-            return cls.PRESCHOOL
-        elif 7 <= age <= 8:
-            return cls.EARLY_ELEM
-        elif 9 <= age <= 10:
-            return cls.LATE_ELEM
-        elif 11 <= age <= 13:
-            return cls.MIDDLE
-        elif 14 <= age <= 17:
-            return cls.HIGH
-        elif age == 18:
-            return cls.ADULT
-        else:
-            # This should never happen due to the initial bounds check
-            raise ValueError(f"Age {age} does not map to any age group")
-    
-    def get_age_range(self) -> Tuple[int, int]:
-        """
-        Get the inclusive age range for this group.
-        
-        Returns:
-            Tuple of (min_age_inclusive, max_age_inclusive)
-        """
-        ranges = {
-            AgeGroup.TODDLER: (2, 4),
-            AgeGroup.PRESCHOOL: (5, 6),
-            AgeGroup.EARLY_ELEM: (7, 8),
-            AgeGroup.LATE_ELEM: (9, 10),
-            AgeGroup.MIDDLE: (11, 13),
-            AgeGroup.HIGH: (14, 17),
-            AgeGroup.ADULT: (18, 18)
-        }
-        return ranges[self]
 
 
 class SafetyCategory(Enum):
@@ -98,22 +33,29 @@ class SafetyCategory(Enum):
     MEDICAL = "medical"
     COMMERCIAL = "commercial"
     PROFANITY = "profanity"
-    OFF_TOPIC = "off_topic"
+    UNKNOWN = "unknown"
+
+
+class SafetySeverity(Enum):
+    """Severity levels for safety incidents"""
+    INFO = 0
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+    CRITICAL = 4
 
 
 @dataclass
 class SafetyResult:
-    """Safety check result with detailed analysis"""
+    """Result of safety check"""
     safe: bool
-    score: float  # 0.0 (unsafe) to 1.0 (safe)
-    flags: List[str]
+    score: float
     category: SafetyCategory
-    suggested_response: Optional[str]
-    parent_alert: bool
-    details: Dict[str, Any]
+    severity: SafetySeverity
+    reason: Optional[str] = None
     educational_redirect: Optional[str] = None
-    severity_level: int = 0  # 0=safe, 1=mild, 2=moderate, 3=severe, 4=critical
-    age_appropriate: bool = True  # FIX: Added explicit age appropriateness flag
+    parent_alert: bool = False
+    details: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -128,714 +70,638 @@ class SafetyIncident:
     severity: int
     action_taken: str
     parent_notified: bool
-    child_age: int  # FIX: Added to track age at time of incident
     details: Dict[str, Any]
 
 
-@dataclass
-class AgeAppropriateContent:
-    """
-    Configuration for age-appropriate content with clear boundaries.
-    FIX: Explicit age ranges prevent boundary confusion
-    """
-    age_group: AgeGroup
-    min_age: int  # Inclusive
-    max_age: int  # Inclusive
-    
-    # Content settings
-    max_word_count: int
-    complexity_level: str  # simple, moderate, advanced
-    allowed_topics: Set[str]
-    blocked_topics: Set[str]
-    
-    # Safety settings
-    filter_level: str  # maximum, high, moderate, light
-    scary_content_allowed: bool
-    violence_tolerance: str  # none, cartoon, mild, moderate
-    romance_content_allowed: bool
-    
-    def __post_init__(self):
-        """Validate age boundaries"""
-        min_valid, max_valid = self.age_group.get_age_range()
-        if self.min_age != min_valid or self.max_age != max_valid:
-            raise ValueError(
-                f"Age range ({self.min_age}, {self.max_age}) doesn't match "
-                f"age group {self.age_group.name} range ({min_valid}, {max_valid})"
-            )
-
-
 class SafetyFilter:
-    """Enterprise-grade safety filter for child protection with fixed age validation"""
+    """
+    Production-ready safety filter for child protection
+    Implements multiple layers of content filtering
+    """
     
-    # FIX: Clear age boundaries as class constants
-    MIN_AGE = 2   # Inclusive
-    MAX_AGE = 18  # Inclusive
-    
-    # Severity levels
-    SEVERITY_SAFE = 0
-    SEVERITY_MILD = 1
-    SEVERITY_MODERATE = 2
-    SEVERITY_SEVERE = 3
-    SEVERITY_CRITICAL = 4
-    
-    def __init__(self, data_dir: Path, strict_mode: bool = True):
-        """
-        Initialize safety filter with age-appropriate configurations
+    def __init__(self, data_path: Path, config: Optional[Dict] = None):
+        """Initialize safety filter with proper resource management"""
+        self.data_path = Path(data_path)
+        self.data_path.mkdir(parents=True, exist_ok=True)
         
-        Args:
-            data_dir: Directory for safety data and logs
-            strict_mode: If True, err on the side of caution
-        """
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.config = config or self._default_config()
+        self.db_path = self.data_path / "safety.db"
         
-        self.strict_mode = strict_mode
+        # Thread safety
         self._lock = threading.RLock()
+        self._cache_lock = threading.RLock()
+        self._stats_lock = threading.RLock()
+        self._db_lock = threading.RLock()
         
-        # Initialize age-appropriate configurations
-        self.age_configs = self._initialize_age_configs()
+        # Pattern cache
+        self._cache: Dict[str, SafetyResult] = {}
+        self._cache_size = 1000
         
-        # Safety patterns database
-        self.safety_patterns = self._load_safety_patterns()
+        # Statistics tracking
+        self.statistics = {
+            'total_checks': 0,
+            'blocked': 0,
+            'redirected': 0,
+            'parent_alerts': 0
+        }
         
-        # Filter statistics
-        self.filter_stats = defaultdict(int)
-        self.filter_log = []
-        
-        # Database for incidents
-        self.db_path = self.data_dir / "safety_incidents.db"
+        # Initialize components
         self._init_database()
+        self.patterns = self._load_safety_patterns()
+        self.educational_redirects = self._load_educational_redirects()
         
-        logger.info("Safety filter initialized with fixed age validation")
+        logger.info("Safety filter initialized successfully")
     
-    def _initialize_age_configs(self) -> Dict[AgeGroup, AgeAppropriateContent]:
-        """
-        Initialize age-appropriate content configurations.
-        FIX: Each configuration has explicit, non-overlapping age ranges
-        """
-        configs = {}
-        
-        # Toddler (2-4 years)
-        configs[AgeGroup.TODDLER] = AgeAppropriateContent(
-            age_group=AgeGroup.TODDLER,
-            min_age=2,
-            max_age=4,
-            max_word_count=50,
-            complexity_level="simple",
-            allowed_topics={'colors', 'shapes', 'animals', 'family', 'numbers', 'letters'},
-            blocked_topics={'violence', 'death', 'romance', 'scary', 'complex_science'},
-            filter_level="maximum",
-            scary_content_allowed=False,
-            violence_tolerance="none",
-            romance_content_allowed=False
-        )
-        
-        # Preschool (5-6 years)
-        configs[AgeGroup.PRESCHOOL] = AgeAppropriateContent(
-            age_group=AgeGroup.PRESCHOOL,
-            min_age=5,
-            max_age=6,
-            max_word_count=75,
-            complexity_level="simple",
-            allowed_topics={'nature', 'simple_science', 'friendship', 'school', 'creativity'},
-            blocked_topics={'violence', 'death', 'romance', 'scary_monsters'},
-            filter_level="maximum",
-            scary_content_allowed=False,
-            violence_tolerance="cartoon",
-            romance_content_allowed=False
-        )
-        
-        # Early Elementary (7-8 years)
-        configs[AgeGroup.EARLY_ELEM] = AgeAppropriateContent(
-            age_group=AgeGroup.EARLY_ELEM,
-            min_age=7,
-            max_age=8,
-            max_word_count=100,
-            complexity_level="moderate",
-            allowed_topics={'science', 'history', 'geography', 'math', 'reading'},
-            blocked_topics={'graphic_violence', 'adult_themes', 'horror'},
-            filter_level="high",
-            scary_content_allowed=False,
-            violence_tolerance="cartoon",
-            romance_content_allowed=False
-        )
-        
-        # Late Elementary (9-10 years)
-        configs[AgeGroup.LATE_ELEM] = AgeAppropriateContent(
-            age_group=AgeGroup.LATE_ELEM,
-            min_age=9,
-            max_age=10,
-            max_word_count=150,
-            complexity_level="moderate",
-            allowed_topics={'advanced_science', 'technology', 'culture', 'sports'},
-            blocked_topics={'graphic_violence', 'adult_content', 'extreme_horror'},
-            filter_level="high",
-            scary_content_allowed=True,  # Mild scary content OK
-            violence_tolerance="mild",
-            romance_content_allowed=False
-        )
-        
-        # Middle School (11-13 years)
-        configs[AgeGroup.MIDDLE] = AgeAppropriateContent(
-            age_group=AgeGroup.MIDDLE,
-            min_age=11,
-            max_age=13,
-            max_word_count=200,
-            complexity_level="advanced",
-            allowed_topics={'all_academic', 'current_events', 'social_issues', 'career'},
-            blocked_topics={'explicit_content', 'graphic_violence', 'adult_only'},
-            filter_level="moderate",
-            scary_content_allowed=True,
-            violence_tolerance="mild",
-            romance_content_allowed=True  # Age-appropriate only
-        )
-        
-        # High School (14-17 years)
-        configs[AgeGroup.HIGH] = AgeAppropriateContent(
-            age_group=AgeGroup.HIGH,
-            min_age=14,
-            max_age=17,
-            max_word_count=300,
-            complexity_level="advanced",
-            allowed_topics={'all_topics', 'college_prep', 'career_planning'},
-            blocked_topics={'explicit_adult_content', 'illegal_activities'},
-            filter_level="moderate",
-            scary_content_allowed=True,
-            violence_tolerance="moderate",
-            romance_content_allowed=True
-        )
-        
-        # Adult (18 years)
-        configs[AgeGroup.ADULT] = AgeAppropriateContent(
-            age_group=AgeGroup.ADULT,
-            min_age=18,
-            max_age=18,
-            max_word_count=500,
-            complexity_level="advanced",
-            allowed_topics={'all_topics'},
-            blocked_topics={'illegal_content'},
-            filter_level="light",
-            scary_content_allowed=True,
-            violence_tolerance="moderate",
-            romance_content_allowed=True
-        )
-        
-        return configs
-    
-    def validate_age(self, age: int) -> Tuple[bool, str]:
-        """
-        Validate if age is within supported range.
-        FIX: Clear, inclusive boundary checks
-        
-        Args:
-            age: Age to validate
-            
-        Returns:
-            Tuple of (is_valid, message)
-        """
-        # FIX: Use inclusive comparisons with clear boundaries
-        if age < self.MIN_AGE:
-            return False, f"Age {age} is below minimum supported age of {self.MIN_AGE}"
-        elif age > self.MAX_AGE:
-            return False, f"Age {age} is above maximum supported age of {self.MAX_AGE}"
-        else:
-            return True, f"Age {age} is valid (within {self.MIN_AGE}-{self.MAX_AGE} range)"
-    
-    def get_age_appropriate_config(self, age: int) -> AgeAppropriateContent:
-        """
-        Get age-appropriate configuration for specific age.
-        FIX: Direct mapping without ambiguous boundaries
-        
-        Args:
-            age: Child's age
-            
-        Returns:
-            Age-appropriate content configuration
-            
-        Raises:
-            ValueError: If age is out of valid range
-        """
-        # Validate age first
-        is_valid, message = self.validate_age(age)
-        if not is_valid:
-            raise ValueError(message)
-        
-        # Get age group
-        age_group = AgeGroup.from_age(age)
-        
-        # Return corresponding configuration
-        return self.age_configs[age_group]
-    
-    def check_content(self, text: str, age: int, 
-                     context: Optional[Dict] = None) -> SafetyResult:
-        """
-        Check content for safety with proper age validation.
-        FIX: Explicit age boundary checking
-        
-        Args:
-            text: Content to check
-            age: Child's age
-            context: Optional context information
-            
-        Returns:
-            Safety check result
-        """
-        with self._lock:
-            # FIX: Validate age before processing
-            is_valid_age, age_message = self.validate_age(age)
-            if not is_valid_age:
-                logger.error(f"Invalid age provided: {age_message}")
-                return SafetyResult(
-                    safe=False,
-                    score=0.0,
-                    flags=["invalid_age"],
-                    category=SafetyCategory.OFF_TOPIC,
-                    suggested_response="Please provide a valid age between 2 and 18.",
-                    parent_alert=True,
-                    details={"error": age_message},
-                    age_appropriate=False
-                )
-            
-            # Get age-appropriate configuration
-            try:
-                age_config = self.get_age_appropriate_config(age)
-            except ValueError as e:
-                logger.error(f"Failed to get age config: {e}")
-                return SafetyResult(
-                    safe=False,
-                    score=0.0,
-                    flags=["configuration_error"],
-                    category=SafetyCategory.OFF_TOPIC,
-                    suggested_response="System configuration error. Please contact support.",
-                    parent_alert=True,
-                    details={"error": str(e)},
-                    age_appropriate=False
-                )
-            
-            # Initialize result
-            result = SafetyResult(
-                safe=True,
-                score=1.0,
-                flags=[],
-                category=SafetyCategory.SAFE,
-                suggested_response=None,
-                parent_alert=False,
-                details={
-                    "age": age,
-                    "age_group": age_config.age_group.name,
-                    "filter_level": age_config.filter_level
-                },
-                age_appropriate=True
-            )
-            
-            # Check content length
-            word_count = len(text.split())
-            if word_count > age_config.max_word_count:
-                result.flags.append("too_long")
-                result.details["word_count"] = word_count
-                result.details["max_words"] = age_config.max_word_count
-            
-            # Check for inappropriate content based on age
-            safety_issues = self._check_safety_patterns(text, age_config)
-            
-            if safety_issues:
-                result.safe = False
-                result.score = max(0.0, 1.0 - (len(safety_issues) * 0.2))
-                result.flags.extend([issue['type'] for issue in safety_issues])
-                result.category = self._determine_category(safety_issues)
-                result.severity_level = self._calculate_severity(safety_issues, age)
-                result.details["safety_issues"] = safety_issues
-                
-                # Determine if content is age-appropriate
-                result.age_appropriate = self._is_age_appropriate(safety_issues, age_config)
-                
-                # Generate educational redirect
-                result.educational_redirect = self._generate_redirect(
-                    result.category, age
-                )
-                
-                # Determine if parent should be alerted
-                result.parent_alert = (
-                    result.severity_level >= self.SEVERITY_MODERATE or
-                    not result.age_appropriate
-                )
-            
-            # Log the check
-            self._log_safety_check(text, age, result)
-            
-            # Update statistics
-            self.filter_stats[result.category] += 1
-            
-            return result
-    
-    def _check_safety_patterns(self, text: str, 
-                               age_config: AgeAppropriateContent) -> List[Dict]:
-        """
-        Check text against safety patterns for age group.
-        FIX: Age-specific pattern matching
-        """
-        issues = []
-        text_lower = text.lower()
-        
-        # Check blocked topics for this age group
-        for topic in age_config.blocked_topics:
-            if topic in text_lower:
-                issues.append({
-                    'type': 'blocked_topic',
-                    'topic': topic,
-                    'severity': self.SEVERITY_MODERATE
-                })
-        
-        # Check violence based on tolerance level
-        if age_config.violence_tolerance == "none":
-            violence_patterns = ['fight', 'punch', 'kick', 'hurt', 'weapon', 'gun']
-            for pattern in violence_patterns:
-                if pattern in text_lower:
-                    issues.append({
-                        'type': 'violence',
-                        'pattern': pattern,
-                        'severity': self.SEVERITY_SEVERE
-                    })
-        elif age_config.violence_tolerance == "cartoon":
-            violence_patterns = ['kill', 'murder', 'blood', 'gore', 'weapon']
-            for pattern in violence_patterns:
-                if pattern in text_lower:
-                    issues.append({
-                        'type': 'violence',
-                        'pattern': pattern,
-                        'severity': self.SEVERITY_MODERATE
-                    })
-        
-        # Check for scary content if not allowed
-        if not age_config.scary_content_allowed:
-            scary_patterns = ['monster', 'ghost', 'scary', 'nightmare', 'horror']
-            for pattern in scary_patterns:
-                if pattern in text_lower:
-                    issues.append({
-                        'type': 'scary',
-                        'pattern': pattern,
-                        'severity': self.SEVERITY_MILD
-                    })
-        
-        # Check for romance content if not allowed
-        if not age_config.romance_content_allowed:
-            romance_patterns = ['kiss', 'date', 'boyfriend', 'girlfriend', 'love']
-            for pattern in romance_patterns:
-                if pattern in text_lower:
-                    issues.append({
-                        'type': 'romance',
-                        'pattern': pattern,
-                        'severity': self.SEVERITY_MILD
-                    })
-        
-        return issues
-    
-    def _is_age_appropriate(self, safety_issues: List[Dict], 
-                           age_config: AgeAppropriateContent) -> bool:
-        """
-        Determine if content is age-appropriate despite safety issues.
-        FIX: Clear age-based logic
-        """
-        if not safety_issues:
-            return True
-        
-        # Count severe issues
-        severe_issues = sum(1 for issue in safety_issues 
-                          if issue.get('severity', 0) >= self.SEVERITY_SEVERE)
-        
-        # Age-specific thresholds
-        if age_config.age_group <= AgeGroup.PRESCHOOL:
-            # Very strict for young children
-            return len(safety_issues) == 0
-        elif age_config.age_group <= AgeGroup.LATE_ELEM:
-            # No severe issues allowed
-            return severe_issues == 0
-        elif age_config.age_group <= AgeGroup.MIDDLE:
-            # Limited tolerance
-            return severe_issues == 0 and len(safety_issues) <= 2
-        else:
-            # More tolerance for older children
-            return severe_issues <= 1 and len(safety_issues) <= 3
-    
-    def _calculate_severity(self, safety_issues: List[Dict], age: int) -> int:
-        """
-        Calculate overall severity level based on age.
-        FIX: Age-weighted severity calculation
-        """
-        if not safety_issues:
-            return self.SEVERITY_SAFE
-        
-        # Get maximum severity from issues
-        max_severity = max(issue.get('severity', 0) for issue in safety_issues)
-        
-        # Adjust based on age (younger = more severe)
-        age_group = AgeGroup.from_age(age)
-        
-        if age_group <= AgeGroup.PRESCHOOL:
-            # Increase severity for very young children
-            return min(self.SEVERITY_CRITICAL, max_severity + 1)
-        elif age_group <= AgeGroup.LATE_ELEM:
-            # Slight increase for elementary
-            return min(self.SEVERITY_CRITICAL, max_severity)
-        else:
-            # Use base severity for older children
-            return max_severity
-    
-    def _determine_category(self, safety_issues: List[Dict]) -> SafetyCategory:
-        """Determine primary safety category from issues"""
-        if not safety_issues:
-            return SafetyCategory.SAFE
-        
-        # Priority order for categories
-        priority_map = {
-            'violence': SafetyCategory.VIOLENCE,
-            'inappropriate': SafetyCategory.INAPPROPRIATE,
-            'personal_info': SafetyCategory.PERSONAL_INFO,
-            'dangerous': SafetyCategory.DANGEROUS,
-            'scary': SafetyCategory.SCARY,
-            'bullying': SafetyCategory.BULLYING,
-            'blocked_topic': SafetyCategory.OFF_TOPIC
-        }
-        
-        for issue in safety_issues:
-            issue_type = issue.get('type', '')
-            if issue_type in priority_map:
-                return priority_map[issue_type]
-        
-        return SafetyCategory.OFF_TOPIC
-    
-    def _generate_redirect(self, category: SafetyCategory, age: int) -> str:
-        """
-        Generate age-appropriate educational redirect.
-        FIX: Age-specific redirects
-        """
-        age_group = AgeGroup.from_age(age)
-        
-        redirects = {
-            SafetyCategory.VIOLENCE: {
-                AgeGroup.TODDLER: "Let's talk about being kind to friends instead!",
-                AgeGroup.PRESCHOOL: "How about we learn about helping others?",
-                AgeGroup.EARLY_ELEM: "Let's explore how people solve problems peacefully!",
-                AgeGroup.LATE_ELEM: "Would you like to learn about conflict resolution?",
-                AgeGroup.MIDDLE: "Let's discuss how communities work together.",
-                AgeGroup.HIGH: "How about exploring the psychology of cooperation?",
-                AgeGroup.ADULT: "Let's focus on constructive topics."
-            },
-            SafetyCategory.SCARY: {
-                AgeGroup.TODDLER: "Let's talk about happy things like rainbows!",
-                AgeGroup.PRESCHOOL: "How about we learn about brave heroes who help?",
-                AgeGroup.EARLY_ELEM: "Let's explore amazing real animals instead!",
-                AgeGroup.LATE_ELEM: "Would you like to learn about real science mysteries?",
-                AgeGroup.MIDDLE: "Let's discuss fascinating science facts!",
-                AgeGroup.HIGH: "How about exploring psychological phenomena?",
-                AgeGroup.ADULT: "Let's focus on educational content."
-            }
-        }
-        
-        # Get redirect for category and age group
-        category_redirects = redirects.get(category, {})
-        redirect = category_redirects.get(age_group, "Let's talk about something else!")
-        
-        return redirect
-    
-    def _load_safety_patterns(self) -> Dict:
-        """Load safety patterns from configuration"""
-        patterns_file = self.data_dir / "safety_patterns.json"
-        
-        if patterns_file.exists():
-            try:
-                with open(patterns_file, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load safety patterns: {e}")
-        
-        # Return default patterns
+    def _default_config(self) -> Dict:
+        """Default safety configuration"""
         return {
-            "violence": ["weapon", "gun", "knife", "kill", "murder", "fight"],
-            "inappropriate": ["drug", "alcohol", "smoking"],
-            "personal_info": ["address", "phone number", "email", "password"],
-            "dangerous": ["suicide", "self-harm", "eating disorder"],
-            "profanity": []  # Would be populated with actual profanity list
+            'enabled': True,
+            'strict_mode': True,
+            'log_incidents': True,
+            'cache_enabled': True,
+            'parent_alerts': True,
+            'educational_mode': True,
+            'max_cache_size': 1000,
+            'severity_threshold': SafetySeverity.LOW.value
         }
+    
+    @contextmanager
+    def _get_db_connection(self):
+        """
+        Context manager for database connections with proper cleanup
+        FIXED: Ensures connection is always closed even on errors
+        """
+        conn = None
+        try:
+            with self._db_lock:
+                conn = sqlite3.connect(
+                    str(self.db_path),
+                    timeout=30.0,
+                    isolation_level='DEFERRED',
+                    check_same_thread=False
+                )
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                yield conn
+        except sqlite3.Error as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception as e:
+                    logger.error(f"Error closing database connection: {e}")
     
     def _init_database(self):
-        """Initialize database for safety incidents"""
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS safety_incidents (
-                id TEXT PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                child_id TEXT NOT NULL,
-                child_age INTEGER NOT NULL,
-                session_id TEXT,
-                input_text TEXT,
-                category TEXT NOT NULL,
-                severity INTEGER NOT NULL,
-                action_taken TEXT,
-                parent_notified INTEGER DEFAULT 0,
-                details TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        """
+        Initialize safety database with proper resource management
+        FIXED: Connection is guaranteed to close even if initialization fails
+        """
+        conn = None
+        try:
+            # Use context manager for automatic cleanup
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Create incidents table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS incidents (
+                        id TEXT PRIMARY KEY,
+                        timestamp TEXT NOT NULL,
+                        child_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL,
+                        input_text TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        severity INTEGER NOT NULL,
+                        action_taken TEXT NOT NULL,
+                        parent_notified INTEGER DEFAULT 0,
+                        details TEXT
+                    )
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_child_id ON incidents(child_id)
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_session_id ON incidents(session_id)
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_timestamp ON incidents(timestamp)
+                ''')
+                
+                # Create filter statistics table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS filter_stats (
+                        date TEXT PRIMARY KEY,
+                        total_checks INTEGER DEFAULT 0,
+                        blocked_count INTEGER DEFAULT 0,
+                        redirected_count INTEGER DEFAULT 0,
+                        parent_alerts INTEGER DEFAULT 0
+                    )
+                ''')
+                
+                # Create pattern cache table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS pattern_cache (
+                        pattern_hash TEXT PRIMARY KEY,
+                        pattern TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        severity INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        last_used TEXT NOT NULL,
+                        hit_count INTEGER DEFAULT 0
+                    )
+                ''')
+                
+                conn.commit()
+                logger.info("Safety database initialized successfully")
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to initialize safety database: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error initializing database: {e}")
+            raise
     
-    def _log_safety_check(self, text: str, age: int, result: SafetyResult):
-        """Log safety check to database"""
-        if not result.safe:
-            incident = SafetyIncident(
-                id=hashlib.sha256(f"{datetime.now()}{text}".encode()).hexdigest()[:16],
-                timestamp=datetime.now(),
-                child_id="current_child",  # Would be actual child ID in production
-                session_id="current_session",
-                input_text=text[:500],  # Truncate for storage
-                category=result.category,
-                severity=result.severity_level,
-                action_taken="blocked_and_redirected",
-                parent_notified=result.parent_alert,
-                child_age=age,  # FIX: Store age at time of incident
-                details=result.details
-            )
-            
-            # Store in database
-            conn = sqlite3.connect(str(self.db_path))
-            conn.execute('''
-                INSERT INTO safety_incidents 
-                (id, timestamp, child_id, child_age, session_id, input_text, 
-                 category, severity, action_taken, parent_notified, details)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                incident.id,
-                incident.timestamp.isoformat(),
-                incident.child_id,
-                incident.child_age,
-                incident.session_id,
-                incident.input_text,
-                incident.category.value,
-                incident.severity,
-                incident.action_taken,
-                int(incident.parent_notified),
-                json.dumps(incident.details)
-            ))
-            conn.commit()
-            conn.close()
-            
-            # Add to memory log
-            self.filter_log.append(incident)
-    
-    def get_statistics(self, child_id: Optional[str] = None) -> Dict[str, Any]:
-        """Get safety filter statistics"""
-        stats = {
-            "total_checks": sum(self.filter_stats.values()),
-            "blocked_count": sum(v for k, v in self.filter_stats.items() 
-                               if k != SafetyCategory.SAFE),
-            "categories": dict(self.filter_stats),
-            "recent_incidents": len(self.filter_log)
+    def _load_safety_patterns(self) -> Dict[str, List[re.Pattern]]:
+        """Load and compile safety patterns with caching"""
+        patterns = {
+            'violence': [],
+            'inappropriate': [],
+            'personal_info': [],
+            'dangerous': [],
+            'scary': [],
+            'bullying': [],
+            'medical': [],
+            'commercial': [],
+            'profanity': []
         }
         
-        if child_id:
-            # Get child-specific stats from database
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.execute('''
-                SELECT COUNT(*) as count, AVG(severity) as avg_severity
-                FROM safety_incidents
-                WHERE child_id = ?
-            ''', (child_id,))
-            row = cursor.fetchone()
-            stats["child_incidents"] = row[0]
-            stats["child_avg_severity"] = row[1] or 0
-            conn.close()
+        # Default patterns for each category
+        default_patterns = {
+            'violence': [
+                r'\b(kill|murder|stab|shoot|weapon|gun|knife|bomb|explode|fight|punch|hurt|attack|assault)\b',
+                r'\b(blood|gore|death|die|dead|suicide|violent)\b'
+            ],
+            'inappropriate': [
+                r'\b(sex|porn|nude|naked|kiss|date|romance|love|marry|pregnant)\b',
+                r'\b(drug|alcohol|smoke|cigarette|beer|wine|drunk|high)\b'
+            ],
+            'personal_info': [
+                r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # Phone numbers
+                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
+                r'\b\d{3}-\d{2}-\d{4}\b',  # SSN
+                r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14})\b',  # Credit cards
+                r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir|Plaza|Pl)\b'  # Addresses
+            ],
+            'dangerous': [
+                r'\b(fire|burn|poison|chemical|acid|electric|shock|drown)\b',
+                r'\b(jump|cliff|roof|bridge|highway|traffic)\b'
+            ],
+            'scary': [
+                r'\b(monster|ghost|demon|devil|hell|zombie|vampire|witch)\b',
+                r'\b(nightmare|horror|terror|scream|haunted)\b'
+            ],
+            'bullying': [
+                r'\b(stupid|dumb|idiot|loser|ugly|fat|hate)\b',
+                r'\b(nobody likes|everyone hates|kill yourself)\b'
+            ],
+            'medical': [
+                r'\b(cancer|disease|surgery|hospital|emergency|pain|sick|medicine)\b',
+                r'\b(doctor|nurse|injection|needle|blood test)\b'
+            ],
+            'commercial': [
+                r'\b(buy|purchase|order|shop|store|price|\$|dollar|sale)\b',
+                r'\b(credit card|payment|checkout|cart|shipping)\b'
+            ],
+            'profanity': [
+                r'\b(damn|hell|crap|suck|stupid|shut up)\b',
+                # More severe profanity patterns would be added here
+            ]
+        }
         
-        return stats
+        # Compile patterns with proper error handling
+        for category, pattern_list in default_patterns.items():
+            compiled_patterns = []
+            for pattern in pattern_list:
+                try:
+                    compiled = re.compile(pattern, re.IGNORECASE)
+                    compiled_patterns.append(compiled)
+                except re.error as e:
+                    logger.error(f"Failed to compile pattern '{pattern}': {e}")
+            patterns[category] = compiled_patterns
+        
+        # Try to load custom patterns from file
+        custom_patterns_file = self.data_path / "custom_patterns.json"
+        if custom_patterns_file.exists():
+            try:
+                with open(custom_patterns_file, 'r') as f:
+                    custom = json.load(f)
+                    for category, pattern_list in custom.items():
+                        if category in patterns:
+                            for pattern in pattern_list:
+                                try:
+                                    compiled = re.compile(pattern, re.IGNORECASE)
+                                    patterns[category].append(compiled)
+                                except re.error as e:
+                                    logger.error(f"Failed to compile custom pattern '{pattern}': {e}")
+            except Exception as e:
+                logger.error(f"Failed to load custom patterns: {e}")
+        
+        return patterns
+    
+    def _load_educational_redirects(self) -> Dict[str, List[str]]:
+        """Load educational redirect messages"""
+        return {
+            'violence': [
+                "Let's learn about conflict resolution instead! How do people solve problems peacefully?",
+                "That sounds intense! How about we explore how superheroes use their powers to help people?",
+                "Violence isn't the answer! What are some ways people work together to make things better?"
+            ],
+            'inappropriate': [
+                "That's a topic for when you're older! How about we learn about friendship instead?",
+                "Let's focus on age-appropriate topics! What's your favorite subject in school?",
+                "That's not something we discuss here. What science topic interests you?"
+            ],
+            'personal_info': [
+                "Remember to keep personal information private! Let's talk about internet safety instead.",
+                "It's important to protect your privacy online! What do you know about being safe on the internet?",
+                "Never share personal details online! How about we learn about digital citizenship?"
+            ],
+            'dangerous': [
+                "Safety first! Let's learn about how to stay safe instead.",
+                "That could be dangerous! What safety rules do you know?",
+                "Let's focus on safe activities! What's your favorite safe outdoor game?"
+            ],
+            'scary': [
+                "That might be too scary! How about a fun adventure story instead?",
+                "Let's keep things positive! What makes you happy?",
+                "Some things can be frightening. What's your favorite happy story?"
+            ],
+            'bullying': [
+                "Words can hurt! Let's practice being kind instead.",
+                "Everyone deserves respect! How can we be good friends to others?",
+                "Kindness matters! What nice thing did someone do for you recently?"
+            ],
+            'default': [
+                "Let's talk about something educational! What would you like to learn about?",
+                "How about we explore a STEM topic? Science, Technology, Engineering, or Math?",
+                "That's not quite right for our conversation. What school subject interests you most?"
+            ]
+        }
+    
+    def check_message(self, message: str, age: int, child_id: str, session_id: str) -> SafetyResult:
+        """
+        Check message for safety with multi-layer filtering
+        Uses proper resource management for all operations
+        """
+        with self._stats_lock:
+            self.statistics['total_checks'] += 1
+        
+        # Check cache first
+        cache_key = self._get_cache_key(message, age)
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result:
+            return cached_result
+        
+        # Multi-layer safety check
+        result = self._perform_safety_check(message, age)
+        
+        # Log if necessary
+        if not result.safe and self.config['log_incidents']:
+            self._log_incident(result, child_id, session_id, message)
+        
+        # Update statistics
+        with self._stats_lock:
+            if not result.safe:
+                self.statistics['blocked'] += 1
+                if result.educational_redirect:
+                    self.statistics['redirected'] += 1
+                if result.parent_alert:
+                    self.statistics['parent_alerts'] += 1
+        
+        # Cache result
+        self._cache_result(cache_key, result)
+        
+        # Persist statistics periodically
+        if self.statistics['total_checks'] % 100 == 0:
+            self._persist_statistics()
+        
+        return result
+    
+    def _get_cache_key(self, message: str, age: int) -> str:
+        """Generate cache key for message"""
+        content = f"{message}:{age}"
+        return hashlib.sha256(content.encode()).hexdigest()
+    
+    def _get_cached_result(self, cache_key: str) -> Optional[SafetyResult]:
+        """Get cached result if available"""
+        if not self.config['cache_enabled']:
+            return None
+        
+        with self._cache_lock:
+            return self._cache.get(cache_key)
+    
+    def _cache_result(self, cache_key: str, result: SafetyResult):
+        """Cache safety check result"""
+        if not self.config['cache_enabled']:
+            return
+        
+        with self._cache_lock:
+            # Implement LRU by removing oldest if at capacity
+            if len(self._cache) >= self._cache_size:
+                oldest = next(iter(self._cache))
+                del self._cache[oldest]
+            
+            self._cache[cache_key] = result
+    
+    def _perform_safety_check(self, message: str, age: int) -> SafetyResult:
+        """Perform multi-layer safety check"""
+        message_lower = message.lower()
+        
+        # Layer 1: Check for blocked patterns
+        for category, patterns in self.patterns.items():
+            for pattern in patterns:
+                if pattern.search(message_lower):
+                    severity = self._calculate_severity(category, message_lower)
+                    redirect = self._get_educational_redirect(category)
+                    
+                    return SafetyResult(
+                        safe=False,
+                        score=0.0,
+                        category=SafetyCategory(category),
+                        severity=severity,
+                        reason=f"Content matched {category} pattern",
+                        educational_redirect=redirect,
+                        parent_alert=severity.value >= SafetySeverity.HIGH.value,
+                        details={'pattern_category': category}
+                    )
+        
+        # Layer 2: Context analysis
+        context_safe, context_reason = self._check_context(message, age)
+        if not context_safe:
+            return SafetyResult(
+                safe=False,
+                score=0.3,
+                category=SafetyCategory.UNKNOWN,
+                severity=SafetySeverity.MEDIUM,
+                reason=context_reason,
+                educational_redirect=self._get_educational_redirect('default'),
+                parent_alert=False
+            )
+        
+        # Layer 3: Age appropriateness
+        age_appropriate, age_reason = self._check_age_appropriateness(message, age)
+        if not age_appropriate:
+            return SafetyResult(
+                safe=False,
+                score=0.5,
+                category=SafetyCategory.INAPPROPRIATE,
+                severity=SafetySeverity.LOW,
+                reason=age_reason,
+                educational_redirect=self._get_educational_redirect('default'),
+                parent_alert=False
+            )
+        
+        # Message is safe
+        return SafetyResult(
+            safe=True,
+            score=1.0,
+            category=SafetyCategory.SAFE,
+            severity=SafetySeverity.INFO,
+            reason="Content passed all safety checks"
+        )
+    
+    def _calculate_severity(self, category: str, message: str) -> SafetySeverity:
+        """Calculate severity based on category and content"""
+        high_severity_categories = {'violence', 'personal_info', 'dangerous'}
+        medium_severity_categories = {'inappropriate', 'bullying', 'scary'}
+        
+        if category in high_severity_categories:
+            return SafetySeverity.HIGH
+        elif category in medium_severity_categories:
+            return SafetySeverity.MEDIUM
+        else:
+            return SafetySeverity.LOW
+    
+    def _check_context(self, message: str, age: int) -> Tuple[bool, Optional[str]]:
+        """Check message context for safety"""
+        # Check message length (possible spam or confusion)
+        if len(message) > 500:
+            return False, "Message too long"
+        
+        # Check for repeated characters (keyboard mashing)
+        if re.search(r'(.)\1{5,}', message):
+            return False, "Detected keyboard mashing"
+        
+        # Check for all caps (shouting)
+        words = message.split()
+        if len(words) > 3 and all(word.isupper() for word in words if len(word) > 2):
+            return False, "Please don't shout"
+        
+        return True, None
+    
+    def _check_age_appropriateness(self, message: str, age: int) -> Tuple[bool, Optional[str]]:
+        """Check if content is age-appropriate"""
+        # Complex vocabulary check for young children
+        if age < 8:
+            complex_words = re.findall(r'\b\w{10,}\b', message)
+            if len(complex_words) > 2:
+                return False, "Content may be too complex for age group"
+        
+        # Topic complexity check
+        complex_topics = ['quantum', 'calculus', 'algorithm', 'philosophy', 'psychology']
+        if age < 12 and any(topic in message.lower() for topic in complex_topics):
+            return False, "Topic may be too advanced for age group"
+        
+        return True, None
+    
+    def _get_educational_redirect(self, category: str) -> str:
+        """Get educational redirect message"""
+        import random
+        redirects = self.educational_redirects.get(category, self.educational_redirects['default'])
+        return random.choice(redirects)
+    
+    def _log_incident(self, result: SafetyResult, child_id: str, session_id: str, message: str):
+        """Log safety incident to database with proper resource management"""
+        incident = SafetyIncident(
+            id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+            child_id=child_id,
+            session_id=session_id,
+            input_text=message[:200],  # Truncate for storage
+            category=result.category,
+            severity=result.severity.value,
+            action_taken="blocked" if not result.safe else "allowed",
+            parent_notified=result.parent_alert,
+            details=result.details
+        )
+        
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO incidents (
+                        id, timestamp, child_id, session_id, input_text,
+                        category, severity, action_taken, parent_notified, details
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    incident.id,
+                    incident.timestamp.isoformat(),
+                    incident.child_id,
+                    incident.session_id,
+                    incident.input_text,
+                    incident.category.value,
+                    incident.severity,
+                    incident.action_taken,
+                    incident.parent_notified,
+                    json.dumps(incident.details)
+                ))
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to log incident: {e}")
+    
+    def _persist_statistics(self):
+        """Persist statistics to database with proper resource management"""
+        today = datetime.now().date().isoformat()
+        
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                with self._stats_lock:
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO filter_stats (
+                            date, total_checks, blocked_count, redirected_count, parent_alerts
+                        ) VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        today,
+                        self.statistics['total_checks'],
+                        self.statistics['blocked'],
+                        self.statistics['redirected'],
+                        self.statistics['parent_alerts']
+                    ))
+                
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to persist statistics: {e}")
+    
+    def get_safety_status(self) -> Dict[str, Any]:
+        """Get current safety filter status"""
+        with self._stats_lock:
+            stats = dict(self.statistics)
+        
+        return {
+            'operational': True,
+            'total_checks': stats.get('total_checks', 0),
+            'blocked_count': stats.get('blocked', 0),
+            'parent_alerts': stats.get('parent_alerts', 0),
+            'cache_size': len(self._cache),
+            'patterns_loaded': sum(len(p) for p in self.patterns.values()),
+            'categories': list(self.patterns.keys()),
+            'database': 'connected' if self.db_path.exists() else 'not initialized'
+        }
+    
+    def get_incidents_for_review(self, child_id: str, start_date: Optional[datetime] = None) -> List[Dict]:
+        """Get incidents for parent review with proper resource management"""
+        if not start_date:
+            start_date = datetime.now() - timedelta(days=7)
+        
+        incidents = []
+        
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM incidents 
+                    WHERE child_id = ? AND timestamp >= ?
+                    ORDER BY timestamp DESC
+                ''', (child_id, start_date.isoformat()))
+                
+                for row in cursor.fetchall():
+                    incidents.append({
+                        'id': row['id'],
+                        'timestamp': row['timestamp'],
+                        'category': row['category'],
+                        'severity': row['severity'],
+                        'input_text': row['input_text'],
+                        'action_taken': row['action_taken'],
+                        'parent_notified': bool(row['parent_notified'])
+                    })
+        
+        except sqlite3.Error as e:
+            logger.error(f"Failed to retrieve incidents: {e}")
+        
+        return incidents
+    
+    def cleanup(self):
+        """Clean up resources"""
+        logger.info("Cleaning up safety filter resources")
+        
+        # Persist final statistics
+        self._persist_statistics()
+        
+        # Clear cache
+        with self._cache_lock:
+            self._cache.clear()
+        
+        logger.info("Safety filter cleanup complete")
 
 
-# Testing
+# Production testing
 if __name__ == "__main__":
     import tempfile
     
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Initialize safety filter
-        safety_filter = SafetyFilter(Path(tmpdir))
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        filter = SafetyFilter(Path(tmp_dir))
         
-        print("Safety Filter Age Validation Testing")
+        # Test messages
+        test_cases = [
+            ("Let's learn about photosynthesis!", 10, True),
+            ("Can you tell me about guns?", 8, False),
+            ("What's 2+2?", 6, True),
+            ("My phone number is 555-1234", 12, False),
+            ("I hate my stupid teacher", 14, False),
+            ("How do volcanoes work?", 10, True),
+            ("Tell me about quantum physics", 7, False),  # Too complex for age
+            ("HELP ME NOW!!!", 10, False),  # All caps
+            ("aaaaaaaaaaaa", 8, False),  # Keyboard mashing
+        ]
+        
+        print("Safety Filter Test Results")
         print("=" * 50)
         
-        # FIX: Test age boundary validation
-        print("\nTesting Age Boundaries:")
-        test_ages = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-        
-        for age in test_ages:
-            is_valid, message = safety_filter.validate_age(age)
-            print(f"Age {age:2d}: {'✓' if is_valid else '✗'} - {message}")
-        
-        print("\n" + "=" * 50)
-        print("Testing Age Group Assignment:")
-        
-        # Test age to group mapping
-        age_group_tests = [
-            (2, "TODDLER"), (3, "TODDLER"), (4, "TODDLER"),
-            (5, "PRESCHOOL"), (6, "PRESCHOOL"),
-            (7, "EARLY_ELEM"), (8, "EARLY_ELEM"),
-            (9, "LATE_ELEM"), (10, "LATE_ELEM"),
-            (11, "MIDDLE"), (12, "MIDDLE"), (13, "MIDDLE"),
-            (14, "HIGH"), (15, "HIGH"), (16, "HIGH"), (17, "HIGH"),
-            (18, "ADULT")
-        ]
-        
-        for age, expected_group in age_group_tests:
-            try:
-                group = AgeGroup.from_age(age)
-                match = group.name == expected_group
-                print(f"Age {age:2d} -> {group.name:12s} {'✓' if match else f'✗ (expected {expected_group})'}")
-            except ValueError as e:
-                print(f"Age {age:2d} -> ERROR: {e}")
-        
-        print("\n" + "=" * 50)
-        print("Testing Content Filtering by Age:")
-        
-        # Test content with different ages
-        test_contents = [
-            ("Let's learn about colors!", "safe_toddler"),
-            ("There was a scary monster", "scary"),
-            ("How do plants grow?", "safe_science"),
-            ("The hero fought the dragon", "violence"),
-            ("What's your phone number?", "personal_info")
-        ]
-        
-        test_ages_subset = [3, 6, 9, 12, 15, 18]
-        
-        for content, content_type in test_contents:
-            print(f"\nContent: '{content}' (type: {content_type})")
+        for message, age, expected_safe in test_cases:
+            result = filter.check_message(message, age, "test_child", "test_session")
             
-            for age in test_ages_subset:
-                result = safety_filter.check_content(content, age)
-                status = "✓ SAFE" if result.safe else "✗ BLOCKED"
-                print(f"  Age {age:2d}: {status} - {result.category.value}")
+            print(f"\nMessage: {message}")
+            print(f"Age: {age}")
+            print(f"Expected Safe: {expected_safe}")
+            print(f"Result Safe: {result.safe}")
+            print(f"Score: {result.score:.2f}")
+            print(f"Category: {result.category.value}")
+            print(f"Severity: {result.severity.name}")
+            
+            if not result.safe:
+                print(f"Reason: {result.reason}")
+                print(f"Redirect: {result.educational_redirect}")
+            
+            assert result.safe == expected_safe, f"Safety check failed for: {message}"
         
         print("\n" + "=" * 50)
-        print("Testing Edge Cases:")
+        print("All tests passed! ✓")
         
-        # Test exact age boundaries
-        boundary_tests = [
-            (4, "TODDLER", "Last age of toddler group"),
-            (5, "PRESCHOOL", "First age of preschool group"),
-            (13, "MIDDLE", "Last age of middle school"),
-            (14, "HIGH", "First age of high school"),
-            (18, "ADULT", "Exactly 18 years old")
-        ]
+        # Get system status
+        status = filter.get_safety_status()
+        print("\nSafety System Status:")
+        for key, value in status.items():
+            print(f"  {key}: {value}")
         
-        for age, expected_group, description in boundary_tests:
-            group = AgeGroup.from_age(age)
-            min_age, max_age = group.get_age_range()
-            print(f"Age {age}: {description}")
-            print(f"  Group: {group.name} (range: {min_age}-{max_age})")
-            print(f"  Correct: {'✓' if group.name == expected_group else '✗'}")
-        
-        # Get statistics
-        print("\n" + "=" * 50)
-        print("Filter Statistics:")
-        stats = safety_filter.get_statistics()
-        print(f"Total checks: {stats['total_checks']}")
-        print(f"Blocked: {stats['blocked_count']}")
-        print(f"Categories: {stats['categories']}")
-        
-        print("\nAll age validation tests completed!")
+        # Cleanup
+        filter.cleanup()
