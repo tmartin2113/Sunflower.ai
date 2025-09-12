@@ -157,15 +157,15 @@ class PartitionManager:
             except Exception as e:
                 logger.debug(f"Error checking mount point {mount_base}: {e}")
     
-    def _check_partition(self, mount_point: Path):
-        """Check if a mount point is a Sunflower partition"""
+   def _check_partition(self, mount_point: Path):
+    """Check if a mount point is a Sunflower partition"""
+    with self._lock:  # Acquire lock first
         cdrom_marker = mount_point / self.CDROM_MARKER
         usb_marker = mount_point / self.USB_MARKER
         
         try:
             if cdrom_marker.exists():
-                with self._lock:
-                    self._cdrom_path = mount_point
+                self._cdrom_path = mount_point
                     self._partition_info["cdrom"] = self._get_partition_info(
                         mount_point, PartitionType.CDROM
                     )
