@@ -237,7 +237,7 @@ class WindowsCompiler:
             "--icon", icon_path,
             "--distpath", str(self.temp_build_dir / "dist"),
             "--workpath", str(self.temp_build_dir / "build"),
-            "--add-data", f"{icon_path}{os.pathsep}.",  # FIX: Now using os.pathsep correctly
+            "--add-data", f"{icon_path};.",
             str(launcher_py)
         ]
         
