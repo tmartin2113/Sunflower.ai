@@ -4,7 +4,8 @@ title Sunflower AI Professional System Launcher
 
 :: ==================== CONFIGURATION ====================
 set "VERSION=6.2.0"
-set "LOG_FILE=%TEMP%\sunflower_launcher_%DATE:~-4%%DATE:~4,2%%DATE:~7,2%.log"
+for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
+set "LOG_FILE=%TEMP%\sunflower_launcher_%datetime:~0,8%.log"
 set "MIN_WINDOWS_BUILD=17134"
 set "MIN_RAM_GB=4"
 set "CDROM_MARKER=SUNFLOWER_CD"
