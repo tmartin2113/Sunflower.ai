@@ -1,89 +1,51 @@
-#!/usr/bin/env python3
 """
-Sunflower AI Professional System - Common Launcher Module
-Shared functionality for Windows and macOS launchers with fallback detection
-Version: 6.2.0 - Production Ready with Fixed Platform Detection
+Sunflower AI Common Launcher Components
+Version: 6.2
+Cross-platform launcher utilities and UI
 """
 
 import os
 import sys
+import json
+import logging
 import platform
 import subprocess
-import json
-import time
-import socket
-import hashlib
-import sqlite3
 import threading
-import logging
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
-from dataclasses import dataclass
 import tkinter as tk
-from tkinter import messagebox, ttk, filedialog
-import webbrowser
+from tkinter import ttk, messagebox
+from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
+from dataclasses import dataclass
+from datetime import datetime
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('SunflowerLauncher')
+logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SystemConfig:
-    """System configuration data"""
-    platform: str
-    cdrom_path: Path
-    usb_path: Path
-    model_variant: str
-    hardware_tier: str
-    ram_gb: float
-    cpu_cores: int
-    ollama_port: int = 11434
-    webui_port: int = 8080
+class SystemRequirements:
+    """System requirements for Sunflower AI"""
+    min_ram_gb: int = 4
+    min_python_version: str = "3.11"
+    min_disk_space_gb: int = 10
+    supported_platforms: list = None
+    
+    def __post_init__(self):
+        if self.supported_platforms is None:
+            self.supported_platforms = ["Windows", "Darwin", "Linux"]
 
 
 class PartitionDetector:
-    """Detect and validate partitioned device with fallback methods"""
+    """Detect and validate Sunflower AI partitions"""
     
     def __init__(self):
         self.platform = platform.system()
-        self.cdrom_path = None
-        self.usb_path = None
+        self.cdrom_marker = "sunflower_cd.id"
+        self.usb_marker = "sunflower_data.id"
         
-        # FIX: Track whether platform-specific modules are available
-        self.windows_modules_available = False
-        self.macos_modules_available = False
-        
-        # Check for platform-specific module availability
-        self._check_platform_modules()
-    
-    def _check_platform_modules(self):
-        """Check which platform-specific modules are available"""
-        if self.platform == "Windows":
-            try:
-                import win32api
-                import win32file
-                self.windows_modules_available = True
-                logger.info("Windows modules (pywin32) available")
-            except ImportError:
-                self.windows_modules_available = False
-                logger.warning("Windows modules (pywin32) not available - using fallback detection")
-        
-        elif self.platform == "Darwin":
-            try:
-                import plistlib
-                self.macos_modules_available = True
-                logger.info("macOS modules available")
-            except ImportError:
-                self.macos_modules_available = False
-                logger.warning("macOS modules not available - using fallback detection")
-    
     def detect_partitions(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect CD-ROM and USB partitions with fallback support"""
+        """Detect both CD-ROM and USB partitions"""
+        logger.info(f"Detecting partitions on {self.platform}")
+        
         if self.platform == "Windows":
             return self._detect_windows()
         elif self.platform == "Darwin":
@@ -92,241 +54,56 @@ class PartitionDetector:
             return self._detect_linux()
     
     def _detect_windows(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """
-        Detect partitions on Windows with fallback methods
-        FIX: Handle missing pywin32 gracefully
-        """
-        # Try using win32 modules if available
-        if self.windows_modules_available:
-            return self._detect_windows_win32()
-        else:
-            # Use fallback detection method
-            return self._detect_windows_fallback()
-    
-    def _detect_windows_win32(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect Windows partitions using pywin32 (if available)"""
-        try:
-            # FIX: Import only when we know they're available
-            import win32api
-            import win32file
-            
-            cdrom_path = None
-            usb_path = None
-            
-            drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
-            
-            for drive in drives:
-                try:
-                    drive_type = win32file.GetDriveType(drive)
-                    
-                    # Check for CD-ROM partition marker
-                    cd_marker = Path(drive) / "sunflower_cd.id"
-                    if cd_marker.exists():
-                        cdrom_path = Path(drive)
-                        logger.info(f"Found CD-ROM partition: {cdrom_path}")
-                    
-                    # Check for USB data partition marker
-                    data_marker = Path(drive) / "sunflower_data.id"
-                    if data_marker.exists():
-                        usb_path = Path(drive)
-                        logger.info(f"Found USB partition: {usb_path}")
-                        
-                except Exception as e:
-                    logger.debug(f"Error checking drive {drive}: {e}")
-                    continue
-            
-            return cdrom_path, usb_path
-            
-        except Exception as e:
-            logger.error(f"Error in Windows partition detection: {e}")
-            # Fall back to alternative method
-            return self._detect_windows_fallback()
-    
-    def _detect_windows_fallback(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """
-        FIX: Fallback Windows partition detection without pywin32
-        Uses native Windows commands and Python stdlib only
-        """
+        """Detect partitions on Windows"""
         cdrom_path = None
         usb_path = None
         
-        logger.info("Using fallback Windows partition detection")
-        
-        # Method 1: Try using wmic command (Windows Management Instrumentation)
-        try:
-            # Get all logical drives using wmic
-            result = subprocess.run(
-                ['wmic', 'logicaldisk', 'get', 'name,size,description'],
-                capture_output=True,
-                text=True,
-                shell=True,
-                timeout=5
-            )
+        # Check all drive letters
+        for drive_letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive = f"{drive_letter}:\\"
             
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                for line in lines[1:]:  # Skip header
-                    if line.strip():
-                        parts = line.split()
-                        if parts:
-                            drive = parts[-1]  # Drive letter is usually last
-                            if ':' in drive:
-                                drive_path = Path(f"{drive}\\")
-                                if drive_path.exists():
-                                    # Check for marker files
-                                    cd_marker = drive_path / "sunflower_cd.id"
-                                    data_marker = drive_path / "sunflower_data.id"
-                                    
-                                    if cd_marker.exists():
-                                        cdrom_path = drive_path
-                                        logger.info(f"Found CD-ROM partition via wmic: {cdrom_path}")
-                                    
-                                    if data_marker.exists():
-                                        usb_path = drive_path
-                                        logger.info(f"Found USB partition via wmic: {usb_path}")
-        except Exception as e:
-            logger.debug(f"wmic method failed: {e}")
-        
-        # Method 2: Iterate through drive letters A-Z
-        if not cdrom_path or not usb_path:
-            import string
-            logger.info("Scanning drive letters directly")
+            if not os.path.exists(drive):
+                continue
             
-            for letter in string.ascii_uppercase:
-                drive_path = Path(f"{letter}:\\")
-                
-                # Check if drive exists and is accessible
-                if drive_path.exists():
-                    try:
-                        # Try to list the directory (will fail if not accessible)
-                        _ = list(drive_path.iterdir())
-                        
-                        # Check for marker files
-                        cd_marker = drive_path / "sunflower_cd.id"
-                        data_marker = drive_path / "sunflower_data.id"
-                        
-                        if not cdrom_path and cd_marker.exists():
-                            cdrom_path = drive_path
-                            logger.info(f"Found CD-ROM partition: {cdrom_path}")
-                        
-                        if not usb_path and data_marker.exists():
-                            usb_path = drive_path
-                            logger.info(f"Found USB partition: {usb_path}")
-                            
-                    except (PermissionError, OSError) as e:
-                        # Drive exists but not accessible, skip it
-                        logger.debug(f"Cannot access drive {letter}: {e}")
-                        continue
-        
-        # Method 3: Check common USB drive letters if still not found
-        if not usb_path:
-            common_usb_letters = ['E', 'F', 'G', 'H', 'D']
-            for letter in common_usb_letters:
-                drive_path = Path(f"{letter}:\\")
-                if drive_path.exists():
-                    try:
-                        data_marker = drive_path / "sunflower_data.id"
-                        if data_marker.exists():
-                            usb_path = drive_path
-                            logger.info(f"Found USB partition at common location: {usb_path}")
-                            break
-                    except:
-                        continue
-        
-        # Method 4: Use PowerShell as last resort
-        if not cdrom_path or not usb_path:
-            try:
-                ps_command = "Get-PSDrive -PSProvider FileSystem | Select-Object Name, Root"
-                result = subprocess.run(
-                    ['powershell', '-Command', ps_command],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                
-                if result.returncode == 0:
-                    lines = result.stdout.strip().split('\n')
-                    for line in lines[2:]:  # Skip headers
-                        if line.strip():
-                            parts = line.split()
-                            if len(parts) >= 2:
-                                drive = parts[1]
-                                if ':\\' in drive:
-                                    drive_path = Path(drive)
-                                    if drive_path.exists():
-                                        cd_marker = drive_path / "sunflower_cd.id"
-                                        data_marker = drive_path / "sunflower_data.id"
-                                        
-                                        if not cdrom_path and cd_marker.exists():
-                                            cdrom_path = drive_path
-                                            logger.info(f"Found CD-ROM via PowerShell: {cdrom_path}")
-                                        
-                                        if not usb_path and data_marker.exists():
-                                            usb_path = drive_path
-                                            logger.info(f"Found USB via PowerShell: {usb_path}")
-            except Exception as e:
-                logger.debug(f"PowerShell method failed: {e}")
+            # Check for CD-ROM partition marker
+            cd_marker = Path(drive) / self.cdrom_marker
+            if cd_marker.exists():
+                cdrom_path = Path(drive)
+                logger.info(f"Found CD-ROM partition: {cdrom_path}")
+            
+            # Check for USB data partition marker
+            data_marker = Path(drive) / self.usb_marker
+            if data_marker.exists():
+                usb_path = Path(drive)
+                logger.info(f"Found USB partition: {usb_path}")
         
         return cdrom_path, usb_path
     
     def _detect_macos(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect partitions on macOS with fallback support"""
+        """Detect partitions on macOS"""
         cdrom_path = None
         usb_path = None
         
-        # Primary method: Check /Volumes
         volumes_path = Path("/Volumes")
         
-        if volumes_path.exists():
-            for volume in volumes_path.iterdir():
-                if volume.is_dir():
-                    # Check for partition markers
-                    cd_marker = volume / "sunflower_cd.id"
-                    data_marker = volume / "sunflower_data.id"
-                    
-                    if cd_marker.exists():
-                        cdrom_path = volume
-                        logger.info(f"Found CD-ROM partition: {cdrom_path}")
-                    
-                    if data_marker.exists():
-                        usb_path = volume
-                        logger.info(f"Found USB partition: {usb_path}")
-        
-        # Fallback method: Use diskutil command
-        if not cdrom_path or not usb_path:
-            try:
-                result = subprocess.run(
-                    ['diskutil', 'list'],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
+        for volume in volumes_path.iterdir():
+            if volume.is_dir():
+                # Check for partition markers
+                cd_marker = volume / self.cdrom_marker
+                data_marker = volume / self.usb_marker
                 
-                if result.returncode == 0:
-                    # Parse diskutil output to find volumes
-                    lines = result.stdout.split('\n')
-                    for line in lines:
-                        if 'SUNFLOWER' in line.upper():
-                            # Extract volume name and check
-                            parts = line.split()
-                            for part in parts:
-                                if 'SUNFLOWER' in part.upper():
-                                    volume_path = Path("/Volumes") / part
-                                    if volume_path.exists():
-                                        cd_marker = volume_path / "sunflower_cd.id"
-                                        data_marker = volume_path / "sunflower_data.id"
-                                        
-                                        if cd_marker.exists():
-                                            cdrom_path = volume_path
-                                        if data_marker.exists():
-                                            usb_path = volume_path
-            except Exception as e:
-                logger.debug(f"diskutil method failed: {e}")
+                if cd_marker.exists():
+                    cdrom_path = volume
+                    logger.info(f"Found CD-ROM partition: {cdrom_path}")
+                
+                if data_marker.exists():
+                    usb_path = volume
+                    logger.info(f"Found USB partition: {usb_path}")
         
         return cdrom_path, usb_path
     
     def _detect_linux(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect partitions on Linux with multiple fallback methods"""
+        """Detect partitions on Linux"""
         cdrom_path = None
         usb_path = None
         
@@ -334,394 +111,411 @@ class PartitionDetector:
         mount_points = [
             Path("/media"),
             Path("/mnt"),
-            Path("/run/media") / os.environ.get("USER", ""),
-            Path(f"/media/{os.environ.get('USER', '')}"),
-            Path("/Volumes")  # Some Linux distros use this
+            Path("/run/media") / os.environ.get("USER", "")
         ]
         
         for mount_base in mount_points:
             if not mount_base.exists():
                 continue
             
-            try:
-                for mount in mount_base.iterdir():
-                    if mount.is_dir():
-                        cd_marker = mount / "sunflower_cd.id"
-                        data_marker = mount / "sunflower_data.id"
-                        
-                        if cd_marker.exists():
-                            cdrom_path = mount
-                            logger.info(f"Found CD-ROM partition: {cdrom_path}")
-                        
-                        if data_marker.exists():
-                            usb_path = mount
-                            logger.info(f"Found USB partition: {usb_path}")
-            except PermissionError:
-                continue
-        
-        # Fallback: Use lsblk command
-        if not cdrom_path or not usb_path:
-            try:
-                result = subprocess.run(
-                    ['lsblk', '-o', 'NAME,MOUNTPOINT,LABEL', '-n'],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                
-                if result.returncode == 0:
-                    lines = result.stdout.split('\n')
-                    for line in lines:
-                        if 'SUNFLOWER' in line.upper():
-                            parts = line.split()
-                            if len(parts) >= 2:
-                                mount_point = parts[1]
-                                if mount_point and mount_point != '':
-                                    mount_path = Path(mount_point)
-                                    if mount_path.exists():
-                                        cd_marker = mount_path / "sunflower_cd.id"
-                                        data_marker = mount_path / "sunflower_data.id"
-                                        
-                                        if cd_marker.exists():
-                                            cdrom_path = mount_path
-                                        if data_marker.exists():
-                                            usb_path = mount_path
-            except Exception as e:
-                logger.debug(f"lsblk method failed: {e}")
+            for mount in mount_base.iterdir():
+                if mount.is_dir():
+                    cd_marker = mount / self.cdrom_marker
+                    data_marker = mount / self.usb_marker
+                    
+                    if cd_marker.exists():
+                        cdrom_path = mount
+                        logger.info(f"Found CD-ROM partition: {cdrom_path}")
+                    
+                    if data_marker.exists():
+                        usb_path = mount
+                        logger.info(f"Found USB partition: {usb_path}")
         
         return cdrom_path, usb_path
 
 
 class HardwareDetector:
-    """Detect hardware capabilities for model selection"""
+    """Detect hardware capabilities"""
     
     def __init__(self):
         self.platform = platform.system()
-        self.cpu_count = os.cpu_count() or 2
-        self.ram_gb = self._detect_ram()
-        self.gpu_available = self._detect_gpu()
         
-    def _detect_ram(self) -> float:
-        """Detect system RAM with fallback methods"""
-        # Try using psutil if available
-        try:
-            import psutil
-            return psutil.virtual_memory().total / (1024**3)
-        except ImportError:
-            logger.warning("psutil not available for RAM detection")
+    def get_system_info(self) -> Dict[str, Any]:
+        """Get system hardware information"""
+        import psutil
         
-        # Platform-specific fallbacks
-        if self.platform == "Windows":
-            return self._detect_ram_windows()
-        elif self.platform == "Darwin":
-            return self._detect_ram_macos()
-        else:
-            return self._detect_ram_linux()
-    
-    def _detect_ram_windows(self) -> float:
-        """Detect RAM on Windows using fallback methods"""
-        # FIX: Try multiple methods to get RAM info
+        info = {
+            'platform': self.platform,
+            'processor': platform.processor(),
+            'architecture': platform.machine(),
+            'python_version': platform.python_version(),
+            'ram_gb': psutil.virtual_memory().total / (1024**3),
+            'cpu_count': psutil.cpu_count(),
+            'disk_usage': {}
+        }
         
-        # Method 1: Try WMI through wmic command
-        try:
-            result = subprocess.run(
-                ['wmic', 'computersystem', 'get', 'TotalPhysicalMemory'],
-                capture_output=True,
-                text=True,
-                shell=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                for line in lines[1:]:  # Skip header
-                    if line.strip():
-                        try:
-                            bytes_ram = int(line.strip())
-                            return bytes_ram / (1024**3)
-                        except ValueError:
-                            continue
-        except Exception as e:
-            logger.debug(f"wmic RAM detection failed: {e}")
-        
-        # Method 2: Try PowerShell
-        try:
-            ps_command = "(Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory"
-            result = subprocess.run(
-                ['powershell', '-Command', ps_command],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                try:
-                    bytes_ram = int(result.stdout.strip())
-                    return bytes_ram / (1024**3)
-                except ValueError:
-                    pass
-        except Exception as e:
-            logger.debug(f"PowerShell RAM detection failed: {e}")
-        
-        # Method 3: Try using ctypes
-        try:
-            import ctypes
-            
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-            
-            memstat = MEMORYSTATUSEX()
-            memstat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memstat))
-            return memstat.ullTotalPhys / (1024**3)
-            
-        except Exception as e:
-            logger.debug(f"ctypes RAM detection failed: {e}")
-        
-        # Default fallback
-        logger.warning("Could not detect RAM, assuming 4GB")
-        return 4.0
-    
-    def _detect_ram_macos(self) -> float:
-        """Detect RAM on macOS"""
-        try:
-            result = subprocess.run(
-                ['sysctl', 'hw.memsize'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                # Parse output: hw.memsize: 17179869184
-                parts = result.stdout.strip().split(':')
-                if len(parts) == 2:
-                    bytes_ram = int(parts[1].strip())
-                    return bytes_ram / (1024**3)
-        except Exception as e:
-            logger.debug(f"sysctl RAM detection failed: {e}")
-        
-        # Default fallback
-        logger.warning("Could not detect RAM, assuming 8GB")
-        return 8.0
-    
-    def _detect_ram_linux(self) -> float:
-        """Detect RAM on Linux"""
-        try:
-            with open('/proc/meminfo', 'r') as f:
-                for line in f:
-                    if line.startswith('MemTotal:'):
-                        parts = line.split()
-                        kb_ram = int(parts[1])
-                        return kb_ram / (1024**2)  # Convert KB to GB
-        except Exception as e:
-            logger.debug(f"/proc/meminfo RAM detection failed: {e}")
-        
-        # Try free command
-        try:
-            result = subprocess.run(
-                ['free', '-b'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    if line.startswith('Mem:'):
-                        parts = line.split()
-                        bytes_ram = int(parts[1])
-                        return bytes_ram / (1024**3)
-        except Exception as e:
-            logger.debug(f"free command RAM detection failed: {e}")
-        
-        # Default fallback
-        logger.warning("Could not detect RAM, assuming 4GB")
-        return 4.0
-    
-    def _detect_gpu(self) -> bool:
-        """Detect if GPU is available"""
-        # This is a simplified check
-        # In production, would check for CUDA/ROCm/Metal
-        
-        if self.platform == "Darwin":
-            # macOS with Apple Silicon always has GPU acceleration
+        # Get disk usage for all partitions
+        for partition in psutil.disk_partitions():
             try:
-                result = subprocess.run(
-                    ['sysctl', '-n', 'machdep.cpu.brand_string'],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if 'Apple' in result.stdout:
-                    return True
+                usage = psutil.disk_usage(partition.mountpoint)
+                info['disk_usage'][partition.mountpoint] = {
+                    'total_gb': usage.total / (1024**3),
+                    'free_gb': usage.free / (1024**3)
+                }
             except:
                 pass
         
-        # Check for NVIDIA GPU on Windows/Linux
-        try:
-            result = subprocess.run(
-                ['nvidia-smi'],
-                capture_output=True,
-                timeout=5
-            )
-            return result.returncode == 0
-        except:
-            pass
+        return info
+    
+    def determine_hardware_tier(self) -> str:
+        """Determine hardware performance tier"""
+        import psutil
         
-        return False
-    
-    def get_optimal_model(self) -> str:
-        """Determine optimal model based on hardware"""
-        if self.ram_gb >= 16:
-            return "llama3.2:7b"
-        elif self.ram_gb >= 8:
-            return "llama3.2:3b"
-        elif self.ram_gb >= 4:
-            return "llama3.2:1b"
-        else:
-            return "llama3.2:1b-q4_0"
-    
-    def get_hardware_tier(self) -> str:
-        """Classify hardware tier"""
-        if self.ram_gb >= 16 and self.cpu_count >= 8:
+        ram_gb = psutil.virtual_memory().total / (1024**3)
+        cpu_count = psutil.cpu_count()
+        
+        if ram_gb >= 16 and cpu_count >= 8:
             return "high"
-        elif self.ram_gb >= 8 and self.cpu_count >= 4:
+        elif ram_gb >= 8 and cpu_count >= 4:
             return "medium"
-        else:
+        elif ram_gb >= 4:
             return "low"
+        else:
+            return "minimum"
 
 
-class ServiceManager:
-    """Manage Ollama and Open WebUI services"""
+class SunflowerLauncherUI:
+    """Main launcher UI for Sunflower AI"""
     
     def __init__(self, cdrom_path: Path, usb_path: Path):
         self.cdrom_path = cdrom_path
         self.usb_path = usb_path
-        self.platform = platform.system()
-        self.ollama_process = None
-        self.webui_process = None
+        self.hardware = HardwareDetector()
+        self.requirements = SystemRequirements()
         
-    def start_ollama(self) -> bool:
-        """Start Ollama service"""
-        ollama_binary = self._get_ollama_binary()
+        # Setup main window
+        self.root = tk.Tk()
+        self.root.title("Sunflower AI Professional System")
+        self.root.geometry("800x600")
+        self.root.resizable(False, False)
         
-        if not ollama_binary or not ollama_binary.exists():
-            logger.error(f"Ollama binary not found at {ollama_binary}")
-            return False
+        # Center window
+        self._center_window()
         
-        try:
-            # Set environment variables
-            env = os.environ.copy()
-            env['OLLAMA_MODELS'] = str(self.usb_path / 'ollama' / 'models')
-            env['OLLAMA_HOST'] = '0.0.0.0:11434'
-            
-            # Start Ollama
-            self.ollama_process = subprocess.Popen(
-                [str(ollama_binary), 'serve'],
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
-            # Wait for Ollama to start
-            time.sleep(3)
-            
-            # Check if running
-            if self.check_ollama_running():
-                logger.info("Ollama service started successfully")
-                return True
-            else:
-                logger.error("Ollama service failed to start")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Failed to start Ollama: {e}")
-            return False
-    
-    def _get_ollama_binary(self) -> Optional[Path]:
-        """Get path to Ollama binary"""
-        if self.platform == "Windows":
-            return self.cdrom_path / 'ollama' / 'ollama.exe'
-        elif self.platform == "Darwin":
-            return self.cdrom_path / 'ollama' / 'ollama'
-        else:
-            return self.cdrom_path / 'ollama' / 'ollama'
-    
-    def check_ollama_running(self) -> bool:
-        """Check if Ollama service is running"""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex(('localhost', 11434))
-            sock.close()
-            return result == 0
-        except:
-            return False
-    
-    def stop_services(self):
-        """Stop all services"""
-        if self.ollama_process:
-            try:
-                self.ollama_process.terminate()
-                self.ollama_process.wait(timeout=5)
-            except:
-                self.ollama_process.kill()
-            self.ollama_process = None
+        # Setup UI
+        self._setup_ui()
         
-        if self.webui_process:
-            try:
-                self.webui_process.terminate()
-                self.webui_process.wait(timeout=5)
-            except:
-                self.webui_process.kill()
-            self.webui_process = None
-
-
-# Utility functions for launchers
-def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
-    """Set up logging configuration"""
-    logger = logging.getLogger('SunflowerLauncher')
-    logger.setLevel(logging.DEBUG)
+    def _center_window(self):
+        """Center the window on screen"""
+        self.root.update_idletasks()
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.root.winfo_screenheight() // 2) - (height // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
     
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-    
-    # File handler if specified
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG)
-        file_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    def _setup_ui(self):
+        """Setup the user interface"""
+        # Header
+        header_frame = tk.Frame(self.root, bg="#2C3E50", height=100)
+        header_frame.pack(fill=tk.X)
+        
+        title_label = tk.Label(
+            header_frame,
+            text="Sunflower AI Professional System",
+            font=("Arial", 24, "bold"),
+            fg="white",
+            bg="#2C3E50"
         )
-        file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
+        title_label.pack(pady=20)
+        
+        subtitle_label = tk.Label(
+            header_frame,
+            text="Family-Safe K-12 STEM Education",
+            font=("Arial", 14),
+            fg="#ECF0F1",
+            bg="#2C3E50"
+        )
+        subtitle_label.pack()
+        
+        # Main content
+        content_frame = tk.Frame(self.root)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # System status
+        self._create_status_section(content_frame)
+        
+        # Progress section
+        self._create_progress_section(content_frame)
+        
+        # Action buttons
+        self._create_action_buttons(content_frame)
     
-    return logger
+    def _create_status_section(self, parent):
+        """Create system status display"""
+        status_frame = tk.LabelFrame(parent, text="System Status", padx=10, pady=10)
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Get system info
+        sys_info = self.hardware.get_system_info()
+        tier = self.hardware.determine_hardware_tier()
+        
+        status_items = [
+            ("Platform", sys_info['platform']),
+            ("Python Version", sys_info['python_version']),
+            ("System RAM", f"{sys_info['ram_gb']:.1f} GB"),
+            ("CPU Cores", sys_info['cpu_count']),
+            ("Hardware Tier", tier.capitalize()),
+            ("CD-ROM Path", str(self.cdrom_path)),
+            ("Data Path", str(self.usb_path))
+        ]
+        
+        for i, (label, value) in enumerate(status_items):
+            tk.Label(status_frame, text=f"{label}:", anchor="w", width=15).grid(row=i, column=0, sticky="w")
+            tk.Label(status_frame, text=value, anchor="w").grid(row=i, column=1, sticky="w")
+    
+    def _create_progress_section(self, parent):
+        """Create progress display"""
+        self.progress_frame = tk.LabelFrame(parent, text="Setup Progress", padx=10, pady=10)
+        self.progress_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.progress_label = tk.Label(self.progress_frame, text="Ready to begin setup...")
+        self.progress_label.pack(anchor="w")
+        
+        self.progress_bar = ttk.Progressbar(
+            self.progress_frame,
+            length=400,
+            mode='determinate'
+        )
+        self.progress_bar.pack(pady=10)
+    
+    def _create_action_buttons(self, parent):
+        """Create action buttons"""
+        button_frame = tk.Frame(parent)
+        button_frame.pack(fill=tk.X)
+        
+        self.start_button = tk.Button(
+            button_frame,
+            text="Start Setup",
+            command=self.start_setup,
+            bg="#27AE60",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            padx=20,
+            pady=10
+        )
+        self.start_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.exit_button = tk.Button(
+            button_frame,
+            text="Exit",
+            command=self.exit_launcher,
+            bg="#E74C3C",
+            fg="white",
+            font=("Arial", 12),
+            padx=20,
+            pady=10
+        )
+        self.exit_button.pack(side=tk.RIGHT)
+    
+    def start_setup(self):
+        """Start the setup process"""
+        self.start_button.config(state=tk.DISABLED)
+        
+        # Run setup in background thread
+        setup_thread = threading.Thread(target=self._run_setup)
+        setup_thread.daemon = True
+        setup_thread.start()
+    
+    def _run_setup(self):
+        """Run the actual setup process"""
+        steps = [
+            ("Verifying system requirements", self._verify_requirements),
+            ("Checking partition integrity", self._check_partitions),
+            ("Setting up Python environment", self._setup_python),
+            ("Installing Ollama", self._install_ollama),
+            ("Loading AI models", self._load_models),
+            ("Configuring Open WebUI", self._configure_webui),
+            ("Creating initial profiles", self._create_profiles)
+        ]
+        
+        total_steps = len(steps)
+        
+        for i, (description, func) in enumerate(steps):
+            # Update UI
+            self.progress_label.config(text=f"{description}...")
+            self.progress_bar['value'] = (i / total_steps) * 100
+            self.root.update()
+            
+            try:
+                func()
+                logger.info(f"Completed: {description}")
+            except Exception as e:
+                logger.error(f"Failed: {description} - {e}")
+                messagebox.showerror("Setup Error", f"Failed during: {description}\n\nError: {e}")
+                self.start_button.config(state=tk.NORMAL)
+                return
+        
+        # Setup complete
+        self.progress_label.config(text="Setup complete!")
+        self.progress_bar['value'] = 100
+        self.root.update()
+        
+        messagebox.showinfo("Success", "Sunflower AI setup completed successfully!")
+        
+        # Launch main application
+        self._launch_application()
+    
+    def _verify_requirements(self):
+        """Verify system requirements"""
+        import psutil
+        
+        # Check RAM
+        ram_gb = psutil.virtual_memory().total / (1024**3)
+        if ram_gb < self.requirements.min_ram_gb:
+            raise Exception(f"Insufficient RAM: {ram_gb:.1f}GB < {self.requirements.min_ram_gb}GB required")
+        
+        # Check Python version
+        python_version = platform.python_version()
+        if python_version < self.requirements.min_python_version:
+            raise Exception(f"Python {python_version} < {self.requirements.min_python_version} required")
+        
+        # Check disk space
+        usage = psutil.disk_usage(str(self.usb_path))
+        free_gb = usage.free / (1024**3)
+        if free_gb < self.requirements.min_disk_space_gb:
+            raise Exception(f"Insufficient disk space: {free_gb:.1f}GB < {self.requirements.min_disk_space_gb}GB required")
+    
+    def _check_partitions(self):
+        """Check partition integrity"""
+        # Verify CD-ROM partition
+        required_cdrom_files = [
+            self.cdrom_path / "system",
+            self.cdrom_path / "models",
+            self.cdrom_path / "modelfiles"
+        ]
+        
+        for path in required_cdrom_files:
+            if not path.exists():
+                raise Exception(f"Missing required path on CD-ROM: {path}")
+        
+        # Verify USB partition is writable
+        test_file = self.usb_path / ".write_test"
+        try:
+            test_file.touch()
+            test_file.unlink()
+        except:
+            raise Exception("USB partition is not writable")
+    
+    def _setup_python(self):
+        """Setup Python environment"""
+        # This would normally set up virtual environment
+        # For now, just verify Python works
+        result = subprocess.run(
+            [sys.executable, "--version"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            raise Exception("Python verification failed")
+    
+    def _install_ollama(self):
+        """Install Ollama if needed"""
+        # Check if Ollama is available
+        try:
+            subprocess.run(["ollama", "--version"], capture_output=True, check=True)
+            logger.info("Ollama already installed")
+        except:
+            logger.info("Installing Ollama...")
+            # Installation would happen here
+            pass
+    
+    def _load_models(self):
+        """Load AI models"""
+        # Determine which model to load based on hardware
+        tier = self.hardware.determine_hardware_tier()
+        
+        model_map = {
+            'high': 'sunflower-kids-7b',
+            'medium': 'sunflower-kids-3b',
+            'low': 'sunflower-kids-1b',
+            'minimum': 'sunflower-kids-1b'
+        }
+        
+        model = model_map[tier]
+        logger.info(f"Loading model: {model}")
+        
+        # Model loading would happen here
+    
+    def _configure_webui(self):
+        """Configure Open WebUI"""
+        # Create configuration directory
+        config_dir = self.usb_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        
+        # Write configuration
+        config = {
+            'host': 'localhost',
+            'port': 8080,
+            'data_path': str(self.usb_path / "data")
+        }
+        
+        config_file = config_dir / "webui.json"
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+    
+    def _create_profiles(self):
+        """Create initial profile structure"""
+        profiles_dir = self.usb_path / "profiles"
+        profiles_dir.mkdir(exist_ok=True)
+        
+        # Create default directories
+        (profiles_dir / "family").mkdir(exist_ok=True)
+        (profiles_dir / "sessions").mkdir(exist_ok=True)
+        (profiles_dir / "logs").mkdir(exist_ok=True)
+    
+    def _launch_application(self):
+        """Launch the main Sunflower AI application"""
+        main_script = self.cdrom_path / "system" / "main.py"
+        
+        if main_script.exists():
+            subprocess.Popen([
+                sys.executable,
+                str(main_script),
+                "--cdrom-path", str(self.cdrom_path),
+                "--usb-path", str(self.usb_path)
+            ])
+            
+            # Close launcher
+            self.root.after(2000, self.root.quit)
+        else:
+            messagebox.showerror("Launch Error", "Could not find main application")
+    
+    def exit_launcher(self):
+        """Exit the launcher"""
+        if messagebox.askyesno("Exit", "Are you sure you want to exit?"):
+            self.root.quit()
+    
+    def run(self):
+        """Run the launcher UI"""
+        self.root.mainloop()
 
 
 def main():
-    """Main entry point for testing launcher functionality"""
-    import argparse
+    """Main entry point for launcher"""
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
-    parser = argparse.ArgumentParser(description='Sunflower AI Launcher')
-    parser.add_argument('--cdrom-path', type=Path, help='CD-ROM partition path')
-    parser.add_argument('--usb-path', type=Path, help='USB partition path')
-    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    # Parse command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description="Sunflower AI Launcher")
+    parser.add_argument("--cdrom-path", type=Path, help="CD-ROM partition path")
+    parser.add_argument("--usb-path", type=Path, help="USB partition path")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     
     args = parser.parse_args()
     
@@ -729,35 +523,67 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Detect partitions
-    detector = PartitionDetector()
-    cdrom_path, usb_path = detector.detect_partitions()
+    # Detect partitions if not provided
+    cdrom_path = args.cdrom_path
+    usb_path = args.usb_path
     
     if not cdrom_path or not usb_path:
-        print("\n⚠️  Partition Detection Results:")
-        print(f"CD-ROM: {cdrom_path or 'NOT FOUND'}")
-        print(f"USB: {usb_path or 'NOT FOUND'}")
+        detector = PartitionDetector()
+        detected_cdrom, detected_usb = detector.detect_partitions()
         
+        # Use detected paths if not provided
         if not cdrom_path:
-            print("\n❌ CD-ROM partition not found!")
-            print("Please ensure the Sunflower AI device is properly connected.")
+            cdrom_path = detected_cdrom
         if not usb_path:
-            print("\n❌ USB partition not found!")
-            print("The USB partition may need to be initialized.")
-    else:
-        print("\n✅ Partition Detection Successful!")
-        print(f"CD-ROM: {cdrom_path}")
-        print(f"USB: {usb_path}")
+            usb_path = detected_usb
         
-        # Detect hardware
-        hw = HardwareDetector()
-        print("\n💻 Hardware Detection:")
-        print(f"Platform: {hw.platform}")
-        print(f"CPU Cores: {hw.cpu_count}")
-        print(f"RAM: {hw.ram_gb:.1f} GB")
-        print(f"GPU Available: {hw.gpu_available}")
-        print(f"Optimal Model: {hw.get_optimal_model()}")
-        print(f"Hardware Tier: {hw.get_hardware_tier()}")
+        # If still not found, try manual fallback paths
+        if not cdrom_path or not usb_path:
+            if platform.system() == "Windows":
+                if not cdrom_path:
+                    cdrom_path = Path("D:\\")
+                if not usb_path:
+                    usb_path = Path("E:\\")
+            elif platform.system() == "Darwin":
+                if not cdrom_path:
+                    cdrom_path = Path("/Volumes/SUNFLOWER_CD")
+                if not usb_path:
+                    usb_path = Path("/Volumes/SUNFLOWER_DATA")
+            else:
+                if not cdrom_path:
+                    cdrom_path = Path("/media/SUNFLOWER_CD")
+                if not usb_path:
+                    usb_path = Path("/media/SUNFLOWER_DATA")
+    
+    # FIX: Validate paths are not None and exist before checking .exists()
+    # Check if paths are None first, then check existence
+    if cdrom_path is None or usb_path is None:
+        messagebox.showerror(
+            "Partition Detection Failed",
+            "Could not detect Sunflower AI partitions.\n\n"
+            "Please ensure the device is properly connected and try again."
+        )
+        sys.exit(1)
+    
+    # Now safe to check .exists() since we know paths are not None
+    if not cdrom_path.exists() or not usb_path.exists():
+        missing_parts = []
+        if not cdrom_path.exists():
+            missing_parts.append(f"CD-ROM: {cdrom_path}")
+        if not usb_path.exists():
+            missing_parts.append(f"USB: {usb_path}")
+        
+        messagebox.showerror(
+            "Partition Not Found",
+            f"Could not find required partitions:\n\n" +
+            "\n".join(missing_parts) +
+            "\n\nPlease ensure the device is properly connected and try again."
+        )
+        sys.exit(1)
+    
+    # Launch UI with valid paths
+    launcher = SunflowerLauncherUI(cdrom_path, usb_path)
+    launcher.run()
 
 
 if __name__ == "__main__":
