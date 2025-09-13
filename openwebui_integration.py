@@ -3,10 +3,10 @@
 Sunflower AI Open WebUI Integration Module
 Production-ready integration with Open WebUI for family-safe AI education
 Version: 6.2 | Platform: Windows/macOS | Architecture: Partitioned CD-ROM + USB
-FIXED: All security vulnerabilities and bugs resolved
 """
 
 import os
+import re
 import sys
 import json
 import uuid
@@ -17,21 +17,32 @@ import hashlib
 import logging
 import threading
 import subprocess
-import re  # Added for input sanitization
-import bcrypt  # Added for secure password hashing
+import bcrypt
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Any, Tuple
+from typing import Dict, Optional, List, Any, Tuple, Union
 from dataclasses import dataclass, field, asdict
 from contextlib import contextmanager
 from cryptography.fernet import Fernet
+import secrets
 
 logger = logging.getLogger(__name__)
+
+# Constants for validation
+MIN_CHILD_AGE = 2
+MAX_CHILD_AGE = 18
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
+MAX_NAME_LENGTH = 50
+VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-_\.]{1,50}$')
+DB_TIMEOUT = 30
+MAX_RETRY_ATTEMPTS = 3
+RETRY_DELAY = 0.1
 
 
 @dataclass
 class ChildProfile:
-    """Child profile with age-appropriate settings"""
+    """Child profile with strict age validation and safety settings"""
     profile_id: str
     name: str
     age: int
@@ -42,6 +53,30 @@ class ChildProfile:
     safety_level: str = "maximum"
     interests: List[str] = field(default_factory=list)
     learning_style: str = "visual"
+    
+    def __post_init__(self):
+        """Validate profile data after initialization"""
+        # Critical: Validate age for child safety
+        if not isinstance(self.age, int) or not MIN_CHILD_AGE <= self.age <= MAX_CHILD_AGE:
+            raise ValueError(f"Child age must be between {MIN_CHILD_AGE} and {MAX_CHILD_AGE}, got {self.age}")
+        
+        # Validate and sanitize name
+        if not self.name or len(self.name) > MAX_NAME_LENGTH:
+            raise ValueError(f"Name must be 1-{MAX_NAME_LENGTH} characters")
+        
+        # Sanitize name to prevent injection
+        self.name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', self.name)[:MAX_NAME_LENGTH]
+        
+        if not self.name:
+            raise ValueError("Invalid name after sanitization")
+        
+        # Enforce strict safety for younger children
+        if self.age < 13:
+            self.safety_level = "maximum"
+        elif self.age < 16:
+            self.safety_level = "high"
+        else:
+            self.safety_level = "standard"
     
     def get_model_parameters(self) -> Dict[str, Any]:
         """Get age-appropriate model parameters"""
@@ -74,46 +109,37 @@ class ChildProfile:
 class OpenWebUIIntegration:
     """Production-ready Open WebUI integration with enterprise security"""
     
-    # Constants for validation
-    MIN_CHILD_AGE = 2
-    MAX_CHILD_AGE = 18
-    MAX_NAME_LENGTH = 50
-    VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-_\.]+$')
-    
     def __init__(self, partition_manager=None):
-        """Initialize Open WebUI integration with partition awareness"""
+        """Initialize Open WebUI integration with thread safety"""
         self.platform = platform.system()
         self.partition_manager = partition_manager
         
-        # Thread safety lock for database operations
+        # Thread safety
+        self._lock = threading.RLock()
         self._db_lock = threading.RLock()
+        self._session_locks: Dict[str, threading.Lock] = {}
         
-        # Determine paths based on partition architecture
-        self.cdrom_path = self._detect_cdrom_partition()
-        self.usb_path = self._detect_usb_partition()
+        # Database connection pool
+        self._db_connections: Dict[int, sqlite3.Connection] = {}
         
-        # Core paths
-        self.base_path = Path(self.usb_path) / 'sunflower_data'
+        # Paths based on partitions
+        if partition_manager:
+            self.cdrom_path = partition_manager.get_cdrom_mount()
+            self.usb_path = partition_manager.get_usb_mount()
+        else:
+            # Fallback for testing
+            self.cdrom_path = Path('/mnt/cdrom')
+            self.usb_path = Path('/mnt/usb')
+        
+        # USB partition paths (writable)
+        self.base_path = self.usb_path / 'sunflower_data'
         self.profiles_path = self.base_path / 'profiles'
         self.sessions_path = self.base_path / 'sessions'
         self.config_path = self.base_path / 'config'
-        self.logs_path = self.base_path / 'logs'
+        self.db_path = self.base_path / 'sunflower.db'
         
         # Create directory structure
         self._initialize_directories()
-        
-        # Initialize components
-        self.db_path = self.config_path / 'sunflower.db'
-        self.active_profile: Optional[ChildProfile] = None
-        self.parent_authenticated = False
-        self.session_id = None
-        self.openwebui_process = None
-        self.monitoring_thread = None
-        
-        # Security components
-        self.encryption_key = self._load_or_generate_key()
-        self.session_timeout = timedelta(minutes=30)
-        self.last_activity = datetime.now()
         
         # Initialize database
         self._initialize_database()
@@ -121,559 +147,668 @@ class OpenWebUIIntegration:
         # Load configuration
         self.config = self._load_configuration()
         
-        logger.info(f"OpenWebUI Integration initialized on {self.platform}")
-    
-    def _detect_cdrom_partition(self) -> Path:
-        """Detect CD-ROM partition containing system files"""
-        if self.platform == "Windows":
-            try:
-                import win32api
-                drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
-                for drive in drives:
-                    marker_file = Path(drive) / 'SUNFLOWER_SYSTEM.marker'
-                    if marker_file.exists():
-                        return Path(drive)
-            except ImportError:
-                logger.warning("win32api not available, using fallback")
-        else:  # macOS/Linux
-            for volume in Path('/Volumes').iterdir():
-                marker_file = volume / 'SUNFLOWER_SYSTEM.marker'
-                if marker_file.exists():
-                    return volume
+        # Initialize encryption
+        self.encryption_key = self._load_or_generate_key()
+        self.cipher_suite = Fernet(self.encryption_key)
         
-        # Fallback for development
-        return Path.cwd() / 'cdrom_simulation'
-    
-    def _detect_usb_partition(self) -> Path:
-        """Detect USB partition for user data"""
-        if self.platform == "Windows":
-            try:
-                import win32api
-                drives = win32api.GetLogicalDriveStrings().split('\000')[:-1]
-                for drive in drives:
-                    marker_file = Path(drive) / 'SUNFLOWER_DATA.marker'
-                    if marker_file.exists():
-                        return Path(drive)
-            except ImportError:
-                logger.warning("win32api not available, using fallback")
-        else:  # macOS/Linux
-            for volume in Path('/Volumes').iterdir():
-                marker_file = volume / 'SUNFLOWER_DATA.marker'
-                if marker_file.exists():
-                    return volume
+        # Parent authentication state
+        self.parent_authenticated = False
+        self.parent_session_token: Optional[str] = None
         
-        # Fallback for development
-        return Path.cwd() / 'usb_simulation'
+        # Current session state
+        self.current_profile: Optional[ChildProfile] = None
+        self.session_id: Optional[str] = None
+        self.session_start: Optional[datetime] = None
+        
+        # Open WebUI process management
+        self.openwebui_process: Optional[subprocess.Popen] = None
+        
+        # Safety monitoring
+        self.monitoring_thread: Optional[threading.Thread] = None
+        self.stop_monitoring = threading.Event()
+        
+        logger.info(f"Open WebUI Integration initialized for {self.platform}")
     
     def _initialize_directories(self):
-        """Create required directory structure"""
+        """Create required directory structure with proper permissions"""
         directories = [
             self.base_path,
             self.profiles_path,
             self.sessions_path,
             self.config_path,
-            self.logs_path,
+            self.base_path / 'logs',
             self.base_path / 'exports',
-            self.profiles_path / '.encrypted'
+            self.base_path / 'encrypted'
         ]
         
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
-            if self.platform != "Windows":
-                os.chmod(directory, 0o700)  # Restrictive permissions
+            # Set restrictive permissions on Unix-like systems
+            if hasattr(os, 'chmod'):
+                os.chmod(directory, 0o700)
     
     def _initialize_database(self):
-        """Initialize SQLite database with proper schema"""
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Profiles table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS profiles (
-                    profile_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    age INTEGER NOT NULL CHECK(age >= 2 AND age <= 18),
-                    grade_level TEXT,
-                    created_at TEXT NOT NULL,
-                    last_active TEXT,
-                    total_sessions INTEGER DEFAULT 0,
-                    safety_level TEXT DEFAULT 'maximum',
-                    interests TEXT,
-                    learning_style TEXT DEFAULT 'visual'
-                )
-            ''')
-            
-            # Sessions table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    profile_id TEXT NOT NULL,
-                    start_time TEXT NOT NULL,
-                    end_time TEXT,
-                    duration_minutes INTEGER,
-                    interactions_count INTEGER DEFAULT 0,
-                    topics_covered TEXT,
-                    safety_flags INTEGER DEFAULT 0,
-                    parent_reviewed BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (profile_id) REFERENCES profiles(profile_id)
-                )
-            ''')
-            
-            # Interactions table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS interactions (
-                    interaction_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    user_input TEXT,
-                    ai_response TEXT,
-                    safety_score REAL,
-                    flagged BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                )
-            ''')
-            
-            # Parent authentication table (for bcrypt hashes)
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS parent_auth (
-                    id INTEGER PRIMARY KEY,
-                    password_hash TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    last_changed TEXT,
-                    failed_attempts INTEGER DEFAULT 0,
-                    locked_until TEXT
-                )
-            ''')
-            
-            conn.commit()
+        """Initialize database with proper schema and constraints"""
+        with self._db_lock:
+            conn = None
+            try:
+                conn = sqlite3.connect(str(self.db_path), timeout=DB_TIMEOUT)
+                conn.execute("PRAGMA foreign_keys = ON")
+                cursor = conn.cursor()
+                
+                # Profiles table with constraints
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS profiles (
+                        profile_id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        age INTEGER NOT NULL CHECK(age >= 2 AND age <= 18),
+                        grade_level TEXT,
+                        created_at TEXT NOT NULL,
+                        last_active TEXT,
+                        safety_level TEXT NOT NULL,
+                        encrypted_data TEXT
+                    )
+                ''')
+                
+                # Parent accounts table with secure password storage
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS parents (
+                        parent_id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        email TEXT,
+                        created_at TEXT NOT NULL,
+                        last_login TEXT,
+                        failed_attempts INTEGER DEFAULT 0,
+                        locked_until TEXT
+                    )
+                ''')
+                
+                # Sessions table with foreign key constraints
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        session_id TEXT PRIMARY KEY,
+                        profile_id TEXT NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT,
+                        duration_minutes INTEGER,
+                        interactions_count INTEGER DEFAULT 0,
+                        topics_covered TEXT,
+                        safety_flags INTEGER DEFAULT 0,
+                        parent_reviewed BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                # Interactions table with cascade deletion
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS interactions (
+                        interaction_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        user_input TEXT,
+                        ai_response TEXT,
+                        safety_score REAL,
+                        flagged BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                # Create indexes for performance
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_profile ON sessions(profile_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_interactions_session ON interactions(session_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_interactions_flagged ON interactions(flagged)')
+                
+                conn.commit()
+                logger.info("Database initialized successfully")
+                
+            except Exception as e:
+                if conn:
+                    conn.rollback()
+                logger.error(f"Database initialization failed: {e}")
+                raise
+            finally:
+                if conn:
+                    conn.close()
     
     @contextmanager
     def _get_db_connection(self):
-        """Thread-safe database connection context manager
-        BUG-009 FIX: Ensures proper connection cleanup
-        BUG-003 FIX: Added thread lock for concurrent access safety
-        """
+        """Thread-safe database connection with proper cleanup"""
+        thread_id = threading.get_ident()
         conn = None
-        try:
-            with self._db_lock:  # Thread safety
-                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
-                conn.row_factory = sqlite3.Row
-                conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key constraints
-                yield conn
-                conn.commit()
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Database error: {e}")
-            raise
-        finally:
-            if conn:
-                conn.close()
+        
+        with self._db_lock:
+            attempts = 0
+            while attempts < MAX_RETRY_ATTEMPTS:
+                try:
+                    # Try to reuse existing connection for this thread
+                    if thread_id in self._db_connections:
+                        conn = self._db_connections[thread_id]
+                        # Test if connection is alive
+                        conn.execute("SELECT 1")
+                    else:
+                        # Create new connection
+                        conn = sqlite3.connect(str(self.db_path), timeout=DB_TIMEOUT)
+                        conn.row_factory = sqlite3.Row
+                        conn.execute("PRAGMA foreign_keys = ON")
+                        self._db_connections[thread_id] = conn
+                    
+                    yield conn
+                    conn.commit()
+                    return
+                    
+                except sqlite3.OperationalError as e:
+                    attempts += 1
+                    if attempts >= MAX_RETRY_ATTEMPTS:
+                        raise
+                    time.sleep(RETRY_DELAY * attempts)
+                    # Remove failed connection
+                    if thread_id in self._db_connections:
+                        try:
+                            self._db_connections[thread_id].close()
+                        except:
+                            pass
+                        del self._db_connections[thread_id]
+                    
+                except Exception as e:
+                    if conn:
+                        conn.rollback()
+                    raise
     
     def _load_or_generate_key(self) -> bytes:
-        """Load or generate encryption key"""
+        """Load or generate encryption key with secure storage"""
         key_file = self.config_path / '.encryption.key'
         
-        if key_file.exists():
-            with open(key_file, 'rb') as f:
-                return f.read()
-        else:
-            key = Fernet.generate_key()
-            with open(key_file, 'wb') as f:
-                f.write(key)
-            # Set restrictive permissions
-            if self.platform != "Windows":
-                os.chmod(key_file, 0o600)
-            return key
+        try:
+            if key_file.exists():
+                with open(key_file, 'rb') as f:
+                    key = f.read()
+                    if len(key) != 44:  # Fernet key is 44 bytes base64
+                        raise ValueError("Invalid key length")
+                    return key
+            else:
+                key = Fernet.generate_key()
+                with open(key_file, 'wb') as f:
+                    f.write(key)
+                # Set restrictive permissions
+                if hasattr(os, 'chmod'):
+                    os.chmod(key_file, 0o600)
+                return key
+        except Exception as e:
+            logger.error(f"Key management failed: {e}")
+            # Generate temporary key for session
+            return Fernet.generate_key()
     
     def _load_configuration(self) -> Dict[str, Any]:
-        """Load system configuration"""
+        """Load system configuration with defaults"""
         config_file = self.config_path / 'config.json'
         
         default_config = {
             'openwebui': {
                 'host': 'localhost',
                 'port': 8080,
-                'timeout': 30
-            },
-            'ollama': {
-                'host': 'localhost',
-                'port': 11434
+                'timeout': 30,
+                'enable_auth': False,
+                'enable_signup': False
             },
             'safety': {
-                'max_session_minutes': 30,
-                'require_parent_auth': True,
-                'log_all_interactions': True,
-                'max_login_attempts': 5,
-                'lockout_duration_minutes': 30
+                'max_session_minutes': 120,
+                'break_reminder_minutes': 30,
+                'content_filter_level': 'strict',
+                'log_all_interactions': True
+            },
+            'models': {
+                'kids_model': 'sunflower-kids:latest',
+                'educator_model': 'sunflower-educator:latest',
+                'auto_select': True
+            },
+            'features': {
+                'parent_dashboard': True,
+                'progress_tracking': True,
+                'achievements': True,
+                'export_sessions': True
             }
         }
         
-        if config_file.exists():
-            with open(config_file, 'r') as f:
-                user_config = json.load(f)
-                default_config.update(user_config)
+        try:
+            if config_file.exists():
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    loaded_config = json.load(f)
+                    # Merge with defaults
+                    for key in default_config:
+                        if key in loaded_config:
+                            default_config[key].update(loaded_config[key])
+            else:
+                # Save default configuration
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump(default_config, f, indent=2)
+                    
+        except Exception as e:
+            logger.error(f"Configuration load failed: {e}")
         
         return default_config
     
-    def authenticate_parent(self, password: str) -> bool:
-        """Authenticate parent access
-        BUG-004 FIX: Using bcrypt instead of SHA-256 for secure password storage
-        """
-        if not password or len(password) < 6:
-            logger.warning("Password too short")
-            return False
+    def _hash_password(self, password: str) -> str:
+        """Hash password using bcrypt with salt"""
+        # Validate password
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
         
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Check for existing parent auth
-            cursor.execute("SELECT * FROM parent_auth ORDER BY id DESC LIMIT 1")
-            auth_record = cursor.fetchone()
-            
-            if not auth_record:
-                # First time setup - create password
-                password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-                cursor.execute(
-                    "INSERT INTO parent_auth (password_hash, created_at) VALUES (?, ?)",
-                    (password_hash.decode('utf-8'), datetime.now().isoformat())
-                )
-                self.parent_authenticated = True
-                logger.info("Parent password created successfully")
-                return True
-            
-            # Check for account lockout
-            if auth_record['locked_until']:
-                locked_until = datetime.fromisoformat(auth_record['locked_until'])
-                if datetime.now() < locked_until:
-                    logger.warning("Account locked due to too many failed attempts")
-                    return False
-                else:
-                    # Clear lockout
+        if len(password) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f"Password must not exceed {MAX_PASSWORD_LENGTH} characters")
+        
+        # Generate salt and hash
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+        return hashed.decode('utf-8')
+    
+    def _verify_password(self, password: str, hashed: str) -> bool:
+        """Verify password against bcrypt hash"""
+        try:
+            return bcrypt.checkpw(
+                password.encode('utf-8'),
+                hashed.encode('utf-8')
+            )
+        except Exception as e:
+            logger.error(f"Password verification failed: {e}")
+            return False
+    
+    def authenticate_parent(self, username: str, password: str) -> bool:
+        """Authenticate parent with secure password verification and rate limiting"""
+        with self._lock:
+            try:
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Check if account exists
                     cursor.execute(
-                        "UPDATE parent_auth SET locked_until = NULL, failed_attempts = 0 WHERE id = ?",
-                        (auth_record['id'],)
+                        "SELECT * FROM parents WHERE username = ?",
+                        (username,)
                     )
-            
-            # Verify password with bcrypt
-            stored_hash = auth_record['password_hash'].encode('utf-8')
-            if bcrypt.checkpw(password.encode('utf-8'), stored_hash):
-                # Reset failed attempts on successful login
-                cursor.execute(
-                    "UPDATE parent_auth SET failed_attempts = 0 WHERE id = ?",
-                    (auth_record['id'],)
-                )
-                self.parent_authenticated = True
-                logger.info("Parent authentication successful")
-                return True
-            else:
-                # Increment failed attempts
-                failed_attempts = auth_record['failed_attempts'] + 1
-                
-                # Lock account if too many failures
-                if failed_attempts >= self.config['safety']['max_login_attempts']:
-                    lockout_duration = self.config['safety']['lockout_duration_minutes']
-                    locked_until = datetime.now() + timedelta(minutes=lockout_duration)
-                    cursor.execute(
-                        "UPDATE parent_auth SET failed_attempts = ?, locked_until = ? WHERE id = ?",
-                        (failed_attempts, locked_until.isoformat(), auth_record['id'])
-                    )
-                    logger.warning(f"Account locked after {failed_attempts} failed attempts")
-                else:
-                    cursor.execute(
-                        "UPDATE parent_auth SET failed_attempts = ? WHERE id = ?",
-                        (failed_attempts, auth_record['id'])
-                    )
-                
-                logger.warning(f"Parent authentication failed (attempt {failed_attempts})")
+                    parent = cursor.fetchone()
+                    
+                    if not parent:
+                        # Don't reveal if username exists
+                        time.sleep(secrets.randbelow(100) / 1000)  # Random delay
+                        return False
+                    
+                    # Check if account is locked
+                    if parent['locked_until']:
+                        locked_until = datetime.fromisoformat(parent['locked_until'])
+                        if datetime.now() < locked_until:
+                            logger.warning(f"Account locked for {username}")
+                            return False
+                        else:
+                            # Unlock account
+                            cursor.execute(
+                                "UPDATE parents SET locked_until = NULL, failed_attempts = 0 WHERE username = ?",
+                                (username,)
+                            )
+                    
+                    # Verify password
+                    if self._verify_password(password, parent['password_hash']):
+                        # Reset failed attempts and update last login
+                        cursor.execute(
+                            "UPDATE parents SET failed_attempts = 0, last_login = ? WHERE username = ?",
+                            (datetime.now().isoformat(), username)
+                        )
+                        
+                        # Generate session token
+                        self.parent_authenticated = True
+                        self.parent_session_token = secrets.token_urlsafe(32)
+                        
+                        logger.info(f"Parent authenticated: {username}")
+                        return True
+                    else:
+                        # Increment failed attempts
+                        failed_attempts = parent['failed_attempts'] + 1
+                        
+                        # Lock account after 5 failed attempts
+                        if failed_attempts >= 5:
+                            locked_until = datetime.now() + timedelta(minutes=30)
+                            cursor.execute(
+                                "UPDATE parents SET failed_attempts = ?, locked_until = ? WHERE username = ?",
+                                (failed_attempts, locked_until.isoformat(), username)
+                            )
+                            logger.warning(f"Account locked after {failed_attempts} failed attempts: {username}")
+                        else:
+                            cursor.execute(
+                                "UPDATE parents SET failed_attempts = ? WHERE username = ?",
+                                (failed_attempts, username)
+                            )
+                        
+                        return False
+                        
+            except Exception as e:
+                logger.error(f"Authentication error: {e}")
                 return False
     
-    def _sanitize_name(self, name: str) -> str:
-        """Sanitize name input to prevent SQL injection and other issues
-        BUG-002 FIX: Input sanitization for database safety
-        """
-        if not name:
-            raise ValueError("Name cannot be empty")
-        
-        # Remove leading/trailing whitespace
-        name = name.strip()
-        
-        # Check length
-        if len(name) > self.MAX_NAME_LENGTH:
-            name = name[:self.MAX_NAME_LENGTH]
-        
-        # Validate characters (alphanumeric, spaces, hyphens, underscores, periods only)
-        if not self.VALID_NAME_PATTERN.match(name):
-            # Remove invalid characters
-            name = re.sub(r'[^a-zA-Z0-9\s\-_\.]', '', name)
-        
-        # Ensure name is not empty after sanitization
-        if not name:
-            raise ValueError("Name contains only invalid characters")
-        
-        return name
+    def create_parent_account(self, username: str, password: str, email: Optional[str] = None) -> bool:
+        """Create parent account with secure password storage"""
+        with self._lock:
+            # Validate username
+            if not username or len(username) > MAX_NAME_LENGTH:
+                raise ValueError(f"Username must be 1-{MAX_NAME_LENGTH} characters")
+            
+            if not VALID_NAME_PATTERN.match(username):
+                raise ValueError("Username contains invalid characters")
+            
+            try:
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Check if username exists
+                    cursor.execute("SELECT 1 FROM parents WHERE username = ?", (username,))
+                    if cursor.fetchone():
+                        raise ValueError("Username already exists")
+                    
+                    # Create account with bcrypt password hash
+                    parent_id = str(uuid.uuid4())
+                    password_hash = self._hash_password(password)
+                    
+                    cursor.execute('''
+                        INSERT INTO parents (parent_id, username, password_hash, email, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        parent_id,
+                        username,
+                        password_hash,
+                        email,
+                        datetime.now().isoformat()
+                    ))
+                    
+                    logger.info(f"Parent account created: {username}")
+                    return True
+                    
+            except Exception as e:
+                logger.error(f"Failed to create parent account: {e}")
+                raise
     
     def create_child_profile(self, name: str, age: int, grade: str) -> ChildProfile:
-        """Create new child profile
-        BUG-002 FIX: Input sanitization
-        BUG-007 FIX: Age validation
-        """
-        if not self.parent_authenticated:
-            raise PermissionError("Parent authentication required")
-        
-        # Sanitize and validate inputs
-        try:
-            sanitized_name = self._sanitize_name(name)
-        except ValueError as e:
-            logger.error(f"Invalid name: {e}")
-            raise ValueError(f"Invalid name: {e}")
-        
-        # Validate age (BUG-007 FIX)
-        if not isinstance(age, int) or not (self.MIN_CHILD_AGE <= age <= self.MAX_CHILD_AGE):
-            raise ValueError(f"Age must be between {self.MIN_CHILD_AGE} and {self.MAX_CHILD_AGE}, got {age}")
-        
-        # Sanitize grade
-        grade = re.sub(r'[^a-zA-Z0-9\s\-]', '', grade)[:20]
-        
-        profile = ChildProfile(
-            profile_id=str(uuid.uuid4()),
-            name=sanitized_name,
-            age=age,
-            grade=grade,
-            created_at=datetime.now()
-        )
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
+        """Create child profile with strict validation"""
+        with self._lock:
+            if not self.parent_authenticated:
+                raise PermissionError("Parent authentication required")
             
-            # Check for duplicate names
-            cursor.execute("SELECT COUNT(*) as count FROM profiles WHERE name = ?", (sanitized_name,))
-            if cursor.fetchone()['count'] > 0:
-                raise ValueError(f"Profile with name '{sanitized_name}' already exists")
+            # Critical: Validate age for child safety
+            if not isinstance(age, int) or not MIN_CHILD_AGE <= age <= MAX_CHILD_AGE:
+                raise ValueError(f"Child age must be between {MIN_CHILD_AGE} and {MAX_CHILD_AGE}, got {age}")
             
-            # Insert with parameterized query (already SQL-injection safe)
-            cursor.execute('''
-                INSERT INTO profiles (
-                    profile_id, name, age, grade_level, created_at, safety_level
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                profile.profile_id, 
-                sanitized_name,  # Using sanitized name
-                profile.age,
-                profile.grade, 
-                profile.created_at.isoformat(),
-                profile.safety_level
-            ))
-        
-        logger.info(f"Created profile for {sanitized_name} (age {age})")
-        return profile
-    
-    def load_profile(self, profile_id: str) -> Optional[ChildProfile]:
-        """Load existing child profile"""
-        # Validate profile_id format (UUID)
-        try:
-            uuid.UUID(profile_id)
-        except ValueError:
-            logger.error(f"Invalid profile ID format: {profile_id}")
-            return None
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM profiles WHERE profile_id = ?', (profile_id,))
-            row = cursor.fetchone()
+            # Sanitize and validate name
+            name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', name)[:MAX_NAME_LENGTH]
+            if not name:
+                raise ValueError("Invalid child name")
             
-            if row:
-                return ChildProfile(
-                    profile_id=row['profile_id'],
-                    name=row['name'],
-                    age=row['age'],
-                    grade=row['grade_level'],
-                    created_at=datetime.fromisoformat(row['created_at']),
-                    last_active=datetime.fromisoformat(row['last_active']) if row['last_active'] else None,
-                    total_sessions=row['total_sessions'],
-                    safety_level=row['safety_level'],
-                    interests=json.loads(row['interests']) if row['interests'] else [],
-                    learning_style=row['learning_style']
+            # Sanitize grade
+            grade = re.sub(r'[^a-zA-Z0-9\s\-]', '', str(grade))[:20]
+            
+            try:
+                # Create profile with validation
+                profile = ChildProfile(
+                    profile_id=str(uuid.uuid4()),
+                    name=name,
+                    age=age,
+                    grade=grade,
+                    created_at=datetime.now()
                 )
-        
-        return None
+                
+                # Save to database
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Use parameterized query to prevent SQL injection
+                    cursor.execute('''
+                        INSERT INTO profiles (
+                            profile_id, name, age, grade_level, created_at, safety_level
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (
+                        profile.profile_id,
+                        profile.name,
+                        profile.age,
+                        profile.grade,
+                        profile.created_at.isoformat(),
+                        profile.safety_level
+                    ))
+                
+                logger.info(f"Created child profile: {name} (age {age})")
+                return profile
+                
+            except Exception as e:
+                logger.error(f"Failed to create child profile: {e}")
+                raise
     
     def start_session(self, profile_id: str) -> str:
-        """Start new learning session"""
-        if not self.parent_authenticated:
-            raise PermissionError("Parent authentication required")
-        
-        # Validate profile exists
-        profile = self.load_profile(profile_id)
-        if not profile:
-            raise ValueError(f"Profile {profile_id} not found")
-        
-        session_id = str(uuid.uuid4())
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
+        """Start monitored session for child"""
+        with self._lock:
+            if not self.parent_authenticated:
+                raise PermissionError("Parent authentication required")
             
-            # Create session
-            cursor.execute('''
-                INSERT INTO sessions (session_id, profile_id, start_time)
-                VALUES (?, ?, ?)
-            ''', (session_id, profile_id, datetime.now().isoformat()))
-            
-            # Update profile last active
-            cursor.execute(
-                "UPDATE profiles SET last_active = ? WHERE profile_id = ?",
-                (datetime.now().isoformat(), profile_id)
-            )
-        
-        self.session_id = session_id
-        self.active_profile = profile
-        
-        # Start monitoring thread with proper error handling
-        self._start_session_monitoring()
-        
-        logger.info(f"Started session {session_id} for profile {profile_id}")
-        return session_id
-    
-    def end_session(self) -> None:
-        """End current session"""
-        if not self.session_id:
-            return
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Update session end time
-            cursor.execute('''
-                UPDATE sessions 
-                SET end_time = ?, 
-                    duration_minutes = (strftime('%s', ?) - strftime('%s', start_time)) / 60
-                WHERE session_id = ?
-            ''', (datetime.now().isoformat(), datetime.now().isoformat(), self.session_id))
-            
-            # Update profile session count
-            if self.active_profile:
+            # Load profile
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE profiles SET total_sessions = total_sessions + 1 WHERE profile_id = ?",
-                    (self.active_profile.profile_id,)
+                    "SELECT * FROM profiles WHERE profile_id = ?",
+                    (profile_id,)
                 )
-        
-        logger.info(f"Ended session {self.session_id}")
-        self.session_id = None
-        self.active_profile = None
+                profile_data = cursor.fetchone()
+                
+                if not profile_data:
+                    raise ValueError(f"Profile not found: {profile_id}")
+                
+                # Create profile object
+                self.current_profile = ChildProfile(
+                    profile_id=profile_data['profile_id'],
+                    name=profile_data['name'],
+                    age=profile_data['age'],
+                    grade=profile_data['grade_level'],
+                    created_at=datetime.fromisoformat(profile_data['created_at'])
+                )
+                
+                # Create session
+                self.session_id = str(uuid.uuid4())
+                self.session_start = datetime.now()
+                
+                cursor.execute('''
+                    INSERT INTO sessions (session_id, profile_id, start_time)
+                    VALUES (?, ?, ?)
+                ''', (
+                    self.session_id,
+                    profile_id,
+                    self.session_start.isoformat()
+                ))
+                
+                # Update profile last active
+                cursor.execute(
+                    "UPDATE profiles SET last_active = ? WHERE profile_id = ?",
+                    (datetime.now().isoformat(), profile_id)
+                )
+            
+            # Start safety monitoring
+            self._start_monitoring()
+            
+            logger.info(f"Session started: {self.session_id} for profile {profile_id}")
+            return self.session_id
     
-    def _start_session_monitoring(self):
-        """Start background session monitoring with proper error handling"""
+    def end_session(self) -> Dict[str, Any]:
+        """End session and return summary"""
+        with self._lock:
+            if not self.session_id:
+                raise RuntimeError("No active session")
+            
+            # Stop monitoring
+            self.stop_monitoring.set()
+            
+            session_end = datetime.now()
+            duration = int((session_end - self.session_start).total_seconds() / 60)
+            
+            # Update session in database
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    UPDATE sessions 
+                    SET end_time = ?, duration_minutes = ?
+                    WHERE session_id = ?
+                ''', (
+                    session_end.isoformat(),
+                    duration,
+                    self.session_id
+                ))
+                
+                # Get session summary
+                cursor.execute(
+                    "SELECT * FROM sessions WHERE session_id = ?",
+                    (self.session_id,)
+                )
+                session_data = dict(cursor.fetchone())
+                
+                # Get flagged interactions count
+                cursor.execute(
+                    "SELECT COUNT(*) as flagged_count FROM interactions WHERE session_id = ? AND flagged = 1",
+                    (self.session_id,)
+                )
+                flagged_count = cursor.fetchone()['flagged_count']
+                session_data['flagged_interactions'] = flagged_count
+            
+            # Clear session state
+            self.session_id = None
+            self.session_start = None
+            self.current_profile = None
+            
+            logger.info(f"Session ended. Duration: {duration} minutes")
+            return session_data
+    
+    def _start_monitoring(self):
+        """Start background monitoring thread for safety"""
+        self.stop_monitoring.clear()
+        
         def monitor():
-            while self.session_id:
+            while not self.stop_monitoring.is_set():
                 try:
-                    # Check session timeout
-                    if datetime.now() - self.last_activity > self.session_timeout:
-                        logger.info("Session timeout reached")
-                        self.end_session()
-                        break
+                    # Check session time limit
+                    if self.session_start:
+                        duration = (datetime.now() - self.session_start).total_seconds() / 60
+                        max_duration = self.config['safety']['max_session_minutes']
+                        
+                        if duration > max_duration:
+                            logger.warning(f"Session exceeded time limit: {duration} minutes")
+                            self.end_session()
+                            break
+                        
+                        # Send break reminder
+                        reminder_interval = self.config['safety']['break_reminder_minutes']
+                        if duration > 0 and duration % reminder_interval == 0:
+                            logger.info(f"Break reminder at {duration} minutes")
                     
                     time.sleep(60)  # Check every minute
                     
-                except KeyboardInterrupt:
-                    logger.info("Monitoring interrupted by user")
-                    break
                 except Exception as e:
                     logger.error(f"Monitoring error: {e}")
-                    # Don't break the loop for unexpected errors
-                    time.sleep(60)
+                    # Don't break on monitoring errors
         
         self.monitoring_thread = threading.Thread(target=monitor, daemon=True)
         self.monitoring_thread.start()
     
     def log_interaction(self, user_input: str, ai_response: str, safety_score: float = 1.0):
         """Log interaction with safety scoring"""
-        if not self.session_id:
-            raise RuntimeError("No active session")
-        
-        interaction_id = str(uuid.uuid4())
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
+        with self._lock:
+            if not self.session_id:
+                raise RuntimeError("No active session")
             
-            # Log interaction
-            cursor.execute('''
-                INSERT INTO interactions (
-                    interaction_id, session_id, timestamp, user_input,
-                    ai_response, safety_score, flagged
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                interaction_id, self.session_id, datetime.now().isoformat(),
-                user_input, ai_response, safety_score, safety_score < 0.8
-            ))
+            interaction_id = str(uuid.uuid4())
             
-            # Update session interaction count
-            cursor.execute(
-                "UPDATE sessions SET interactions_count = interactions_count + 1 WHERE session_id = ?",
-                (self.session_id,)
-            )
-        
-        self.last_activity = datetime.now()
-        logger.debug(f"Logged interaction {interaction_id}")
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Log interaction
+                cursor.execute('''
+                    INSERT INTO interactions (
+                        interaction_id, session_id, timestamp, user_input,
+                        ai_response, safety_score, flagged
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    interaction_id,
+                    self.session_id,
+                    datetime.now().isoformat(),
+                    user_input,
+                    ai_response,
+                    safety_score,
+                    safety_score < 0.8
+                ))
+                
+                # Update session interaction count
+                cursor.execute(
+                    "UPDATE sessions SET interactions_count = interactions_count + 1 WHERE session_id = ?",
+                    (self.session_id,)
+                )
+                
+                # Flag session if needed
+                if safety_score < 0.8:
+                    cursor.execute(
+                        "UPDATE sessions SET safety_flags = safety_flags + 1 WHERE session_id = ?",
+                        (self.session_id,)
+                    )
+                    logger.warning(f"Safety flag triggered: score {safety_score}")
     
-    def get_session_history(self, profile_id: str, limit: int = 10) -> List[Dict]:
-        """Get recent session history for a profile"""
-        # Validate profile_id
-        try:
-            uuid.UUID(profile_id)
-        except ValueError:
-            logger.error(f"Invalid profile ID: {profile_id}")
-            return []
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM sessions 
-                WHERE profile_id = ? 
-                ORDER BY start_time DESC 
-                LIMIT ?
-            ''', (profile_id, limit))
+    def get_session_history(self, profile_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get session history for profile"""
+        with self._lock:
+            sessions = []
             
-            return [dict(row) for row in cursor.fetchall()]
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT * FROM sessions 
+                    WHERE profile_id = ? 
+                    ORDER BY start_time DESC 
+                    LIMIT ?
+                ''', (profile_id, limit))
+                
+                for row in cursor.fetchall():
+                    sessions.append(dict(row))
+            
+            return sessions
     
     def export_session_data(self, profile_id: str, format: str = 'json') -> Path:
         """Export session data for parent review"""
-        if not self.parent_authenticated:
-            raise PermissionError("Parent authentication required")
-        
-        sessions = []
-        
-        with self._get_db_connection() as conn:
-            cursor = conn.cursor()
+        with self._lock:
+            if not self.parent_authenticated:
+                raise PermissionError("Parent authentication required")
             
-            # Get all sessions for profile
-            cursor.execute(
-                "SELECT * FROM sessions WHERE profile_id = ? ORDER BY start_time",
-                (profile_id,)
-            )
+            sessions = []
             
-            for session in cursor.fetchall():
-                session_data = dict(session)
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
                 
-                # Get interactions for each session
+                # Get all sessions for profile
                 cursor.execute(
-                    "SELECT * FROM interactions WHERE session_id = ? ORDER BY timestamp",
-                    (session['session_id'],)
+                    "SELECT * FROM sessions WHERE profile_id = ? ORDER BY start_time",
+                    (profile_id,)
                 )
-                session_data['interactions'] = [dict(row) for row in cursor.fetchall()]
-                sessions.append(session_data)
-        
-        # Generate export file
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        export_dir = self.base_path / 'exports'
-        export_dir.mkdir(exist_ok=True)
-        export_file = export_dir / f"profile_{profile_id}_{timestamp}.{format}"
-        
-        if format == 'json':
-            with open(export_file, 'w') as f:
-                json.dump(sessions, f, indent=2, default=str)
-        
-        logger.info(f"Exported session history to {export_file}")
-        return export_file
+                
+                for session in cursor.fetchall():
+                    session_data = dict(session)
+                    
+                    # Get interactions for each session
+                    cursor.execute(
+                        "SELECT * FROM interactions WHERE session_id = ? ORDER BY timestamp",
+                        (session['session_id'],)
+                    )
+                    session_data['interactions'] = [dict(row) for row in cursor.fetchall()]
+                    sessions.append(session_data)
+            
+            # Generate export file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            export_file = self.base_path / 'exports' / f"profile_{profile_id}_{timestamp}.{format}"
+            export_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            if format == 'json':
+                with open(export_file, 'w', encoding='utf-8') as f:
+                    json.dump(sessions, f, indent=2, default=str)
+            
+            logger.info(f"Exported session history to {export_file}")
+            return export_file
     
     def launch_openwebui(self) -> bool:
         """Launch Open WebUI with proper configuration"""
@@ -688,30 +823,43 @@ class OpenWebUIIntegration:
                 logger.error(f"Open WebUI executable not found at {openwebui_exe}")
                 return False
             
+            # Set environment variables for Open WebUI
+            env = os.environ.copy()
+            env['WEBUI_AUTH'] = 'false'
+            env['WEBUI_SIGNUP'] = 'false'
+            env['DATA_DIR'] = str(self.base_path / 'openwebui_data')
+            env['WEBUI_PORT'] = str(self.config['openwebui']['port'])
+            
             # Launch Open WebUI process
             self.openwebui_process = subprocess.Popen(
                 [str(openwebui_exe)],
-                env=os.environ.copy(),
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
             
             # Wait for Open WebUI to start
-            for _ in range(30):  # 30 second timeout
+            start_time = time.time()
+            timeout = self.config['openwebui']['timeout']
+            
+            while time.time() - start_time < timeout:
                 try:
-                    # Simple connection test without requests library
+                    # Check if process is still running
+                    if self.openwebui_process.poll() is not None:
+                        logger.error("Open WebUI process terminated unexpectedly")
+                        return False
+                    
+                    # Try to connect
                     import socket
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(1)
-                    result = sock.connect_ex((
-                        self.config['openwebui']['host'],
-                        self.config['openwebui']['port']
-                    ))
+                    result = sock.connect_ex(('localhost', self.config['openwebui']['port']))
                     sock.close()
                     
                     if result == 0:
                         logger.info("Open WebUI launched successfully")
                         return True
+                        
                 except Exception:
                     pass
                 
@@ -726,42 +874,103 @@ class OpenWebUIIntegration:
     
     def shutdown(self):
         """Clean shutdown of all components"""
-        try:
-            # End any active session
-            if self.session_id:
-                self.end_session()
+        with self._lock:
+            try:
+                # End any active session
+                if self.session_id:
+                    self.end_session()
+                
+                # Stop monitoring
+                self.stop_monitoring.set()
+                if self.monitoring_thread and self.monitoring_thread.is_alive():
+                    self.monitoring_thread.join(timeout=5)
+                
+                # Stop Open WebUI
+                if self.openwebui_process:
+                    self.openwebui_process.terminate()
+                    try:
+                        self.openwebui_process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.openwebui_process.kill()
+                        self.openwebui_process.wait()
+                
+                # Close all database connections
+                for conn in self._db_connections.values():
+                    try:
+                        conn.close()
+                    except:
+                        pass
+                self._db_connections.clear()
+                
+                logger.info("Sunflower AI system shutdown complete")
+                
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")
+    
+    def cleanup_old_sessions(self, days: int = 30):
+        """Clean up old sessions to prevent disk exhaustion"""
+        with self._lock:
+            cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
             
-            # Stop Open WebUI
-            if self.openwebui_process:
-                self.openwebui_process.terminate()
-                try:
-                    self.openwebui_process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    self.openwebui_process.kill()
-            
-            logger.info("Sunflower AI system shutdown complete")
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Delete old sessions (cascade will handle interactions)
+                cursor.execute(
+                    "DELETE FROM sessions WHERE start_time < ?",
+                    (cutoff_date,)
+                )
+                
+                deleted = cursor.rowcount
+                logger.info(f"Cleaned up {deleted} old sessions")
+    
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup"""
+        self.shutdown()
 
 
 # Production entry point
 if __name__ == "__main__":
-    integration = OpenWebUIIntegration()
-    
-    # Example usage flow
-    if integration.authenticate_parent("secure_password_123"):
-        # Create child profile with validation
-        try:
-            profile = integration.create_child_profile("Emma", 8, "3rd Grade")
+    # Example usage with proper error handling
+    try:
+        with OpenWebUIIntegration() as integration:
+            # Create parent account
+            integration.create_parent_account("parent_user", "SecureP@ssw0rd123")
             
-            # Start session
-            session_id = integration.start_session(profile.profile_id)
-            
-            # Launch Open WebUI
-            if integration.launch_openwebui():
-                print(f"System ready. Session ID: {session_id}")
-                # System would now be ready for child interaction
-        except ValueError as e:
-            print(f"Error creating profile: {e}")
-    else:
-        print("Authentication failed")
+            # Authenticate
+            if integration.authenticate_parent("parent_user", "SecureP@ssw0rd123"):
+                # Create child profile with validation
+                profile = integration.create_child_profile("Emma", 8, "3rd Grade")
+                
+                # Start session
+                session_id = integration.start_session(profile.profile_id)
+                
+                # Launch Open WebUI
+                if integration.launch_openwebui():
+                    print(f"System ready. Session ID: {session_id}")
+                    
+                    # Example interaction logging
+                    integration.log_interaction(
+                        "What is photosynthesis?",
+                        "Photosynthesis is how plants make food using sunlight!",
+                        safety_score=1.0
+                    )
+                    
+                    # Keep running until interrupted
+                    input("Press Enter to end session...")
+                    
+                    # End session and get summary
+                    summary = integration.end_session()
+                    print(f"Session summary: {summary}")
+                else:
+                    print("Failed to launch Open WebUI")
+            else:
+                print("Authentication failed")
+                
+    except Exception as e:
+        logger.error(f"System error: {e}")
+        print(f"Error: {e}")
