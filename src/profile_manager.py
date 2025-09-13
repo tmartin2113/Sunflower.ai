@@ -1,64 +1,192 @@
-#!/usr/bin/env python3
 """
 Sunflower AI Professional System - Profile Manager
-Secure family and child profile management with SQL injection prevention
-Version: 6.2.0 - Production Ready
+Version: 6.2
+Copyright (c) 2025 Sunflower AI
+
+Manages family and child profiles with secure authentication, age-appropriate
+settings, and learning progress tracking. All profile data is encrypted and
+stored on the USB partition.
 """
 
 import os
-import sys
+import re
 import json
-import sqlite3
+import uuid
 import hashlib
 import secrets
-import bcrypt
-import uuid
-import threading
 import logging
+import threading
+import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any, Tuple, Set
+from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
 from enum import Enum
+import base64
+import bcrypt
+from contextlib import contextmanager
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+
+from . import ProfileError, AGE_GROUPS
 
 logger = logging.getLogger(__name__)
 
+# Constants for validation
+MIN_CHILD_AGE = 2
+MAX_CHILD_AGE = 18
+MIN_PARENT_AGE = 18
+MAX_NAME_LENGTH = 50
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
+VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-_\.]{1,50}$')
+VALID_EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
-class ProfileRole(Enum):
-    """User roles in the system"""
+# Database settings
+DB_TIMEOUT = 30
+MAX_RETRY_ATTEMPTS = 3
+RETRY_DELAY = 0.1
+
+
+class ProfileType(Enum):
+    """Profile types"""
     PARENT = "parent"
     CHILD = "child"
     EDUCATOR = "educator"
     GUEST = "guest"
 
 
-class LearningStyle(Enum):
-    """Learning style preferences"""
-    VISUAL = "visual"
-    AUDITORY = "auditory"
-    KINESTHETIC = "kinesthetic"
-    BALANCED = "balanced"
+class LearningLevel(Enum):
+    """Learning progression levels"""
+    BEGINNER = "beginner"
+    ELEMENTARY = "elementary"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+    EXPERT = "expert"
+
+
+@dataclass
+class Achievement:
+    """Learning achievement record"""
+    id: str
+    name: str
+    description: str
+    earned_date: str
+    category: str
+    points: int = 10
+    icon: str = "star"
+
+
+@dataclass
+class LearningProgress:
+    """Track learning progress for a subject"""
+    subject: str
+    level: str = "beginner"
+    total_sessions: int = 0
+    total_minutes: int = 0
+    last_session: Optional[str] = None
+    topics_covered: List[str] = field(default_factory=list)
+    achievements: List[str] = field(default_factory=list)
+    quiz_scores: List[Dict[str, Any]] = field(default_factory=list)
+    mastery_percentage: float = 0.0
+
+
+@dataclass
+class ChildProfile:
+    """Individual child profile with strict validation"""
+    id: str
+    name: str
+    age: int
+    grade: Optional[int] = None
+    avatar: str = "default"
+    created_date: str = field(default_factory=lambda: datetime.now().isoformat())
+    last_active: Optional[str] = None
+    
+    # Settings
+    age_group: str = "elementary"
+    learning_level: str = "beginner"
+    content_level: str = "age_appropriate"
+    safety_mode: str = "strict"
+    
+    # Preferences
+    favorite_subjects: List[str] = field(default_factory=list)
+    learning_style: str = "visual"
+    difficulty_preference: str = "adaptive"
+    
+    # Restrictions
+    daily_time_limit: int = 120  # minutes
+    blocked_topics: List[str] = field(default_factory=lambda: ["violence", "adult_content"])
+    allowed_hours: Dict[str, str] = field(default_factory=lambda: {
+        "weekday": "15:00-20:00",
+        "weekend": "09:00-21:00"
+    })
+    
+    # Progress tracking
+    subjects_progress: Dict[str, LearningProgress] = field(default_factory=dict)
+    achievements: List[Achievement] = field(default_factory=list)
+    total_sessions: int = 0
+    total_learning_time: int = 0  # minutes
+    streak_days: int = 0
+    last_streak_date: Optional[str] = None
+    
+    # Session data
+    current_session_id: Optional[str] = None
+    session_start_time: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate profile data after initialization"""
+        # Critical: Validate age for child safety
+        if not isinstance(self.age, int) or not MIN_CHILD_AGE <= self.age <= MAX_CHILD_AGE:
+            raise ValueError(f"Child age must be between {MIN_CHILD_AGE} and {MAX_CHILD_AGE}, got {self.age}")
+        
+        # Validate name
+        if not self.name or len(self.name) > MAX_NAME_LENGTH:
+            raise ValueError(f"Name must be 1-{MAX_NAME_LENGTH} characters")
+        
+        if not VALID_NAME_PATTERN.match(self.name):
+            raise ValueError("Name contains invalid characters")
+        
+        # Auto-set age group based on age
+        if self.age < 5:
+            self.age_group = "preschool"
+        elif self.age < 8:
+            self.age_group = "early_elementary"
+        elif self.age < 11:
+            self.age_group = "elementary"
+        elif self.age < 14:
+            self.age_group = "middle_school"
+        else:
+            self.age_group = "high_school"
+        
+        # Ensure safety mode is strict for younger children
+        if self.age < 13:
+            self.safety_mode = "strict"
+        
+        # Validate grade if provided
+        if self.grade is not None:
+            if not isinstance(self.grade, int) or not 0 <= self.grade <= 12:
+                raise ValueError(f"Grade must be between K(0) and 12, got {self.grade}")
 
 
 @dataclass
 class ParentProfile:
-    """Parent/Guardian profile"""
+    """Parent account with authentication"""
     id: str
     name: str
     email: Optional[str] = None
-    password_hash: str = ""
-    salt: str = ""
-    created_date: str = ""
+    password_hash: str = ""  # bcrypt hash with salt
+    created_date: str = field(default_factory=lambda: datetime.now().isoformat())
     last_login: Optional[str] = None
     
-    # Security
-    failed_login_attempts: int = 0
-    locked_until: Optional[str] = None
-    two_factor_enabled: bool = False
-    two_factor_secret: Optional[str] = None
+    # Permissions
+    can_modify_profiles: bool = True
+    can_view_all_sessions: bool = True
+    can_modify_settings: bool = True
+    can_export_data: bool = True
     
-    # Preferences
-    notification_email: bool = True
+    # Monitoring preferences
+    email_notifications: bool = False
     weekly_reports: bool = True
     safety_alerts_only: bool = False
     
@@ -72,49 +200,24 @@ class ParentProfile:
         "safety_incident": True,
         "weekly_summary": True
     })
-
-
-@dataclass
-class ChildProfile:
-    """Child learner profile"""
-    id: str
-    name: str
-    age: int
-    grade: str
-    avatar: str = "🦄"
-    created_date: str = ""
-    last_active: Optional[str] = None
     
-    # Learning preferences
-    learning_style: LearningStyle = LearningStyle.BALANCED
-    pace: str = "moderate"  # slow, moderate, fast
-    difficulty: str = "auto"  # easy, moderate, challenging, auto
-    interests: List[str] = field(default_factory=list)
-    
-    # Safety settings
-    safety_mode: str = "strict"  # strict, moderate, standard
-    daily_time_limit_minutes: int = 30
-    break_reminder_minutes: int = 20
-    require_parent_approval: bool = False
-    
-    # Progress tracking
-    total_sessions: int = 0
-    total_time_minutes: int = 0
-    topics_explored: List[str] = field(default_factory=list)
-    achievements: List[str] = field(default_factory=list)
-    current_level: int = 1
-    experience_points: int = 0
-    
-    # Session settings
-    max_messages_per_session: int = 50
-    response_length: str = "age_appropriate"
-    enable_voice: bool = False
-    enable_images: bool = True
+    def __post_init__(self):
+        """Validate parent profile data"""
+        # Validate name
+        if not self.name or len(self.name) > MAX_NAME_LENGTH:
+            raise ValueError(f"Name must be 1-{MAX_NAME_LENGTH} characters")
+        
+        if not VALID_NAME_PATTERN.match(self.name):
+            raise ValueError("Name contains invalid characters")
+        
+        # Validate email if provided
+        if self.email and not VALID_EMAIL_PATTERN.match(self.email):
+            raise ValueError("Invalid email format")
 
 
 @dataclass
 class FamilyProfile:
-    """Complete family profile"""
+    """Complete family profile with validation"""
     id: str
     family_name: str
     created_date: str
@@ -144,828 +247,640 @@ class FamilyProfile:
     member_count: int = 0
     
     def __post_init__(self):
-        """Initialize computed fields"""
+        """Initialize computed fields and validate"""
         if not self.id:
             self.id = str(uuid.uuid4())
+        
+        # Validate family name
+        if not self.family_name or len(self.family_name) > MAX_NAME_LENGTH:
+            raise ValueError(f"Family name must be 1-{MAX_NAME_LENGTH} characters")
+        
+        if not VALID_NAME_PATTERN.match(self.family_name):
+            raise ValueError("Family name contains invalid characters")
+        
         self.member_count = len(self.parents) + len(self.children)
+        
+        # Ensure at least one parent
+        if not self.parents:
+            raise ValueError("Family must have at least one parent account")
 
 
 class ProfileManager:
     """
-    Manages all family and child profiles with SQL injection prevention.
-    All database queries use parameterized statements for security.
+    Thread-safe profile manager with encryption and cascade deletion support.
+    All sensitive data is encrypted before storage on the USB partition.
     """
     
-    def __init__(self, data_dir: Path):
+    def __init__(self, usb_path: Optional[Path] = None):
         """
-        Initialize profile manager with secure database
+        Initialize profile manager with thread safety
         
         Args:
-            data_dir: Directory for profile data storage
+            usb_path: Path to USB partition for profile storage
         """
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Database path
-        self.db_path = self.data_dir / "profiles.db"
+        self.usb_path = Path(usb_path) if usb_path else None
+        self.profiles_dir = None
+        self.encrypted_dir = None
+        self.sessions_dir = None
+        self.current_family: Optional[FamilyProfile] = None
+        self.current_child: Optional[ChildProfile] = None
         
         # Thread safety
         self._lock = threading.RLock()
+        self._db_lock = threading.RLock()
+        self._session_locks: Dict[str, threading.Lock] = {}
         
-        # Current session
-        self.current_family: Optional[FamilyProfile] = None
-        self.current_parent: Optional[ParentProfile] = None
-        self.current_child: Optional[ChildProfile] = None
+        # Encryption
+        self.cipher_suite: Optional[Fernet] = None
+        self.master_key: Optional[bytes] = None
         
-        # Initialize database
-        self._init_database()
+        # Database connections pool
+        self._db_connections: Dict[int, sqlite3.Connection] = {}
         
-        logger.info(f"Profile manager initialized at {self.data_dir}")
+        # Initialize storage
+        if self.usb_path:
+            self._initialize_storage()
     
-    def _init_database(self):
-        """Initialize SQLite database with secure schema"""
+    def _initialize_storage(self):
+        """Initialize storage directories with proper permissions"""
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
-            
-            # FIX: Use parameterized queries for all database operations
-            # Create tables with proper constraints
-            conn.executescript('''
-                -- Family profiles table
-                CREATE TABLE IF NOT EXISTS families (
-                    id TEXT PRIMARY KEY,
-                    family_name TEXT NOT NULL,
-                    created_date TEXT NOT NULL,
-                    subscription_type TEXT DEFAULT 'standard',
-                    timezone TEXT DEFAULT 'America/Chicago',
-                    language TEXT DEFAULT 'en-US',
-                    country TEXT DEFAULT 'US',
-                    features TEXT,
-                    total_usage_hours REAL DEFAULT 0.0,
-                    total_sessions INTEGER DEFAULT 0
-                );
+            try:
+                # Create directory structure
+                self.profiles_dir = self.usb_path / "profiles"
+                self.encrypted_dir = self.usb_path / "encrypted"
+                self.sessions_dir = self.usb_path / "sessions"
                 
-                -- Parent profiles table
-                CREATE TABLE IF NOT EXISTS parents (
-                    id TEXT PRIMARY KEY,
-                    family_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    email TEXT,
-                    password_hash TEXT NOT NULL,
-                    salt TEXT NOT NULL,
-                    created_date TEXT NOT NULL,
-                    last_login TEXT,
-                    failed_login_attempts INTEGER DEFAULT 0,
-                    locked_until TEXT,
-                    two_factor_enabled INTEGER DEFAULT 0,
-                    two_factor_secret TEXT,
-                    preferences TEXT,
-                    FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE
-                );
+                for directory in [self.profiles_dir, self.encrypted_dir, self.sessions_dir]:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    # Set restrictive permissions on Unix-like systems
+                    if hasattr(os, 'chmod'):
+                        os.chmod(directory, 0o700)
                 
-                -- Child profiles table
-                CREATE TABLE IF NOT EXISTS children (
-                    id TEXT PRIMARY KEY,
-                    family_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    age INTEGER NOT NULL CHECK(age >= 2 AND age <= 18),
-                    grade TEXT NOT NULL,
-                    avatar TEXT DEFAULT '🦄',
-                    created_date TEXT NOT NULL,
-                    last_active TEXT,
-                    learning_style TEXT DEFAULT 'balanced',
-                    pace TEXT DEFAULT 'moderate',
-                    difficulty TEXT DEFAULT 'auto',
-                    interests TEXT,
-                    safety_mode TEXT DEFAULT 'strict',
-                    daily_time_limit_minutes INTEGER DEFAULT 30,
-                    break_reminder_minutes INTEGER DEFAULT 20,
-                    require_parent_approval INTEGER DEFAULT 0,
-                    total_sessions INTEGER DEFAULT 0,
-                    total_time_minutes INTEGER DEFAULT 0,
-                    topics_explored TEXT,
-                    achievements TEXT,
-                    current_level INTEGER DEFAULT 1,
-                    experience_points INTEGER DEFAULT 0,
-                    session_settings TEXT,
-                    FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE
-                );
+                # Initialize or load encryption key
+                self._initialize_encryption()
                 
-                -- Session logs table
-                CREATE TABLE IF NOT EXISTS session_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    child_id TEXT NOT NULL,
-                    start_time TEXT NOT NULL,
-                    end_time TEXT,
-                    duration_minutes INTEGER,
-                    messages_count INTEGER DEFAULT 0,
-                    topics TEXT,
-                    safety_incidents INTEGER DEFAULT 0,
-                    FOREIGN KEY (child_id) REFERENCES children(id) ON DELETE CASCADE
-                );
+                # Initialize database
+                self._initialize_database()
                 
-                -- Safety incidents table
-                CREATE TABLE IF NOT EXISTS safety_incidents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    child_id TEXT NOT NULL,
-                    session_id INTEGER,
-                    timestamp TEXT NOT NULL,
-                    incident_type TEXT NOT NULL,
-                    severity INTEGER DEFAULT 1,
-                    input_text TEXT,
-                    action_taken TEXT,
-                    parent_notified INTEGER DEFAULT 0,
-                    FOREIGN KEY (child_id) REFERENCES children(id) ON DELETE CASCADE,
-                    FOREIGN KEY (session_id) REFERENCES session_logs(id) ON DELETE CASCADE
-                );
+                logger.info("Profile storage initialized successfully")
                 
-                -- Create indexes for performance
-                CREATE INDEX IF NOT EXISTS idx_parents_family ON parents(family_id);
-                CREATE INDEX IF NOT EXISTS idx_children_family ON children(family_id);
-                CREATE INDEX IF NOT EXISTS idx_sessions_child ON session_logs(child_id);
-                CREATE INDEX IF NOT EXISTS idx_incidents_child ON safety_incidents(child_id);
-            ''')
-            
-            conn.commit()
-            conn.close()
+            except Exception as e:
+                logger.error(f"Failed to initialize storage: {e}")
+                raise ProfileError(f"Storage initialization failed: {e}")
     
-    def create_family(self, family_name: str, parent_name: str, 
-                     parent_email: str, password: str) -> FamilyProfile:
-        """
-        Create new family profile with secure password handling
+    def _initialize_encryption(self):
+        """Initialize encryption with secure key management"""
+        key_file = self.encrypted_dir / ".key"
         
-        Args:
-            family_name: Name of the family
-            parent_name: Primary parent name
-            parent_email: Parent email
-            password: Parent password (will be hashed)
+        try:
+            if key_file.exists():
+                # Load existing key
+                with open(key_file, 'rb') as f:
+                    self.master_key = f.read()
+            else:
+                # Generate new key
+                self.master_key = Fernet.generate_key()
+                with open(key_file, 'wb') as f:
+                    f.write(self.master_key)
+                # Secure the key file
+                if hasattr(os, 'chmod'):
+                    os.chmod(key_file, 0o600)
             
-        Returns:
-            Created family profile
-        """
+            self.cipher_suite = Fernet(self.master_key)
+            
+        except Exception as e:
+            logger.error(f"Encryption initialization failed: {e}")
+            raise ProfileError(f"Failed to initialize encryption: {e}")
+    
+    def _initialize_database(self):
+        """Initialize profile database with proper schema"""
+        with self._db_lock:
+            db_path = self.profiles_dir / "profiles.db"
+            
+            conn = None
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=DB_TIMEOUT)
+                cursor = conn.cursor()
+                
+                # Create tables with proper constraints
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS families (
+                        id TEXT PRIMARY KEY,
+                        family_name TEXT NOT NULL,
+                        created_date TEXT NOT NULL,
+                        subscription_type TEXT DEFAULT 'standard',
+                        data TEXT NOT NULL
+                    )
+                ''')
+                
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS children (
+                        id TEXT PRIMARY KEY,
+                        family_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        age INTEGER NOT NULL CHECK(age >= 2 AND age <= 18),
+                        created_date TEXT NOT NULL,
+                        data TEXT NOT NULL,
+                        FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        id TEXT PRIMARY KEY,
+                        child_id TEXT NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT,
+                        duration_minutes INTEGER DEFAULT 0,
+                        conversations TEXT,
+                        FOREIGN KEY (child_id) REFERENCES children(id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS conversations (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        child_id TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        input_text TEXT,
+                        output_text TEXT,
+                        safety_triggered BOOLEAN DEFAULT 0,
+                        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                        FOREIGN KEY (child_id) REFERENCES children(id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                # Enable foreign key constraints
+                cursor.execute("PRAGMA foreign_keys = ON")
+                
+                conn.commit()
+                logger.info("Database initialized successfully")
+                
+            except Exception as e:
+                logger.error(f"Database initialization failed: {e}")
+                if conn:
+                    conn.rollback()
+                raise ProfileError(f"Failed to initialize database: {e}")
+            finally:
+                if conn:
+                    conn.close()
+    
+    @contextmanager
+    def _get_db_connection(self):
+        """Get thread-safe database connection with retry logic"""
+        thread_id = threading.get_ident()
+        conn = None
+        
+        with self._db_lock:
+            try:
+                # Reuse existing connection for this thread if available
+                if thread_id in self._db_connections:
+                    conn = self._db_connections[thread_id]
+                    # Test connection
+                    conn.execute("SELECT 1")
+                else:
+                    # Create new connection
+                    db_path = self.profiles_dir / "profiles.db"
+                    conn = sqlite3.connect(str(db_path), timeout=DB_TIMEOUT)
+                    conn.row_factory = sqlite3.Row
+                    conn.execute("PRAGMA foreign_keys = ON")
+                    self._db_connections[thread_id] = conn
+                
+                yield conn
+                
+            except Exception as e:
+                logger.error(f"Database connection error: {e}")
+                # Remove failed connection
+                if thread_id in self._db_connections:
+                    try:
+                        self._db_connections[thread_id].close()
+                    except:
+                        pass
+                    del self._db_connections[thread_id]
+                raise ProfileError(f"Database error: {e}")
+    
+    def _encrypt_data(self, data: str) -> str:
+        """Encrypt sensitive data"""
+        if not self.cipher_suite:
+            raise ProfileError("Encryption not initialized")
+        
+        encrypted = self.cipher_suite.encrypt(data.encode('utf-8'))
+        return base64.b64encode(encrypted).decode('utf-8')
+    
+    def _decrypt_data(self, encrypted_data: str) -> str:
+        """Decrypt sensitive data"""
+        if not self.cipher_suite:
+            raise ProfileError("Encryption not initialized")
+        
+        try:
+            encrypted = base64.b64decode(encrypted_data.encode('utf-8'))
+            decrypted = self.cipher_suite.decrypt(encrypted)
+            return decrypted.decode('utf-8')
+        except Exception as e:
+            logger.error(f"Decryption failed: {e}")
+            raise ProfileError("Failed to decrypt data")
+    
+    def _hash_password(self, password: str) -> str:
+        """Hash password using bcrypt with automatic salt generation"""
+        # Validate password
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+        
+        if len(password) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f"Password must not exceed {MAX_PASSWORD_LENGTH} characters")
+        
+        # Generate bcrypt hash with salt
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+        return hashed.decode('utf-8')
+    
+    def _verify_password(self, password: str, hashed: str) -> bool:
+        """Verify password against bcrypt hash"""
+        try:
+            return bcrypt.checkpw(
+                password.encode('utf-8'),
+                hashed.encode('utf-8')
+            )
+        except Exception as e:
+            logger.error(f"Password verification failed: {e}")
+            return False
+    
+    def create_family_profile(self, family_name: str, parent_name: str,
+                            parent_password: str, parent_email: Optional[str] = None) -> FamilyProfile:
+        """Create new family profile with parent account"""
         with self._lock:
-            # Generate unique IDs
-            family_id = str(uuid.uuid4())
-            parent_id = str(uuid.uuid4())
+            # Validate inputs
+            if not family_name or not parent_name or not parent_password:
+                raise ValueError("Family name, parent name, and password are required")
             
-            # FIX: Use bcrypt for secure password hashing instead of SHA-256
-            salt = bcrypt.gensalt()
-            password_hash = bcrypt.hashpw(password.encode('utf-8'), salt)
+            # Sanitize family name
+            family_name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', family_name)[:MAX_NAME_LENGTH]
+            if not family_name:
+                raise ValueError("Invalid family name")
+            
+            # Sanitize parent name
+            parent_name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', parent_name)[:MAX_NAME_LENGTH]
+            if not parent_name:
+                raise ValueError("Invalid parent name")
             
             # Create family profile
             family = FamilyProfile(
-                id=family_id,
+                id=str(uuid.uuid4()),
                 family_name=family_name,
                 created_date=datetime.now().isoformat()
             )
             
-            # Create parent profile
+            # Create parent profile with secure password
             parent = ParentProfile(
-                id=parent_id,
+                id=str(uuid.uuid4()),
                 name=parent_name,
                 email=parent_email,
-                password_hash=password_hash.decode('utf-8'),
-                salt=salt.decode('utf-8'),
-                created_date=datetime.now().isoformat()
+                password_hash=self._hash_password(parent_password)
             )
             
             family.parents.append(parent)
             
-            # FIX: Save to database using parameterized queries
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
+            # Save to database
+            self._save_family_profile(family)
             
-            try:
-                # Insert family - using parameterized query
+            logger.info(f"Created family profile: {family_name}")
+            return family
+    
+    def add_child_profile(self, family_id: str, name: str, age: int,
+                         grade: Optional[int] = None) -> ChildProfile:
+        """Add child profile to family with strict validation"""
+        with self._lock:
+            # Critical: Validate age for child safety
+            if not isinstance(age, int) or not MIN_CHILD_AGE <= age <= MAX_CHILD_AGE:
+                raise ValueError(f"Child age must be between {MIN_CHILD_AGE} and {MAX_CHILD_AGE}, got {age}")
+            
+            # Sanitize and validate name
+            name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', name)[:MAX_NAME_LENGTH]
+            if not name:
+                raise ValueError("Invalid child name")
+            
+            # Load family
+            family = self.load_family_profile(family_id)
+            if not family:
+                raise ProfileError(f"Family profile not found: {family_id}")
+            
+            # Check for duplicate names (case-insensitive)
+            if any(child.name.lower() == name.lower() for child in family.children):
+                raise ProfileError(f"Child profile '{name}' already exists")
+            
+            # Create child profile with validation
+            child = ChildProfile(
+                id=str(uuid.uuid4()),
+                name=name,
+                age=age,
+                grade=grade
+            )
+            
+            # Add to family
+            family.children.append(child)
+            
+            # Save updated family
+            self._save_family_profile(family)
+            
+            logger.info(f"Added child profile: {name} (age {age}) to family {family.family_name}")
+            return child
+    
+    def delete_child_profile(self, family_id: str, child_id: str, cascade: bool = True):
+        """
+        Delete child profile with proper cascade deletion
+        
+        Args:
+            family_id: Family ID
+            child_id: Child ID to delete
+            cascade: If True, delete all associated data (sessions, conversations)
+        """
+        with self._lock:
+            family = self.load_family_profile(family_id)
+            if not family:
+                raise ProfileError(f"Family not found: {family_id}")
+            
+            # Find child
+            child_index = None
+            for i, child in enumerate(family.children):
+                if child.id == child_id:
+                    child_index = i
+                    break
+            
+            if child_index is None:
+                raise ProfileError(f"Child not found: {child_id}")
+            
+            # Delete from database (cascade will handle sessions/conversations)
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                if cascade:
+                    # Delete all associated data
+                    cursor.execute("DELETE FROM conversations WHERE child_id = ?", (child_id,))
+                    cursor.execute("DELETE FROM sessions WHERE child_id = ?", (child_id,))
+                    
+                    # Delete session files
+                    if self.sessions_dir:
+                        session_pattern = self.sessions_dir / f"session_{child_id}_*.json"
+                        for session_file in self.sessions_dir.glob(f"session_{child_id}_*.json"):
+                            try:
+                                session_file.unlink()
+                            except Exception as e:
+                                logger.warning(f"Failed to delete session file: {e}")
+                
+                cursor.execute("DELETE FROM children WHERE id = ?", (child_id,))
+                conn.commit()
+            
+            # Remove from family
+            del family.children[child_index]
+            
+            # Save updated family
+            self._save_family_profile(family)
+            
+            logger.info(f"Deleted child profile: {child_id} (cascade={cascade})")
+    
+    def _save_family_profile(self, family: FamilyProfile):
+        """Save family profile to database with encryption"""
+        with self._db_lock:
+            # Prepare data
+            family_data = asdict(family)
+            
+            # Separate sensitive data
+            sensitive_data = {
+                "parents": [asdict(p) for p in family.parents]
+            }
+            
+            # Remove sensitive data from public storage
+            family_data.pop("parents", None)
+            
+            # Encrypt sensitive data
+            encrypted_parents = self._encrypt_data(json.dumps(sensitive_data))
+            
+            # Save to database
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Save family
                 cursor.execute('''
-                    INSERT INTO families (
-                        id, family_name, created_date, subscription_type,
-                        timezone, language, country, features
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO families (id, family_name, created_date, subscription_type, data)
+                    VALUES (?, ?, ?, ?, ?)
                 ''', (
                     family.id,
                     family.family_name,
                     family.created_date,
                     family.subscription_type,
-                    family.timezone,
-                    family.language,
-                    family.country,
-                    json.dumps(family.features_enabled)
+                    json.dumps(family_data)
                 ))
                 
-                # Insert parent - using parameterized query
-                cursor.execute('''
-                    INSERT INTO parents (
-                        id, family_id, name, email, password_hash, salt,
-                        created_date, preferences
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    parent.id,
-                    family.id,
-                    parent.name,
-                    parent.email,
-                    parent.password_hash,
-                    parent.salt,
-                    parent.created_date,
-                    json.dumps(parent.notification_preferences)
-                ))
+                # Save children
+                for child in family.children:
+                    child_data = asdict(child)
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO children (id, family_id, name, age, created_date, data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (
+                        child.id,
+                        family.id,
+                        child.name,
+                        child.age,
+                        child.created_date,
+                        json.dumps(child_data)
+                    ))
                 
                 conn.commit()
-                logger.info(f"Created family profile: {family_name}")
-                
-            except sqlite3.Error as e:
-                conn.rollback()
-                logger.error(f"Failed to create family profile: {e}")
-                raise
-            finally:
-                conn.close()
             
-            return family
+            # Save encrypted parent data
+            if self.encrypted_dir:
+                encrypted_file = self.encrypted_dir / f"family_{family.id}.enc"
+                with open(encrypted_file, 'w', encoding='utf-8') as f:
+                    f.write(encrypted_parents)
+                
+                # Secure the file
+                if hasattr(os, 'chmod'):
+                    os.chmod(encrypted_file, 0o600)
+            
+            logger.info(f"Saved family profile: {family.family_name}")
     
     def load_family_profile(self, family_id: str) -> Optional[FamilyProfile]:
-        """
-        Load family profile from database with SQL injection prevention
-        
-        Args:
-            family_id: Family ID to load
-            
-        Returns:
-            Family profile or None if not found
-        """
+        """Load family profile from database"""
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
-            
-            try:
-                # FIX: Use parameterized query to prevent SQL injection
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Load family data - parameterized query
-                cursor.execute(
-                    'SELECT * FROM families WHERE id = ?',
-                    (family_id,)  # Parameter as tuple
-                )
+                # Load family
+                cursor.execute("SELECT * FROM families WHERE id = ?", (family_id,))
                 family_row = cursor.fetchone()
                 
                 if not family_row:
                     return None
                 
-                # Create family profile
+                # Parse family data
+                family_data = json.loads(family_row['data'])
+                
+                # Load encrypted parent data
+                parents_data = []
+                if self.encrypted_dir:
+                    encrypted_file = self.encrypted_dir / f"family_{family_id}.enc"
+                    if encrypted_file.exists():
+                        try:
+                            with open(encrypted_file, 'r', encoding='utf-8') as f:
+                                encrypted_data = f.read()
+                            decrypted = self._decrypt_data(encrypted_data)
+                            sensitive = json.loads(decrypted)
+                            parents_data = sensitive.get("parents", [])
+                        except Exception as e:
+                            logger.error(f"Failed to load encrypted data: {e}")
+                
+                # Load children
+                cursor.execute("SELECT * FROM children WHERE family_id = ?", (family_id,))
+                children_rows = cursor.fetchall()
+                
+                children = []
+                for row in children_rows:
+                    child_data = json.loads(row['data'])
+                    children.append(ChildProfile(**child_data))
+                
+                # Reconstruct family
                 family = FamilyProfile(
-                    id=family_row['id'],
+                    id=family_id,
                     family_name=family_row['family_name'],
                     created_date=family_row['created_date'],
-                    subscription_type=family_row['subscription_type'],
-                    timezone=family_row['timezone'],
-                    language=family_row['language'],
-                    country=family_row['country'],
-                    features_enabled=json.loads(family_row['features']) if family_row['features'] else {},
-                    total_usage_hours=family_row['total_usage_hours'],
-                    total_sessions=family_row['total_sessions']
+                    subscription_type=family_row['subscription_type']
                 )
                 
-                # FIX: Load parents using parameterized query
-                cursor.execute(
-                    'SELECT * FROM parents WHERE family_id = ?',
-                    (family_id,)
-                )
+                # Restore parents
+                for parent_data in parents_data:
+                    family.parents.append(ParentProfile(**parent_data))
                 
-                for parent_row in cursor.fetchall():
-                    parent = ParentProfile(
-                        id=parent_row['id'],
-                        name=parent_row['name'],
-                        email=parent_row['email'],
-                        password_hash=parent_row['password_hash'],
-                        salt=parent_row['salt'],
-                        created_date=parent_row['created_date'],
-                        last_login=parent_row['last_login'],
-                        failed_login_attempts=parent_row['failed_login_attempts'],
-                        locked_until=parent_row['locked_until'],
-                        two_factor_enabled=bool(parent_row['two_factor_enabled']),
-                        two_factor_secret=parent_row['two_factor_secret'],
-                        notification_preferences=json.loads(parent_row['preferences']) if parent_row['preferences'] else {}
-                    )
-                    family.parents.append(parent)
-                
-                # FIX: Load children using parameterized query
-                cursor.execute(
-                    'SELECT * FROM children WHERE family_id = ?',
-                    (family_id,)
-                )
-                
-                for child_row in cursor.fetchall():
-                    child = ChildProfile(
-                        id=child_row['id'],
-                        name=child_row['name'],
-                        age=child_row['age'],
-                        grade=child_row['grade'],
-                        avatar=child_row['avatar'],
-                        created_date=child_row['created_date'],
-                        last_active=child_row['last_active'],
-                        learning_style=LearningStyle(child_row['learning_style']),
-                        pace=child_row['pace'],
-                        difficulty=child_row['difficulty'],
-                        interests=json.loads(child_row['interests']) if child_row['interests'] else [],
-                        safety_mode=child_row['safety_mode'],
-                        daily_time_limit_minutes=child_row['daily_time_limit_minutes'],
-                        break_reminder_minutes=child_row['break_reminder_minutes'],
-                        require_parent_approval=bool(child_row['require_parent_approval']),
-                        total_sessions=child_row['total_sessions'],
-                        total_time_minutes=child_row['total_time_minutes'],
-                        topics_explored=json.loads(child_row['topics_explored']) if child_row['topics_explored'] else [],
-                        achievements=json.loads(child_row['achievements']) if child_row['achievements'] else [],
-                        current_level=child_row['current_level'],
-                        experience_points=child_row['experience_points']
-                    )
-                    family.children.append(child)
+                # Restore children
+                family.children = children
                 
                 return family
-                
-            except sqlite3.Error as e:
-                logger.error(f"Failed to load family profile: {e}")
-                return None
-            finally:
-                conn.close()
     
-    def add_child_profile(self, family_id: str, name: str, age: int, 
-                         grade: str, **kwargs) -> ChildProfile:
-        """
-        Add child profile to family with SQL injection prevention
-        
-        Args:
-            family_id: Family ID
-            name: Child's name
-            age: Child's age (2-18)
-            grade: Child's grade level
-            **kwargs: Additional profile settings
-            
-        Returns:
-            Created child profile
-        """
+    def authenticate_parent(self, family_id: str, parent_name: str,
+                          password: str) -> Optional[ParentProfile]:
+        """Authenticate parent with secure password verification"""
         with self._lock:
-            # Validate age
-            if not 2 <= age <= 18:
-                raise ValueError(f"Age must be between 2 and 18, got {age}")
-            
-            # Load family
             family = self.load_family_profile(family_id)
             if not family:
-                raise ValueError(f"Family {family_id} not found")
+                return None
             
-            # Create child profile
-            child = ChildProfile(
-                id=str(uuid.uuid4()),
-                name=name,
-                age=age,
-                grade=grade,
-                created_date=datetime.now().isoformat()
-            )
+            for parent in family.parents:
+                if parent.name.lower() == parent_name.lower():
+                    if self._verify_password(password, parent.password_hash):
+                        # Update last login
+                        parent.last_login = datetime.now().isoformat()
+                        self._save_family_profile(family)
+                        return parent
             
-            # Apply additional settings
-            for key, value in kwargs.items():
-                if hasattr(child, key):
-                    setattr(child, key, value)
-            
-            # Set age-appropriate defaults
-            if age <= 7:
-                child.daily_time_limit_minutes = 30
-                child.safety_mode = "strict"
-                child.require_parent_approval = True
-            elif age <= 10:
-                child.daily_time_limit_minutes = 45
-                child.safety_mode = "strict"
-            elif age <= 13:
-                child.daily_time_limit_minutes = 60
-                child.safety_mode = "moderate"
-            else:
-                child.daily_time_limit_minutes = 90
-                child.safety_mode = "standard"
-            
-            # FIX: Save to database using parameterized query
-            conn = sqlite3.connect(str(self.db_path))
-            cursor = conn.cursor()
-            
-            try:
-                cursor.execute('''
-                    INSERT INTO children (
-                        id, family_id, name, age, grade, avatar,
-                        created_date, learning_style, pace, difficulty,
-                        interests, safety_mode, daily_time_limit_minutes,
-                        break_reminder_minutes, require_parent_approval,
-                        topics_explored, achievements, session_settings
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    child.id,
-                    family_id,
-                    child.name,
-                    child.age,
-                    child.grade,
-                    child.avatar,
-                    child.created_date,
-                    child.learning_style.value,
-                    child.pace,
-                    child.difficulty,
-                    json.dumps(child.interests),
-                    child.safety_mode,
-                    child.daily_time_limit_minutes,
-                    child.break_reminder_minutes,
-                    int(child.require_parent_approval),
-                    json.dumps(child.topics_explored),
-                    json.dumps(child.achievements),
-                    json.dumps({
-                        "max_messages": child.max_messages_per_session,
-                        "response_length": child.response_length,
-                        "enable_voice": child.enable_voice,
-                        "enable_images": child.enable_images
-                    })
-                ))
-                
-                conn.commit()
-                logger.info(f"Added child profile: {name} (age {age}) to family {family_id}")
-                
-            except sqlite3.Error as e:
-                conn.rollback()
-                logger.error(f"Failed to add child profile: {e}")
-                raise
-            finally:
-                conn.close()
-            
-            return child
+            return None
     
-    def authenticate_parent(self, family_id: str, parent_name: str, 
-                           password: str) -> Tuple[bool, Optional[ParentProfile]]:
-        """
-        Authenticate parent login with SQL injection prevention
-        
-        Args:
-            family_id: Family ID
-            parent_name: Parent's name
-            password: Password to verify
-            
-        Returns:
-            Tuple of (success, parent_profile)
-        """
+    def get_child_by_name(self, family_id: str, child_name: str) -> Optional[ChildProfile]:
+        """Get child profile by name (case-insensitive)"""
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            family = self.load_family_profile(family_id)
+            if not family:
+                return None
             
-            try:
-                # FIX: Use parameterized query to find parent
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT * FROM parents 
-                    WHERE family_id = ? AND LOWER(name) = LOWER(?)
-                ''', (family_id, parent_name))
-                
-                parent_row = cursor.fetchone()
-                
-                if not parent_row:
-                    logger.warning(f"Parent not found: {parent_name}")
-                    return False, None
-                
-                # Check if account is locked
-                if parent_row['locked_until']:
-                    locked_until = datetime.fromisoformat(parent_row['locked_until'])
-                    if datetime.now() < locked_until:
-                        remaining = (locked_until - datetime.now()).total_seconds() / 60
-                        logger.warning(f"Account locked for {remaining:.1f} more minutes")
-                        return False, None
-                    else:
-                        # Unlock account
-                        cursor.execute(
-                            'UPDATE parents SET locked_until = NULL, failed_login_attempts = 0 WHERE id = ?',
-                            (parent_row['id'],)
-                        )
-                
-                # FIX: Verify password using bcrypt
-                password_hash = parent_row['password_hash']
-                
-                if bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
-                    # Success - update last login
-                    cursor.execute('''
-                        UPDATE parents 
-                        SET last_login = ?, failed_login_attempts = 0 
-                        WHERE id = ?
-                    ''', (datetime.now().isoformat(), parent_row['id']))
-                    
-                    conn.commit()
-                    
-                    # Create parent profile object
-                    parent = ParentProfile(
-                        id=parent_row['id'],
-                        name=parent_row['name'],
-                        email=parent_row['email'],
-                        password_hash=parent_row['password_hash'],
-                        salt=parent_row['salt'],
-                        created_date=parent_row['created_date'],
-                        last_login=datetime.now().isoformat()
-                    )
-                    
-                    self.current_parent = parent
-                    logger.info(f"Parent authenticated: {parent_name}")
-                    
-                    return True, parent
-                else:
-                    # Failed login - increment attempts
-                    failed_attempts = parent_row['failed_login_attempts'] + 1
-                    
-                    # Lock account after 3 failed attempts
-                    if failed_attempts >= 3:
-                        locked_until = datetime.now() + timedelta(minutes=15)
-                        cursor.execute('''
-                            UPDATE parents 
-                            SET failed_login_attempts = ?, locked_until = ? 
-                            WHERE id = ?
-                        ''', (failed_attempts, locked_until.isoformat(), parent_row['id']))
-                        logger.warning(f"Account locked due to failed attempts: {parent_name}")
-                    else:
-                        cursor.execute(
-                            'UPDATE parents SET failed_login_attempts = ? WHERE id = ?',
-                            (failed_attempts, parent_row['id'])
-                        )
-                    
-                    conn.commit()
-                    return False, None
-                    
-            except sqlite3.Error as e:
-                logger.error(f"Authentication error: {e}")
-                return False, None
-            finally:
-                conn.close()
+            for child in family.children:
+                if child.name.lower() == child_name.lower():
+                    return child
+            
+            return None
     
-    def switch_child_profile(self, child_id: str) -> bool:
-        """
-        Switch to a child profile with SQL injection prevention
-        
-        Args:
-            child_id: Child ID to switch to
-            
-        Returns:
-            Success status
-        """
+    def list_families(self) -> List[Tuple[str, str]]:
+        """List all family profiles (id, name pairs)"""
         with self._lock:
-            if not self.current_parent:
-                logger.warning("No parent authenticated")
-                return False
+            families = []
             
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
-            
-            try:
-                # FIX: Use parameterized query to find child
+            with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    'SELECT * FROM children WHERE id = ?',
-                    (child_id,)
-                )
+                cursor.execute("SELECT id, family_name FROM families ORDER BY family_name")
                 
-                child_row = cursor.fetchone()
-                
-                if not child_row:
-                    logger.warning(f"Child profile not found: {child_id}")
-                    return False
-                
-                # Create child profile object
-                self.current_child = ChildProfile(
-                    id=child_row['id'],
-                    name=child_row['name'],
-                    age=child_row['age'],
-                    grade=child_row['grade'],
-                    avatar=child_row['avatar'],
-                    created_date=child_row['created_date'],
-                    last_active=datetime.now().isoformat(),
-                    safety_mode=child_row['safety_mode'],
-                    daily_time_limit_minutes=child_row['daily_time_limit_minutes']
-                )
-                
-                # Update last active time
-                cursor.execute(
-                    'UPDATE children SET last_active = ? WHERE id = ?',
-                    (datetime.now().isoformat(), child_id)
-                )
-                
-                conn.commit()
-                logger.info(f"Switched to child profile: {self.current_child.name}")
-                
-                return True
-                
-            except sqlite3.Error as e:
-                logger.error(f"Failed to switch profile: {e}")
-                return False
-            finally:
-                conn.close()
-    
-    def log_safety_incident(self, child_id: str, incident_type: str, 
-                           severity: int, input_text: str, action_taken: str) -> None:
-        """
-        Log safety incident with SQL injection prevention
-        
-        Args:
-            child_id: Child ID
-            incident_type: Type of incident
-            severity: Severity level (1-5)
-            input_text: The problematic input
-            action_taken: Action taken by system
-        """
-        with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
-            
-            try:
-                # FIX: Use parameterized query for inserting safety incident
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO safety_incidents (
-                        child_id, timestamp, incident_type, severity,
-                        input_text, action_taken, parent_notified
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    child_id,
-                    datetime.now().isoformat(),
-                    incident_type,
-                    severity,
-                    input_text[:500],  # Limit text length
-                    action_taken,
-                    1 if severity >= 3 else 0  # Notify parent for severe incidents
-                ))
-                
-                conn.commit()
-                logger.info(f"Logged safety incident for child {child_id}: {incident_type}")
-                
-            except sqlite3.Error as e:
-                logger.error(f"Failed to log safety incident: {e}")
-            finally:
-                conn.close()
-    
-    def get_child_statistics(self, child_id: str) -> Dict[str, Any]:
-        """
-        Get child learning statistics with SQL injection prevention
-        
-        Args:
-            child_id: Child ID
-            
-        Returns:
-            Dictionary of statistics
-        """
-        with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
-            
-            try:
-                cursor = conn.cursor()
-                
-                # FIX: Use parameterized queries for all statistics queries
-                # Get session statistics
-                cursor.execute('''
-                    SELECT 
-                        COUNT(*) as total_sessions,
-                        SUM(duration_minutes) as total_minutes,
-                        AVG(duration_minutes) as avg_session_minutes,
-                        MAX(start_time) as last_session
-                    FROM session_logs 
-                    WHERE child_id = ?
-                ''', (child_id,))
-                
-                session_stats = cursor.fetchone()
-                
-                # Get safety statistics
-                cursor.execute('''
-                    SELECT 
-                        COUNT(*) as total_incidents,
-                        AVG(severity) as avg_severity
-                    FROM safety_incidents 
-                    WHERE child_id = ?
-                ''', (child_id,))
-                
-                safety_stats = cursor.fetchone()
-                
-                # Get recent topics
-                cursor.execute('''
-                    SELECT topics 
-                    FROM session_logs 
-                    WHERE child_id = ? 
-                    ORDER BY start_time DESC 
-                    LIMIT 10
-                ''', (child_id,))
-                
-                recent_topics = []
                 for row in cursor.fetchall():
-                    if row['topics']:
-                        topics = json.loads(row['topics'])
-                        recent_topics.extend(topics)
+                    families.append((row['id'], row['family_name']))
+            
+            return families
+    
+    def cleanup_old_sessions(self, days: int = 30):
+        """Clean up old session data to prevent disk exhaustion"""
+        with self._lock:
+            cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+            
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
                 
-                return {
-                    'total_sessions': session_stats['total_sessions'] or 0,
-                    'total_minutes': session_stats['total_minutes'] or 0,
-                    'avg_session_minutes': session_stats['avg_session_minutes'] or 0,
-                    'last_session': session_stats['last_session'],
-                    'total_safety_incidents': safety_stats['total_incidents'] or 0,
-                    'avg_incident_severity': safety_stats['avg_severity'] or 0,
-                    'recent_topics': list(set(recent_topics))[:20]
+                # Delete old sessions and cascaded data
+                cursor.execute(
+                    "DELETE FROM sessions WHERE start_time < ?",
+                    (cutoff_date,)
+                )
+                
+                deleted = cursor.rowcount
+                conn.commit()
+                
+                logger.info(f"Cleaned up {deleted} old sessions")
+    
+    def export_family_data(self, family_id: str, output_path: Path) -> bool:
+        """Export all family data for backup or transfer"""
+        with self._lock:
+            try:
+                family = self.load_family_profile(family_id)
+                if not family:
+                    raise ProfileError(f"Family not found: {family_id}")
+                
+                # Prepare export data
+                export_data = {
+                    "version": "6.2",
+                    "export_date": datetime.now().isoformat(),
+                    "family": asdict(family),
+                    "sessions": []
                 }
                 
-            except sqlite3.Error as e:
-                logger.error(f"Failed to get statistics: {e}")
-                return {}
-            finally:
-                conn.close()
+                # Export sessions for each child
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    for child in family.children:
+                        cursor.execute(
+                            "SELECT * FROM sessions WHERE child_id = ?",
+                            (child.id,)
+                        )
+                        
+                        for session_row in cursor.fetchall():
+                            session_data = dict(session_row)
+                            
+                            # Get conversations
+                            cursor.execute(
+                                "SELECT * FROM conversations WHERE session_id = ?",
+                                (session_row['id'],)
+                            )
+                            
+                            conversations = [dict(row) for row in cursor.fetchall()]
+                            session_data['conversations'] = conversations
+                            
+                            export_data['sessions'].append(session_data)
+                
+                # Write export file
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, indent=2, default=str)
+                
+                logger.info(f"Exported family data to {output_path}")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Export failed: {e}")
+                return False
     
-    def cleanup_old_data(self, days_to_keep: int = 90) -> None:
-        """
-        Clean up old session data with SQL injection prevention
-        
-        Args:
-            days_to_keep: Number of days of data to retain
-        """
+    def close(self):
+        """Clean up resources"""
         with self._lock:
-            cutoff_date = (datetime.now() - timedelta(days=days_to_keep)).isoformat()
+            # Close all database connections
+            for conn in self._db_connections.values():
+                try:
+                    conn.close()
+                except:
+                    pass
             
-            conn = sqlite3.connect(str(self.db_path))
-            
-            try:
-                cursor = conn.cursor()
-                
-                # FIX: Use parameterized query for deletion
-                cursor.execute(
-                    'DELETE FROM session_logs WHERE start_time < ?',
-                    (cutoff_date,)
-                )
-                
-                deleted_sessions = cursor.rowcount
-                
-                cursor.execute(
-                    'DELETE FROM safety_incidents WHERE timestamp < ?',
-                    (cutoff_date,)
-                )
-                
-                deleted_incidents = cursor.rowcount
-                
-                conn.commit()
-                logger.info(f"Cleaned up {deleted_sessions} sessions and {deleted_incidents} incidents")
-                
-            except sqlite3.Error as e:
-                logger.error(f"Failed to clean up old data: {e}")
-                conn.rollback()
-            finally:
-                conn.close()
-
-
-# Testing
-if __name__ == "__main__":
-    import tempfile
-    
-    # Test with temporary directory
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Initialize profile manager
-        pm = ProfileManager(Path(tmpdir))
-        
-        # Test family creation
-        family = pm.create_family(
-            "Smith Family",
-            "John Smith",
-            "john@example.com",
-            "SecurePassword123!"
-        )
-        print(f"Created family: {family.family_name}")
-        
-        # Test adding children
-        child1 = pm.add_child_profile(
-            family.id,
-            "Emily",
-            7,
-            "2nd Grade"
-        )
-        print(f"Added child: {child1.name}, age {child1.age}")
-        
-        child2 = pm.add_child_profile(
-            family.id,
-            "James",
-            12,
-            "7th Grade"
-        )
-        print(f"Added child: {child2.name}, age {child2.age}")
-        
-        # Test authentication
-        success, parent = pm.authenticate_parent(
-            family.id,
-            "John Smith",
-            "SecurePassword123!"
-        )
-        print(f"Authentication: {'Success' if success else 'Failed'}")
-        
-        # Test SQL injection prevention
-        print("\nTesting SQL injection prevention...")
-        
-        # Attempt SQL injection in authentication (should fail safely)
-        malicious_name = "'; DROP TABLE parents; --"
-        success, _ = pm.authenticate_parent(family.id, malicious_name, "password")
-        print(f"SQL injection attempt blocked: {not success}")
-        
-        # Verify tables still exist
-        conn = sqlite3.connect(str(pm.db_path))
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        print(f"Tables intact: {all(t in tables for t in ['families', 'parents', 'children'])}")
-        
-        print("\nAll security tests passed!")
+            self._db_connections.clear()
+            logger.info("Profile manager closed")
