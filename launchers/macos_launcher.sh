@@ -1,153 +1,209 @@
 #!/bin/bash
+
 # Sunflower AI Professional System - macOS Launcher
 # Version: 6.2.0
-# Production-ready launcher for macOS systems
+# Copyright (c) 2025 Sunflower AI Educational Systems
+# Production-Ready Universal Family Launcher with Complete Error Handling
 
-set -euo pipefail  # Exit on error, undefined variables, pipe failures
+set -euo pipefail
+IFS=$'\n\t'
 
-# ==================== CONFIGURATION ====================
-readonly VERSION="6.2.0"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly LOG_FILE="${HOME}/Library/Logs/sunflower_launcher_$(date +%Y%m%d).log"
-readonly MIN_MACOS_VERSION="11.0"
+# ==================== SYSTEM CONSTANTS ====================
+readonly SYSTEM_VERSION="6.2.0"
 readonly MIN_RAM_GB=4
-readonly CDROM_MARKER="SUNFLOWER_CD"
-readonly USB_MARKER="SUNFLOWER_DATA"
+readonly MIN_MACOS_VERSION="10.14"  # Mojave
+readonly LAUNCHER_PID=$$
+readonly LOG_DIR="${HOME}/Library/Logs/SunflowerAI"
+readonly CDROM_MARKER="SUNFLOWER_AI_SYSTEM"
+readonly USB_MARKER="SUNFLOWER_USER_DATA"
+readonly OLLAMA_PORT=11434
+readonly OPENWEBUI_PORT=8080
+readonly MAX_RETRY_ATTEMPTS=3
+readonly RETRY_DELAY=2
 
-# Error codes
-readonly ERROR_NO_ADMIN=1
-readonly ERROR_INCOMPATIBLE_OS=2
-readonly ERROR_INSUFFICIENT_RAM=3
-readonly ERROR_CDROM_NOT_FOUND=4
-readonly ERROR_USB_NOT_FOUND=5
-readonly ERROR_INTEGRITY_CHECK_FAILED=6
-readonly ERROR_PYTHON_NOT_FOUND=7
-readonly ERROR_OLLAMA_FAILED=8
+# ==================== ERROR CODES ====================
+readonly ERROR_SUCCESS=0
+readonly ERROR_INSUFFICIENT_PRIVILEGES=1001
+readonly ERROR_CDROM_NOT_FOUND=1002
+readonly ERROR_USB_NOT_FOUND=1003
+readonly ERROR_INSUFFICIENT_RAM=1004
+readonly ERROR_INCOMPATIBLE_OS=1005
+readonly ERROR_PYTHON_NOT_FOUND=1006
+readonly ERROR_INTEGRITY_CHECK_FAILED=1007
+readonly ERROR_OLLAMA_FAILED=1008
+readonly ERROR_OPENWEBUI_FAILED=1009
+readonly ERROR_MODEL_LOAD_FAILED=1010
 
-# Global variables
+# ==================== COLOR CODES ====================
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly MAGENTA='\033[0;35m'
+readonly WHITE='\033[1;37m'
+readonly NC='\033[0m' # No Color
+
+# ==================== GLOBAL VARIABLES ====================
 CDROM_PATH=""
 USB_PATH=""
-PYTHON_PATH=""
-HARDWARE_TIER=""
+SELECTED_MODEL=""
+MODEL_TIER=""
+SYSTEM_RAM_GB=0
+CPU_CORES=0
+HAS_GPU=0
+PERF_SCORE=0
+PYTHON_EXE=""
+LOG_FILE=""
+
+# ==================== INITIALIZATION ====================
+initialize() {
+    clear
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           SUNFLOWER AI PROFESSIONAL SYSTEM v${SYSTEM_VERSION}           ║${NC}"
+    echo -e "${CYAN}║              Family-Focused K-12 STEM Education                  ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${GREEN}Starting family setup wizard...${NC}"
+    echo ""
+    
+    # Create log directory
+    mkdir -p "${LOG_DIR}"
+    readonly LOG_FILE="${LOG_DIR}/launcher_$(date +%Y%m%d_%H%M%S).log"
+    
+    # Log startup
+    log_message "INFO" "Sunflower AI Launcher started - PID: ${LAUNCHER_PID}"
+    log_message "INFO" "Version: ${SYSTEM_VERSION}"
+    log_message "INFO" "Log file: ${LOG_FILE}"
+}
 
 # ==================== LOGGING FUNCTIONS ====================
 log_message() {
-    local level="$1"
-    local message="$2"
+    local level=$1
+    local message=$2
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
     echo "[${timestamp}] [${level}] ${message}" >> "${LOG_FILE}"
     
-    case "${level}" in
+    case ${level} in
         ERROR)
-            echo "❌ ${message}" >&2
+            echo -e "${RED}[ERROR]${NC} ${message}" >&2
             ;;
         WARNING)
-            echo "⚠️  ${message}"
+            echo -e "${YELLOW}[WARNING]${NC} ${message}"
             ;;
         INFO)
-            echo "ℹ️  ${message}"
+            # Silent for info messages unless verbose
             ;;
         SUCCESS)
-            echo "✅ ${message}"
+            echo -e "${GREEN}[✓]${NC} ${message}"
             ;;
     esac
 }
 
-# ==================== SYSTEM CHECKS ====================
+show_user_error() {
+    local title=$1
+    local message=$2
+    
+    echo ""
+    echo -e "${RED}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║                          ERROR DETECTED                          ║${NC}"
+    echo -e "${RED}╠══════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║${NC}  ${title}"
+    echo -e "${RED}║${NC}  "
+    echo -e "${RED}║${NC}  ${message}"
+    echo -e "${RED}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Also show native macOS alert if available
+    if command -v osascript >/dev/null 2>&1; then
+        osascript -e "display alert \"Sunflower AI Setup Error\" message \"${title}: ${message}\" as critical" 2>/dev/null || true
+    fi
+    
+    log_message "ERROR" "${title}: ${message}"
+}
+
+# ==================== SYSTEM VALIDATION ====================
 check_admin_privileges() {
-    if [[ "${EUID}" -eq 0 ]]; then
-        return 0
+    if [[ $EUID -ne 0 ]]; then
+        log_message "INFO" "Requesting administrator privileges..."
+        
+        # Try to re-run with sudo
+        if command -v sudo >/dev/null 2>&1; then
+            exec sudo "$0" "$@"
+            exit $?
+        else
+            show_user_error "Administrator Required" "Please run this script with administrator privileges"
+            return ${ERROR_INSUFFICIENT_PRIVILEGES}
+        fi
     fi
     
-    # Check if user can sudo without password for this script
-    if sudo -n true 2>/dev/null; then
-        return 0
-    fi
-    
-    log_message "WARNING" "Admin privileges may be required for some operations"
-    return 0  # Continue anyway, prompt for password if needed
+    log_message "INFO" "Administrator privileges confirmed"
+    return 0
 }
 
 validate_macos_version() {
     local current_version
     current_version=$(sw_vers -productVersion)
     
-    # Compare versions
-    if [[ "$(printf '%s\n' "${MIN_MACOS_VERSION}" "${current_version}" | sort -V | head -n1)" != "${MIN_MACOS_VERSION}" ]]; then
-        log_message "ERROR" "macOS ${current_version} is below minimum required version ${MIN_MACOS_VERSION}"
+    # Convert versions to comparable integers
+    local current_major current_minor
+    current_major=$(echo "${current_version}" | cut -d. -f1)
+    current_minor=$(echo "${current_version}" | cut -d. -f2)
+    
+    local min_major min_minor
+    min_major=$(echo "${MIN_MACOS_VERSION}" | cut -d. -f1)
+    min_minor=$(echo "${MIN_MACOS_VERSION}" | cut -d. -f2)
+    
+    if [[ ${current_major} -lt ${min_major} ]] || \
+       [[ ${current_major} -eq ${min_major} && ${current_minor} -lt ${min_minor} ]]; then
+        log_message "ERROR" "macOS ${current_version} is below minimum ${MIN_MACOS_VERSION}"
+        show_user_error "macOS Version Too Old" "Please update to macOS ${MIN_MACOS_VERSION} or newer"
         return ${ERROR_INCOMPATIBLE_OS}
     fi
     
-    log_message "INFO" "macOS version ${current_version} meets requirements"
+    log_message "INFO" "macOS ${current_version} meets requirements"
     return 0
 }
 
 validate_system_ram() {
-    local system_ram_bytes
-    system_ram_bytes=$(sysctl -n hw.memsize)
-    local system_ram_gb=$((system_ram_bytes / 1073741824))
+    local ram_bytes
+    ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
+    SYSTEM_RAM_GB=$((ram_bytes / 1073741824))
     
-    if [[ ${system_ram_gb} -lt ${MIN_RAM_GB} ]]; then
-        log_message "ERROR" "System RAM: ${system_ram_gb}GB. Minimum required: ${MIN_RAM_GB}GB"
+    if [[ ${SYSTEM_RAM_GB} -lt ${MIN_RAM_GB} ]]; then
+        log_message "ERROR" "System has ${SYSTEM_RAM_GB}GB RAM, minimum is ${MIN_RAM_GB}GB"
+        show_user_error "Insufficient Memory" "Your system has ${SYSTEM_RAM_GB}GB RAM. Minimum required: ${MIN_RAM_GB}GB"
         return ${ERROR_INSUFFICIENT_RAM}
     fi
     
-    log_message "INFO" "System RAM: ${system_ram_gb}GB - meets requirements"
+    log_message "INFO" "System RAM: ${SYSTEM_RAM_GB}GB - meets requirements"
     return 0
 }
 
 # ==================== PARTITION DETECTION ====================
 detect_cdrom_partition() {
-    local volumes_info
-    local volume_name
-    local disk_device
+    CDROM_PATH=""
     
-    # First, try to find disk by label
-    volumes_info=$(diskutil list | grep -B3 "${CDROM_MARKER}" 2>/dev/null || true)
-    
-    if [[ -n "${volumes_info}" ]]; then
-        # Extract disk identifier (e.g., disk2s1)
-        disk_device=$(echo "${volumes_info}" | grep -o 'disk[0-9]*s[0-9]*' | head -1)
-        
-        if [[ -n "${disk_device}" ]]; then
-            # FIX: Properly validate diskutil output before using it
-            volume_name=$(diskutil info "${disk_device}" 2>/dev/null | grep "Volume Name:" | sed 's/.*Volume Name: *//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            
-            if [[ -n "${volume_name}" ]]; then
-                CDROM_PATH="/Volumes/${volume_name}"
-                
-                # Verify the path actually exists
-                if [[ -d "${CDROM_PATH}" ]]; then
-                    log_message "INFO" "CD-ROM partition found at ${CDROM_PATH}"
-                    return 0
-                else
-                    log_message "WARNING" "Volume name found but path doesn't exist: ${CDROM_PATH}"
-                fi
-            else
-                log_message "WARNING" "Failed to get volume name from disk ${disk_device}"
+    # Check mounted volumes
+    for volume in /Volumes/*; do
+        if [[ -f "${volume}/sunflower_cd.id" ]]; then
+            # Verify it's read-only (CD-ROM characteristic)
+            if ! touch "${volume}/test_write.tmp" 2>/dev/null; then
+                CDROM_PATH="${volume}"
+                log_message "INFO" "CD-ROM partition found at ${CDROM_PATH}"
+                return 0
             fi
         fi
-    fi
+    done
     
-    # Fallback: Try alternative detection method by checking mounted volumes
-    for volume in /Volumes/*; do
-        if [[ -d "${volume}" ]]; then
-            local volume_name
-            volume_name=$(basename "${volume}")
-            
-            # Check for marker file or name pattern
-            if [[ "${volume_name}" == *"${CDROM_MARKER}"* ]] || \
-               [[ -f "${volume}/.sunflower_system" ]] || \
-               [[ -f "${volume}/sunflower_cd.id" ]]; then
-                CDROM_PATH="${volume}"
-                
-                # Verify expected structure
-                if [[ -d "${CDROM_PATH}/system" ]] || [[ -d "${CDROM_PATH}/models" ]]; then
-                    log_message "INFO" "CD-ROM partition found at ${CDROM_PATH} (fallback method)"
-                    return 0
-                fi
-            fi
+    # Check disk images
+    for dmg in /Volumes/SunflowerAI*; do
+        if [[ -f "${dmg}/sunflower_cd.id" ]]; then
+            CDROM_PATH="${dmg}"
+            log_message "INFO" "CD-ROM disk image found at ${CDROM_PATH}"
+            return 0
         fi
     done
     
@@ -156,336 +212,443 @@ detect_cdrom_partition() {
 }
 
 detect_usb_partition() {
-    local volumes_info
-    local volume_name
-    local disk_device
+    USB_PATH=""
     
-    # First, try to find disk by label
-    volumes_info=$(diskutil list | grep -B3 "${USB_MARKER}" 2>/dev/null || true)
-    
-    if [[ -n "${volumes_info}" ]]; then
-        # Extract disk identifier (e.g., disk2s2)
-        disk_device=$(echo "${volumes_info}" | grep -o 'disk[0-9]*s[0-9]*' | head -1)
-        
-        if [[ -n "${disk_device}" ]]; then
-            # FIX: Properly validate diskutil output before using it
-            volume_name=$(diskutil info "${disk_device}" 2>/dev/null | grep "Volume Name:" | sed 's/.*Volume Name: *//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            
-            if [[ -n "${volume_name}" ]]; then
-                USB_PATH="/Volumes/${volume_name}"
-                
-                # Verify the path actually exists and is writable
-                if [[ -d "${USB_PATH}" ]]; then
-                    # Test write permission
-                    if touch "${USB_PATH}/.write_test" 2>/dev/null; then
-                        rm -f "${USB_PATH}/.write_test"
-                        log_message "INFO" "USB partition found at ${USB_PATH}"
-                        return 0
-                    else
-                        log_message "WARNING" "USB partition found but not writable: ${USB_PATH}"
-                    fi
-                else
-                    log_message "WARNING" "Volume name found but path doesn't exist: ${USB_PATH}"
-                fi
-            else
-                log_message "WARNING" "Failed to get volume name from disk ${disk_device}"
-            fi
-        fi
-    fi
-    
-    # Fallback: Try alternative detection method by checking mounted volumes
+    # Check mounted volumes
     for volume in /Volumes/*; do
-        if [[ -d "${volume}" ]]; then
-            local volume_name
-            volume_name=$(basename "${volume}")
-            
-            # Check for marker file or name pattern
-            if [[ "${volume_name}" == *"${USB_MARKER}"* ]] || \
-               [[ -f "${volume}/sunflower_data.id" ]]; then
-                # Verify it's writable
-                if touch "${volume}/.write_test" 2>/dev/null; then
-                    rm -f "${volume}/.write_test"
-                    USB_PATH="${volume}"
-                    log_message "INFO" "USB partition found at ${USB_PATH} (fallback method)"
-                    return 0
-                fi
-            fi
-        fi
-    done
-    
-    log_message "ERROR" "USB partition with marker ${USB_MARKER} not found"
-    return ${ERROR_USB_NOT_FOUND}
-}
-
-# ==================== INTEGRITY CHECK ====================
-verify_system_integrity() {
-    log_message "INFO" "Verifying system integrity..."
-    
-    # Check for required system files on CD-ROM partition
-    local required_files=(
-        "${CDROM_PATH}/system/checksums.sha256"
-        "${CDROM_PATH}/system/manifest.json"
-        "${CDROM_PATH}/models"
-    )
-    
-    for file in "${required_files[@]}"; do
-        if [[ ! -e "${file}" ]]; then
-            log_message "ERROR" "Required file missing: ${file}"
-            return ${ERROR_INTEGRITY_CHECK_FAILED}
-        fi
-    done
-    
-    # Verify checksums if available
-    if [[ -f "${CDROM_PATH}/system/checksums.sha256" ]]; then
-        log_message "INFO" "Verifying file checksums..."
-        
-        pushd "${CDROM_PATH}" > /dev/null
-        if shasum -a 256 -c "system/checksums.sha256" --quiet 2>/dev/null; then
-            log_message "SUCCESS" "Checksum verification passed"
-        else
-            log_message "WARNING" "Some checksums did not match"
-            # Don't fail, just warn
-        fi
-        popd > /dev/null
-    fi
-    
-    return 0
-}
-
-# ==================== PYTHON SETUP ====================
-setup_python_environment() {
-    log_message "INFO" "Setting up Python environment..."
-    
-    # Check for Python 3.11+
-    for python_cmd in python3.11 python3.12 python3; do
-        if command -v ${python_cmd} &> /dev/null; then
-            local python_version
-            python_version=$(${python_cmd} --version 2>&1 | cut -d' ' -f2)
-            local major_minor
-            major_minor=$(echo "${python_version}" | cut -d. -f1,2)
-            
-            if [[ "$(echo "${major_minor} >= 3.11" | bc)" -eq 1 ]]; then
-                PYTHON_PATH=$(command -v ${python_cmd})
-                log_message "SUCCESS" "Found Python ${python_version} at ${PYTHON_PATH}"
+        if [[ -f "${volume}/sunflower_data.id" ]]; then
+            # Verify write permission
+            if touch "${volume}/test_write.tmp" 2>/dev/null; then
+                rm -f "${volume}/test_write.tmp"
+                USB_PATH="${volume}"
+                
+                # Create required directories
+                mkdir -p "${USB_PATH}/profiles"
+                mkdir -p "${USB_PATH}/sessions"
+                mkdir -p "${USB_PATH}/logs"
+                mkdir -p "${USB_PATH}/config"
+                mkdir -p "${USB_PATH}/ollama"
+                
+                log_message "INFO" "USB partition found at ${USB_PATH}"
                 return 0
             fi
         fi
     done
     
-    log_message "ERROR" "Python 3.11+ not found"
-    return ${ERROR_PYTHON_NOT_FOUND}
+    # Fallback to user directory
+    USB_PATH="${HOME}/.sunflower_ai/data"
+    mkdir -p "${USB_PATH}/profiles"
+    mkdir -p "${USB_PATH}/sessions"
+    mkdir -p "${USB_PATH}/logs"
+    mkdir -p "${USB_PATH}/config"
+    mkdir -p "${USB_PATH}/ollama"
+    
+    log_message "WARNING" "USB partition not found, using local directory: ${USB_PATH}"
+    return 0
 }
 
-create_virtual_environment() {
-    local venv_path="${USB_PATH}/sunflower_venv"
+# ==================== INTEGRITY VERIFICATION ====================
+verify_system_integrity() {
+    local manifest_file="${CDROM_PATH}/system/integrity.manifest"
     
-    if [[ ! -d "${venv_path}" ]]; then
-        log_message "INFO" "Creating virtual environment..."
-        "${PYTHON_PATH}" -m venv "${venv_path}"
+    if [[ ! -f "${manifest_file}" ]]; then
+        log_message "WARNING" "Integrity manifest not found, skipping verification"
+        return 0
     fi
     
-    # Activate virtual environment
-    source "${venv_path}/bin/activate"
+    # Verify critical files exist
+    local critical_files=(
+        "${CDROM_PATH}/system/launcher_common.py"
+        "${CDROM_PATH}/system/openwebui_integration.py"
+        "${CDROM_PATH}/modelfiles/sunflower-kids.modelfile"
+        "${CDROM_PATH}/modelfiles/sunflower-educator.modelfile"
+        "${CDROM_PATH}/ollama/ollama"
+    )
+    
+    local missing_files=""
+    for file in "${critical_files[@]}"; do
+        if [[ ! -f "${file}" ]]; then
+            missing_files="${missing_files}\n  - ${file}"
+            log_message "ERROR" "Critical file missing: ${file}"
+        fi
+    done
+    
+    if [[ -n "${missing_files}" ]]; then
+        show_user_error "System Files Missing" "Critical files not found:${missing_files}"
+        return ${ERROR_INTEGRITY_CHECK_FAILED}
+    fi
+    
+    # Verify checksums if available
+    if command -v shasum >/dev/null 2>&1; then
+        while IFS=' ' read -r checksum filepath; do
+            if [[ -f "${CDROM_PATH}/${filepath}" ]]; then
+                local actual_checksum
+                actual_checksum=$(shasum -a 256 "${CDROM_PATH}/${filepath}" 2>/dev/null | cut -d' ' -f1)
+                if [[ "${actual_checksum}" != "${checksum}" ]]; then
+                    log_message "ERROR" "Checksum mismatch for ${filepath}"
+                    return ${ERROR_INTEGRITY_CHECK_FAILED}
+                fi
+            fi
+        done < "${manifest_file}"
+    fi
+    
+    log_message "INFO" "System integrity verification passed"
+    return 0
+}
+
+# ==================== HARDWARE DETECTION ====================
+detect_hardware_capabilities() {
+    # Detect CPU information
+    CPU_CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo "1")
+    local cpu_brand
+    cpu_brand=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown")
+    
+    # Check for Apple Silicon
+    local is_apple_silicon=0
+    if [[ "${cpu_brand}" == *"Apple"* ]] || [[ "${cpu_brand}" == *"M1"* ]] || [[ "${cpu_brand}" == *"M2"* ]] || [[ "${cpu_brand}" == *"M3"* ]]; then
+        is_apple_silicon=1
+        HAS_GPU=1  # Apple Silicon has integrated GPU
+    else
+        # Check for discrete GPU
+        HAS_GPU=0
+        if system_profiler SPDisplaysDataType 2>/dev/null | grep -q "Chipset Model"; then
+            local gpu_info
+            gpu_info=$(system_profiler SPDisplaysDataType | grep "Chipset Model" | head -1)
+            if [[ "${gpu_info}" == *"AMD"* ]] || [[ "${gpu_info}" == *"NVIDIA"* ]]; then
+                HAS_GPU=1
+            fi
+        fi
+    fi
+    
+    # Calculate performance score
+    PERF_SCORE=$((SYSTEM_RAM_GB * 10 + CPU_CORES * 5))
+    if [[ ${HAS_GPU} -eq 1 ]]; then
+        PERF_SCORE=$((PERF_SCORE + 20))
+    fi
+    if [[ ${is_apple_silicon} -eq 1 ]]; then
+        PERF_SCORE=$((PERF_SCORE + 30))  # Bonus for Apple Silicon efficiency
+    fi
+    
+    log_message "INFO" "Hardware: CPU=${cpu_brand}, Cores=${CPU_CORES}, RAM=${SYSTEM_RAM_GB}GB, GPU=${HAS_GPU}, Apple Silicon=${is_apple_silicon}"
+    log_message "INFO" "Performance score: ${PERF_SCORE}"
+}
+
+select_optimal_model() {
+    # Model selection based on performance score
+    if [[ ${PERF_SCORE} -ge 100 ]]; then
+        SELECTED_MODEL="llama3.2:7b"
+        MODEL_TIER="high"
+    elif [[ ${PERF_SCORE} -ge 70 ]]; then
+        SELECTED_MODEL="llama3.2:3b"
+        MODEL_TIER="medium"
+    elif [[ ${PERF_SCORE} -ge 40 ]]; then
+        SELECTED_MODEL="llama3.2:1b"
+        MODEL_TIER="low"
+    else
+        SELECTED_MODEL="llama3.2:1b-q4_0"
+        MODEL_TIER="minimum"
+    fi
+    
+    log_message "INFO" "Selected model: ${SELECTED_MODEL} (${MODEL_TIER} tier)"
+}
+
+# ==================== PYTHON SETUP ====================
+setup_python_environment() {
+    # Check for Python 3
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_EXE="python3"
+    elif command -v python >/dev/null 2>&1; then
+        # Check if it's Python 3
+        local python_version
+        python_version=$(python --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1)
+        if [[ ${python_version} -eq 3 ]]; then
+            PYTHON_EXE="python"
+        fi
+    fi
+    
+    if [[ -z "${PYTHON_EXE}" ]]; then
+        log_message "ERROR" "Python 3 not found"
+        
+        # Suggest installation
+        echo -e "${YELLOW}Python 3 is required but not found.${NC}"
+        echo -e "${BLUE}You can install it using:${NC}"
+        echo -e "  ${WHITE}brew install python3${NC} (if you have Homebrew)"
+        echo -e "  ${WHITE}Or download from https://python.org${NC}"
+        
+        return ${ERROR_PYTHON_NOT_FOUND}
+    fi
+    
+    log_message "INFO" "Python found: ${PYTHON_EXE}"
     
     # Install required packages
-    if [[ -f "${CDROM_PATH}/system/requirements.txt" ]]; then
-        log_message "INFO" "Installing Python dependencies..."
-        pip install --quiet --upgrade pip
-        pip install --quiet -r "${CDROM_PATH}/system/requirements.txt"
+    echo -e "${BLUE}Installing required Python packages...${NC}"
+    "${PYTHON_EXE}" -m pip install --quiet --upgrade pip 2>/dev/null || true
+    
+    if [[ -f "${CDROM_PATH}/requirements.txt" ]]; then
+        "${PYTHON_EXE}" -m pip install --quiet -r "${CDROM_PATH}/requirements.txt" 2>/dev/null || true
     fi
     
     return 0
 }
 
-# ==================== OLLAMA SETUP ====================
-setup_ollama() {
-    log_message "INFO" "Setting up Ollama..."
+# ==================== OLLAMA MANAGEMENT ====================
+initialize_ollama() {
+    log_message "INFO" "Initializing Ollama service..."
     
-    # Check if Ollama is already installed
-    if command -v ollama &> /dev/null; then
-        log_message "INFO" "Ollama already installed"
-    else
-        # Install Ollama from CD-ROM
-        if [[ -f "${CDROM_PATH}/system/ollama/install.sh" ]]; then
-            log_message "INFO" "Installing Ollama from device..."
-            bash "${CDROM_PATH}/system/ollama/install.sh"
+    # BUG-006 FIX: Comprehensive PID file validation
+    local ollama_pid=""
+    local pid_file="${USB_PATH}/ollama/ollama.pid"
+    
+    # Check if Ollama is already running with proper validation
+    if [[ -f "${pid_file}" ]] && [[ -r "${pid_file}" ]]; then
+        # Read PID with error handling
+        ollama_pid=$(cat "${pid_file}" 2>/dev/null || echo "")
+        
+        # Validate PID is numeric
+        if [[ "${ollama_pid}" =~ ^[0-9]+$ ]]; then
+            # Check if process is actually running
+            if kill -0 "${ollama_pid}" 2>/dev/null; then
+                log_message "INFO" "Ollama already running with PID ${ollama_pid}"
+                return 0
+            else
+                log_message "WARNING" "Stale PID file found, removing"
+                rm -f "${pid_file}"
+            fi
         else
-            log_message "ERROR" "Ollama installer not found"
-            return ${ERROR_OLLAMA_FAILED}
+            log_message "WARNING" "Invalid PID in file: ${ollama_pid}"
+            rm -f "${pid_file}"
         fi
     fi
     
     # Start Ollama service
-    log_message "INFO" "Starting Ollama service..."
-    ollama serve > "${USB_PATH}/logs/ollama.log" 2>&1 &
-    local ollama_pid=$!
+    local ollama_exe="${CDROM_PATH}/ollama/ollama"
+    if [[ ! -f "${ollama_exe}" ]]; then
+        log_message "ERROR" "Ollama executable not found at ${ollama_exe}"
+        return ${ERROR_OLLAMA_FAILED}
+    fi
+    
+    # Make executable
+    chmod +x "${ollama_exe}" 2>/dev/null || true
+    
+    # Set Ollama environment
+    export OLLAMA_HOST="127.0.0.1:${OLLAMA_PORT}"
+    export OLLAMA_MODELS="${USB_PATH}/models"
+    
+    # Start Ollama in background
+    nohup "${ollama_exe}" serve > "${USB_PATH}/logs/ollama.log" 2>&1 &
+    local new_pid=$!
+    
+    # Save PID with validation
+    if [[ "${new_pid}" =~ ^[0-9]+$ ]]; then
+        echo "${new_pid}" > "${pid_file}"
+        log_message "INFO" "Ollama started with PID ${new_pid}"
+    else
+        log_message "ERROR" "Failed to get valid PID for Ollama"
+        return ${ERROR_OLLAMA_FAILED}
+    fi
     
     # Wait for Ollama to be ready
-    local max_attempts=30
-    local attempt=0
-    
-    while [[ ${attempt} -lt ${max_attempts} ]]; do
-        if curl -s http://localhost:11434/api/version > /dev/null 2>&1; then
-            log_message "SUCCESS" "Ollama service started (PID: ${ollama_pid})"
-            echo ${ollama_pid} > "${USB_PATH}/ollama.pid"
-            return 0
+    local attempts=0
+    while [[ ${attempts} -lt 30 ]]; do
+        if curl -s "http://127.0.0.1:${OLLAMA_PORT}/api/tags" >/dev/null 2>&1; then
+            log_message "INFO" "Ollama service ready"
+            load_models
+            return $?
         fi
-        
         sleep 1
-        ((attempt++))
+        attempts=$((attempts + 1))
     done
     
-    log_message "ERROR" "Ollama service failed to start"
+    log_message "ERROR" "Ollama failed to start within timeout"
     return ${ERROR_OLLAMA_FAILED}
 }
 
-# ==================== MODEL LOADING ====================
-detect_hardware_tier() {
-    local ram_gb=$(($(sysctl -n hw.memsize) / 1073741824))
-    local cpu_cores=$(sysctl -n hw.ncpu)
+stop_ollama() {
+    # BUG-006 FIX: Safe PID file handling for cleanup
+    local pid_file="${USB_PATH}/ollama/ollama.pid"
     
-    if [[ ${ram_gb} -ge 16 ]] && [[ ${cpu_cores} -ge 8 ]]; then
-        HARDWARE_TIER="high"
-    elif [[ ${ram_gb} -ge 8 ]] && [[ ${cpu_cores} -ge 4 ]]; then
-        HARDWARE_TIER="medium"
-    elif [[ ${ram_gb} -ge 4 ]]; then
-        HARDWARE_TIER="low"
-    else
-        HARDWARE_TIER="minimum"
+    if [[ -f "${pid_file}" ]] && [[ -r "${pid_file}" ]]; then
+        local ollama_pid
+        ollama_pid=$(cat "${pid_file}" 2>/dev/null || echo "")
+        
+        # Validate PID before attempting to kill
+        if [[ "${ollama_pid}" =~ ^[0-9]+$ ]]; then
+            if kill -0 "${ollama_pid}" 2>/dev/null; then
+                log_message "INFO" "Stopping Ollama (PID ${ollama_pid})..."
+                kill -TERM "${ollama_pid}" 2>/dev/null || true
+                
+                # Wait for graceful shutdown
+                local wait_count=0
+                while [[ ${wait_count} -lt 10 ]] && kill -0 "${ollama_pid}" 2>/dev/null; do
+                    sleep 1
+                    wait_count=$((wait_count + 1))
+                done
+                
+                # Force kill if still running
+                if kill -0 "${ollama_pid}" 2>/dev/null; then
+                    kill -KILL "${ollama_pid}" 2>/dev/null || true
+                fi
+            fi
+        fi
+        
+        rm -f "${pid_file}"
     fi
-    
-    log_message "INFO" "Hardware tier detected: ${HARDWARE_TIER} (${ram_gb}GB RAM, ${cpu_cores} cores)"
 }
 
-load_appropriate_model() {
-    detect_hardware_tier
+load_models() {
+    log_message "INFO" "Loading AI models..."
     
-    local model_name=""
-    case "${HARDWARE_TIER}" in
-        high)
-            model_name="sunflower-kids-7b"
-            ;;
-        medium)
-            model_name="sunflower-kids-3b"
-            ;;
-        low|minimum)
-            model_name="sunflower-kids-1b"
-            ;;
-    esac
+    local ollama_exe="${CDROM_PATH}/ollama/ollama"
     
-    log_message "INFO" "Loading model: ${model_name}"
+    # Create Sunflower Kids model
+    if [[ -f "${CDROM_PATH}/modelfiles/sunflower-kids.modelfile" ]]; then
+        "${ollama_exe}" create sunflower-kids -f "${CDROM_PATH}/modelfiles/sunflower-kids.modelfile" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            log_message "INFO" "Sunflower Kids model loaded"
+        else
+            log_message "WARNING" "Failed to load Sunflower Kids model"
+        fi
+    fi
     
-    # Create model from modelfile
-    if [[ -f "${CDROM_PATH}/modelfiles/Sunflower_AI_Kids.modelfile" ]]; then
-        ollama create "${model_name}" -f "${CDROM_PATH}/modelfiles/Sunflower_AI_Kids.modelfile"
-        
-        # Load model into memory
-        ollama run "${model_name}" "Initialize" > /dev/null 2>&1
-        
-        log_message "SUCCESS" "Model ${model_name} loaded successfully"
-    else
-        log_message "ERROR" "Modelfile not found"
-        return 1
+    # Create Sunflower Educator model
+    if [[ -f "${CDROM_PATH}/modelfiles/sunflower-educator.modelfile" ]]; then
+        "${ollama_exe}" create sunflower-educator -f "${CDROM_PATH}/modelfiles/sunflower-educator.modelfile" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            log_message "INFO" "Sunflower Educator model loaded"
+        else
+            log_message "WARNING" "Failed to load Sunflower Educator model"
+        fi
     fi
     
     return 0
 }
 
-# ==================== MAIN APPLICATION LAUNCH ====================
-launch_sunflower_app() {
-    log_message "INFO" "Launching Sunflower AI Professional System..."
+# ==================== APPLICATION LAUNCH ====================
+launch_application() {
+    log_message "INFO" "Launching Sunflower AI application..."
     
-    # Set environment variables
-    export SUNFLOWER_CDROM_PATH="${CDROM_PATH}"
-    export SUNFLOWER_USB_PATH="${USB_PATH}"
-    export SUNFLOWER_HARDWARE_TIER="${HARDWARE_TIER}"
-    export SUNFLOWER_PLATFORM="macos"
+    # Create launch configuration
+    local config_file="${USB_PATH}/config/launch.json"
+    cat > "${config_file}" <<EOF
+{
+    "cdrom_path": "${CDROM_PATH}",
+    "usb_path": "${USB_PATH}",
+    "selected_model": "${SELECTED_MODEL}",
+    "model_tier": "${MODEL_TIER}",
+    "ollama_port": ${OLLAMA_PORT},
+    "openwebui_port": ${OPENWEBUI_PORT},
+    "system_ram": ${SYSTEM_RAM_GB},
+    "cpu_cores": ${CPU_CORES},
+    "has_gpu": ${HAS_GPU},
+    "platform": "macos"
+}
+EOF
     
-    # Launch the main application
-    if [[ -f "${CDROM_PATH}/system/main.py" ]]; then
-        cd "${USB_PATH}"
-        "${PYTHON_PATH}" "${CDROM_PATH}/system/main.py" \
-            --cdrom-path "${CDROM_PATH}" \
-            --usb-path "${USB_PATH}" \
-            --hardware-tier "${HARDWARE_TIER}" \
-            --log-file "${USB_PATH}/logs/sunflower.log"
-    else
-        log_message "ERROR" "Main application not found"
-        return 1
+    # Launch main application
+    "${PYTHON_EXE}" "${CDROM_PATH}/system/launcher_common.py" \
+        --config "${config_file}" \
+        --platform macos \
+        2>&1 | tee -a "${LOG_FILE}"
+    
+    local exit_code=${PIPESTATUS[0]}
+    
+    if [[ ${exit_code} -ne 0 ]]; then
+        log_message "ERROR" "Application exited with error code ${exit_code}"
+        show_user_error "Application Error" "The application encountered an error. Please check the logs."
+        return ${exit_code}
     fi
+    
+    return ${ERROR_SUCCESS}
 }
 
 # ==================== CLEANUP ====================
 cleanup() {
     log_message "INFO" "Performing cleanup..."
     
-    # Stop Ollama if we started it
-    if [[ -f "${USB_PATH}/ollama.pid" ]]; then
-        local ollama_pid=$(cat "${USB_PATH}/ollama.pid")
-        if kill -0 ${ollama_pid} 2>/dev/null; then
-            kill ${ollama_pid}
-            log_message "INFO" "Stopped Ollama service"
-        fi
-        rm -f "${USB_PATH}/ollama.pid"
-    fi
+    # Stop Ollama service gracefully
+    stop_ollama
     
-    # Deactivate virtual environment
-    if [[ -n "${VIRTUAL_ENV}" ]]; then
-        deactivate
-    fi
+    # Clean temporary files
+    rm -f "${USB_PATH}"/*.tmp 2>/dev/null || true
     
-    log_message "INFO" "Cleanup completed"
+    log_message "INFO" "Launcher shutdown complete"
 }
 
-# Set up trap for cleanup
-trap cleanup EXIT INT TERM
+# ==================== SIGNAL HANDLERS ====================
+trap cleanup EXIT
+trap 'echo "Interrupted"; cleanup; exit 130' INT TERM
 
 # ==================== MAIN EXECUTION ====================
 main() {
-    clear
+    initialize
     
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║              SUNFLOWER AI PROFESSIONAL SYSTEM v${VERSION}         ║"
-    echo "║                   Family-Safe K-12 STEM Education                ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo -e "${CYAN}[SYSTEM VALIDATION]${NC}"
     echo ""
     
-    log_message "INFO" "Launcher started - Version ${VERSION}"
+    echo "  [1/8] Checking administrator privileges..."
+    check_admin_privileges || exit $?
     
-    # System checks
-    echo "🔍 [1/7] Checking system requirements..."
-    check_admin_privileges
+    echo "  [2/8] Validating macOS version..."
     validate_macos_version || exit $?
+    
+    echo "  [3/8] Checking system memory..."
     validate_system_ram || exit $?
     
-    # Partition detection
-    echo "💾 [2/7] Detecting Sunflower AI device..."
-    detect_cdrom_partition || exit $?
-    detect_usb_partition || exit $?
+    echo "  [4/8] Detecting CD-ROM partition..."
+    detect_cdrom_partition
+    if [[ $? -ne 0 ]]; then
+        show_user_error "CD-ROM Not Found" "Please insert the Sunflower AI device"
+        exit ${ERROR_CDROM_NOT_FOUND}
+    fi
     
-    # Integrity check
-    echo "🔐 [3/7] Verifying system integrity..."
+    echo "  [5/8] Detecting USB partition..."
+    detect_usb_partition
+    if [[ $? -ne 0 ]]; then
+        show_user_error "USB Not Found" "Cannot find writable partition"
+        exit ${ERROR_USB_NOT_FOUND}
+    fi
+    
+    echo "  [6/8] Verifying system integrity..."
     verify_system_integrity || exit $?
     
-    # Python setup
-    echo "🐍 [4/7] Setting up Python environment..."
+    echo "  [7/8] Analyzing hardware capabilities..."
+    detect_hardware_capabilities
+    select_optimal_model
+    
+    echo "  [8/8] Setting up environment..."
     setup_python_environment || exit $?
-    create_virtual_environment || exit $?
     
-    # Ollama setup
-    echo "🤖 [5/7] Setting up AI engine..."
-    setup_ollama || exit $?
+    echo ""
+    echo -e "${GREEN}System validation complete!${NC}"
+    echo ""
+    echo -e "${CYAN}[INITIALIZING SERVICES]${NC}"
+    echo ""
     
-    # Model loading
-    echo "📚 [6/7] Loading AI models..."
-    load_appropriate_model || exit $?
+    # Initialize Ollama
+    initialize_ollama
+    if [[ $? -ne 0 ]]; then
+        show_user_error "AI Service Failed" "Unable to start Ollama service"
+        exit ${ERROR_OLLAMA_FAILED}
+    fi
     
     # Launch application
-    echo "🚀 [7/7] Starting Sunflower AI..."
-    launch_sunflower_app
+    echo ""
+    echo -e "${CYAN}[LAUNCHING APPLICATION]${NC}"
+    echo ""
     
-    log_message "SUCCESS" "Sunflower AI Professional System launched successfully"
+    launch_application
+    local app_result=$?
+    
+    if [[ ${app_result} -eq 0 ]]; then
+        echo ""
+        echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║              Sunflower AI System Ready for Learning!             ║${NC}"
+        echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    fi
+    
+    return ${app_result}
 }
 
 # Run main function
 main "$@"
+exit $?
