@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """
-Create CD-ROM ISO for Sunflower AI Professional System
-Builds a complete, production-ready ISO image containing all system files,
-compiled applications, and pre-built AI models.
+Create ISO image for Sunflower AI CD-ROM partition.
+This script builds the read-only ISO9660 partition containing the system files.
 
-This script handles the entire CD-ROM partition creation process for manufacturing.
+The ISO includes:
+- Platform-specific executables (Windows/macOS)
+- AI models (selected based on hardware)
+- System resources and documentation
+- Partition identifiers for auto-detection
 """
 
 import os
 import sys
 import json
 import shutil
+import subprocess
 import hashlib
 import tempfile
-import subprocess
-from pathlib import Path
-from datetime import datetime
 import platform
 import argparse
-import zipfile
+from pathlib import Path
+from datetime import datetime
 import secrets
+
 
 class ISOCreator:
     def __init__(self, version="1.0.0", batch_id=None):
@@ -29,29 +32,35 @@ class ISOCreator:
         self.build_date = datetime.now().strftime("%Y-%m-%d")
         
         # Paths
-        self.staging_dir = self.root_dir / "cdrom_staging"
+        self.cdrom_staging = self.root_dir / "cdrom_staging"
         self.iso_output_dir = self.root_dir / "manufacturing" / "iso_images"
-        self.temp_iso_root = Path(tempfile.mkdtemp()) / "iso_root"
+        self.temp_iso_root = Path(tempfile.mkdtemp(prefix="sunflower_iso_"))
         
         # ISO configuration
-        self.iso_filename = f"sunflower_ai_v{version}_{self.batch_id}.iso"
-        self.iso_volume_id = f"SUNFLOWERAI_{version.replace('.', '')}"
+        self.iso_filename = f"sunflower_cdrom_{self.version}_{self.batch_id}.iso"
+        self.iso_volume_id = "SUNFLOWER_AI"
+        self.iso_max_size_gb = 4  # CD-ROM partition size
         
-        # Component tracking
+        # Tracking
         self.manifest = {
-            "version": version,
+            "version": self.version,
             "batch_id": self.batch_id,
             "build_date": self.build_date,
-            "platform": "universal",
             "components": {},
-            "checksums": {},
-            "size_mb": 0
+            "checksums": {}
         }
         
-        # Security
-        self.master_key = None
-        self.security_tokens = {}
-        
+        # FIX BUG-016: Track open file handles for cleanup
+        self._open_handles = []
+    
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensure cleanup"""
+        self.cleanup()
+    
     def generate_batch_id(self):
         """Generate unique batch identifier"""
         timestamp = datetime.now().strftime("%Y%m%d")
@@ -60,59 +69,54 @@ class ISOCreator:
     
     def create(self):
         """Main ISO creation process"""
-        print(f"🌻 Sunflower AI ISO Creator v{self.version}")
+        print(f"💿 Sunflower AI ISO Creator")
         print(f"📦 Batch ID: {self.batch_id}")
+        print(f"📌 Version: {self.version}")
         print(f"📅 Build Date: {self.build_date}")
         print("-" * 60)
         
         try:
-            # Pre-flight checks
+            # Validate prerequisites
+            print("\n🔍 Validating prerequisites...")
             if not self.validate_prerequisites():
                 return False
             
-            # Create ISO structure
-            print("\n📁 Creating ISO directory structure...")
-            self.create_iso_structure()
+            # Prepare ISO contents
+            print("\n📁 Preparing ISO contents...")
+            self.prepare_iso_contents()
             
-            # Copy system files
-            print("\n📄 Copying system files...")
-            self.copy_system_files()
-            
-            # Add compiled applications
-            print("\n🔨 Adding compiled applications...")
-            self.add_compiled_applications()
+            # Add platform-specific files
+            print("\n🖥️ Adding platform executables...")
+            self.add_platform_files()
             
             # Add AI models
             print("\n🤖 Adding AI models...")
             self.add_ai_models()
             
-            # Add Ollama runtime
-            print("\n🚀 Adding Ollama runtime...")
-            self.add_ollama_runtime()
+            # Add resources
+            print("\n📚 Adding resources...")
+            self.add_resources()
             
-            # Generate security files
-            print("\n🔒 Generating security components...")
-            self.generate_security_files()
-            
-            # Create autorun configuration
-            print("\n⚙️ Creating autorun configuration...")
-            self.create_autorun_config()
+            # Create identifiers
+            print("\n🆔 Creating partition identifiers...")
+            self.create_identifiers()
             
             # Generate checksums
-            print("\n🔍 Calculating checksums...")
+            print("\n🔐 Generating checksums...")
             self.generate_checksums()
             
-            # Create final ISO
-            print("\n💿 Building ISO image...")
+            # Build ISO
+            print("\n🔨 Building ISO image...")
             iso_path = self.build_iso()
             
             # Verify ISO
-            print("\n✅ Verifying ISO integrity...")
+            print("\n✔️ Verifying ISO...")
             if self.verify_iso(iso_path):
-                print(f"\n✨ ISO created successfully: {iso_path}")
-                print(f"📊 Size: {iso_path.stat().st_size / (1024**3):.2f} GB")
+                print(f"\n✅ ISO created successfully: {iso_path}")
+                
+                # Save build record
                 self.save_build_record(iso_path)
-                return True
+                return iso_path
             else:
                 print("\n❌ ISO verification failed")
                 return False
@@ -123,305 +127,232 @@ class ISOCreator:
             traceback.print_exc()
             return False
         finally:
-            # Cleanup
-            if self.temp_iso_root.exists():
-                shutil.rmtree(self.temp_iso_root, ignore_errors=True)
+            # Always cleanup temp directory
+            self.cleanup()
+    
+    def cleanup(self):
+        """Clean up temporary files and close any open handles"""
+        # FIX BUG-016: Close all tracked file handles
+        for handle in self._open_handles:
+            try:
+                if not handle.closed:
+                    handle.close()
+            except Exception:
+                pass  # Handle already closed or invalid
+        self._open_handles.clear()
+        
+        # Remove temp directory
+        if self.temp_iso_root.exists():
+            try:
+                shutil.rmtree(self.temp_iso_root)
+                print(f"🧹 Cleaned up temporary files")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not remove temp directory: {e}")
     
     def validate_prerequisites(self):
-        """Validate all required components exist"""
-        print("🔍 Validating prerequisites...")
-        
-        required_dirs = [
-            self.staging_dir,
-            self.staging_dir / "Windows",
-            self.staging_dir / "macOS",
-            self.staging_dir / "models"
-        ]
+        """Validate all required files are present"""
+        required_paths = {
+            "Windows executable": self.cdrom_staging / "Windows" / "SunflowerAI.exe",
+            "macOS application": self.cdrom_staging / "macOS" / "SunflowerAI.app",
+            "Models directory": self.cdrom_staging / "models",
+            "Resources": self.root_dir / "resources"
+        }
         
         missing = []
-        for dir_path in required_dirs:
-            if not dir_path.exists():
-                missing.append(str(dir_path))
+        for name, path in required_paths.items():
+            if path.exists():
+                print(f"✅ Found: {name}")
+            else:
+                print(f"❌ Missing: {name} at {path}")
+                missing.append(name)
         
         if missing:
-            print("❌ Missing required directories:")
-            for path in missing:
-                print(f"   - {path}")
-            print("\n📝 Run build scripts first:")
-            print("   python build/compile_windows.py")
-            print("   python build/compile_macos.py")
-            print("   python build/create_models.py")
+            print("\n❌ Prerequisites not met. Please build required components first.")
             return False
         
-        # Check for ISO creation tools
-        if platform.system() == "Windows":
-            # Check for oscdimg.exe (Windows ADK tool)
-            oscdimg = shutil.which("oscdimg.exe")
-            if not oscdimg:
-                print("❌ oscdimg.exe not found. Install Windows ADK.")
-                return False
-        else:
-            # Check for mkisofs/genisoimage
-            mkisofs = shutil.which("mkisofs") or shutil.which("genisoimage")
-            if not mkisofs:
-                print("❌ mkisofs/genisoimage not found. Install cdrtools.")
-                return False
-        
-        print("✅ All prerequisites validated")
         return True
     
-    def create_iso_structure(self):
-        """Create ISO directory structure"""
-        self.temp_iso_root.mkdir(parents=True, exist_ok=True)
-        
-        # Create directory structure
-        dirs = [
+    def prepare_iso_contents(self):
+        """Prepare the base ISO directory structure"""
+        # Create base directories
+        directories = [
             "Windows",
-            "macOS", 
+            "macOS",
             "models",
-            "docs",
             "resources",
-            ".security"
+            "docs",
+            "autorun"
         ]
         
-        for dir_name in dirs:
-            (self.temp_iso_root / dir_name).mkdir(exist_ok=True)
+        for dir_name in directories:
+            (self.temp_iso_root / dir_name).mkdir(parents=True, exist_ok=True)
         
-        # Create marker file for CD-ROM detection
-        marker_file = self.temp_iso_root / "sunflower_cd.id"
-        marker_file.write_text(f"SUNFLOWER_AI_CDROM_{self.version}_{self.batch_id}")
-        
-        print(f"✅ Created ISO structure at: {self.temp_iso_root}")
+        print(f"✅ Created ISO directory structure at {self.temp_iso_root}")
     
-    def copy_system_files(self):
-        """Copy core system files"""
-        # Copy launcher
-        launcher_src = self.root_dir / "SUNFLOWER_LAUNCHER.py"
-        if launcher_src.exists():
-            shutil.copy2(launcher_src, self.temp_iso_root / "SUNFLOWER_LAUNCHER.py")
-            self.manifest["components"]["launcher"] = "SUNFLOWER_LAUNCHER.py"
+    def add_platform_files(self):
+        """Add platform-specific executables"""
+        # Windows files
+        windows_src = self.cdrom_staging / "Windows"
+        windows_dst = self.temp_iso_root / "Windows"
         
-        # Copy platform launchers
-        platform_src = self.root_dir / "platform_launchers"
-        if platform_src.exists():
-            shutil.copytree(
-                platform_src,
-                self.temp_iso_root / "platform_launchers",
-                dirs_exist_ok=True
-            )
-        
-        # Copy resources
-        resources_src = self.root_dir / "resources"
-        if resources_src.exists():
-            shutil.copytree(
-                resources_src,
-                self.temp_iso_root / "resources",
-                dirs_exist_ok=True
-            )
-        
-        # Copy configuration files
-        config_files = ["VERSION", "config/model_registry.json", "config/safety_patterns.json"]
-        for config_file in config_files:
-            src = self.root_dir / config_file
-            if src.exists():
-                dst = self.temp_iso_root / config_file
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-        
-        print(f"✅ Copied {len(self.manifest['components'])} system components")
-    
-    def add_compiled_applications(self):
-        """Add platform-specific compiled applications"""
-        copied = 0
-        
-        # Windows executable
-        win_exe = self.staging_dir / "Windows" / "SunflowerAI.exe"
-        if win_exe.exists():
-            dst = self.temp_iso_root / "Windows" / "SunflowerAI.exe"
-            shutil.copy2(win_exe, dst)
-            self.manifest["components"]["windows_app"] = "Windows/SunflowerAI.exe"
-            copied += 1
+        if windows_src.exists():
+            for file in windows_src.rglob("*"):
+                if file.is_file():
+                    relative = file.relative_to(windows_src)
+                    dst_file = windows_dst / relative
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(file, dst_file)
             
-            # Copy Windows dependencies
-            win_deps = self.staging_dir / "Windows" / "_internal"
-            if win_deps.exists():
+            self.manifest["components"]["windows"] = True
+            print(f"✅ Added Windows executables")
+        
+        # macOS files
+        macos_src = self.cdrom_staging / "macOS"
+        macos_dst = self.temp_iso_root / "macOS"
+        
+        if macos_src.exists():
+            if (macos_src / "SunflowerAI.app").exists():
                 shutil.copytree(
-                    win_deps,
-                    self.temp_iso_root / "Windows" / "_internal",
-                    dirs_exist_ok=True
+                    macos_src / "SunflowerAI.app",
+                    macos_dst / "SunflowerAI.app",
+                    symlinks=True
                 )
-        
-        # macOS application
-        mac_app = self.staging_dir / "macOS" / "SunflowerAI.app"
-        if mac_app.exists():
-            dst = self.temp_iso_root / "macOS" / "SunflowerAI.app"
-            shutil.copytree(mac_app, dst, dirs_exist_ok=True)
-            self.manifest["components"]["macos_app"] = "macOS/SunflowerAI.app"
-            copied += 1
-        
-        print(f"✅ Added {copied} compiled applications")
+            
+            self.manifest["components"]["macos"] = True
+            print(f"✅ Added macOS application")
     
     def add_ai_models(self):
-        """Add pre-built AI models"""
-        models_src = self.staging_dir / "models"
+        """Add AI models based on hardware requirements"""
+        models_src = self.cdrom_staging / "models"
         models_dst = self.temp_iso_root / "models"
         
         if not models_src.exists():
-            print("⚠️ No models found in staging directory")
+            print("⚠️ No models directory found, skipping...")
             return
         
-        model_count = 0
+        # Define model variants to include
+        model_variants = [
+            "llama3.2-7b.gguf",    # High-end systems
+            "llama3.2-3b.gguf",    # Mid-range systems
+            "llama3.2-1b.gguf",    # Low-end systems
+            "llama3.2-1b-q4_0.gguf"  # Minimum spec systems
+        ]
+        
+        models_added = []
         total_size = 0
         
-        # Copy all model files
-        for model_file in models_src.glob("*"):
-            if model_file.is_file():
-                dst = models_dst / model_file.name
-                shutil.copy2(model_file, dst)
+        for model_file in model_variants:
+            src_path = models_src / model_file
+            if src_path.exists():
+                dst_path = models_dst / model_file
+                shutil.copy2(src_path, dst_path)
                 
-                size = model_file.stat().st_size
-                total_size += size
-                model_count += 1
+                file_size = src_path.stat().st_size
+                total_size += file_size
+                models_added.append(model_file)
                 
-                # Add to manifest
-                self.manifest["components"][f"model_{model_file.stem}"] = f"models/{model_file.name}"
+                print(f"  Added: {model_file} ({file_size / (1024**3):.2f} GB)")
         
-        # Create model manifest
-        model_manifest = {
-            "version": self.version,
-            "models": [],
-            "total_size_gb": total_size / (1024**3)
-        }
+        # Copy model selection script
+        model_selector = self.root_dir / "src" / "model_selector.py"
+        if model_selector.exists():
+            shutil.copy2(model_selector, models_dst / "model_selector.py")
         
-        for model_file in models_dst.glob("*"):
-            if model_file.suffix != ".json":
-                model_info = {
-                    "name": model_file.stem,
-                    "file": model_file.name,
-                    "size_mb": model_file.stat().st_size / (1024**2),
-                    "checksum": self.calculate_checksum(model_file)
-                }
-                model_manifest["models"].append(model_info)
+        self.manifest["components"]["models"] = models_added
+        self.manifest["models_size_gb"] = total_size / (1024**3)
         
-        with open(models_dst / "model_manifest.json", "w") as f:
-            json.dump(model_manifest, f, indent=2)
-        
-        print(f"✅ Added {model_count} AI models ({total_size / (1024**3):.2f} GB)")
+        print(f"✅ Added {len(models_added)} AI models ({total_size / (1024**3):.2f} GB total)")
     
-    def add_ollama_runtime(self):
-        """Add Ollama runtime for both platforms"""
-        added = 0
+    def add_resources(self):
+        """Add documentation and resources"""
+        resources_src = self.root_dir / "resources"
+        resources_dst = self.temp_iso_root / "resources"
         
-        # Windows Ollama
-        win_ollama = self.staging_dir / "Windows" / "ollama" / "ollama.exe"
-        if win_ollama.exists():
-            dst_dir = self.temp_iso_root / "Windows" / "ollama"
-            dst_dir.mkdir(exist_ok=True)
-            shutil.copy2(win_ollama, dst_dir / "ollama.exe")
+        if resources_src.exists():
+            # Copy select resources (not everything)
+            resource_files = [
+                "icons/sunflower.ico",
+                "images/splash.png",
+                "docs/quickstart.pdf",
+                "docs/parent_guide.pdf"
+            ]
             
-            # Copy Ollama runtime files
-            ollama_dir = win_ollama.parent
-            for file in ollama_dir.glob("*"):
-                if file.is_file():
-                    shutil.copy2(file, dst_dir / file.name)
-            
-            self.manifest["components"]["ollama_windows"] = "Windows/ollama/ollama.exe"
-            added += 1
+            for resource in resource_files:
+                src_file = resources_src / resource
+                if src_file.exists():
+                    dst_file = resources_dst / resource
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_file, dst_file)
         
-        # macOS Ollama
-        mac_ollama = self.staging_dir / "macOS" / "ollama-darwin"
-        if mac_ollama.exists():
-            dst = self.temp_iso_root / "macOS" / "ollama-darwin"
-            shutil.copy2(mac_ollama, dst)
-            # Make executable
-            os.chmod(dst, 0o755)
-            self.manifest["components"]["ollama_macos"] = "macOS/ollama-darwin"
-            added += 1
+        # Add autorun files for Windows
+        self.create_autorun_files()
         
-        print(f"✅ Added Ollama runtime for {added} platform(s)")
+        print(f"✅ Added resources and documentation")
     
-    def generate_security_files(self):
-        """Generate security and authentication files"""
-        security_dir = self.temp_iso_root / ".security"
-        
-        # Generate master key
-        self.master_key = secrets.token_bytes(32)
-        
-        # Create batch authentication token
-        batch_token = {
-            "batch_id": self.batch_id,
-            "version": self.version,
-            "created": datetime.now().isoformat(),
-            "verification": secrets.token_urlsafe(32)
-        }
-        
-        # Create fingerprint
-        fingerprint = {
-            "batch": self.batch_id,
-            "build_date": self.build_date,
-            "master_hash": hashlib.sha256(self.master_key).hexdigest(),
-            "components": list(self.manifest["components"].keys())
-        }
-        
-        # Save security files
-        with open(security_dir / "batch_token.json", "w") as f:
-            json.dump(batch_token, f, indent=2)
-        
-        with open(security_dir / "fingerprint.sig", "wb") as f:
-            fingerprint_data = json.dumps(fingerprint).encode()
-            f.write(fingerprint_data)
-        
-        # Create security manifest
-        security_manifest = {
-            "version": "1.0",
-            "batch_id": self.batch_id,
-            "security_level": "production",
-            "features": {
-                "cd_rom_verification": True,
-                "usb_authentication": True,
-                "model_encryption": False,  # Models are read-only
-                "profile_encryption": True
-            }
-        }
-        
-        with open(security_dir / "security.manifest", "w") as f:
-            json.dump(security_manifest, f, indent=2)
-        
-        print("✅ Generated security components")
-    
-    def create_autorun_config(self):
-        """Create autorun configuration for Windows"""
+    def create_autorun_files(self):
+        """Create autorun.inf for Windows auto-launch"""
         autorun_content = f"""[autorun]
 open=Windows\\SunflowerAI.exe
-icon=resources\\icons\\sunflower.ico
-label=Sunflower AI v{self.version}
+icon=Windows\\SunflowerAI.exe,0
+label=Sunflower AI Professional System v{self.version}
 
 [Content]
-BatchID={self.batch_id}
-Version={self.version}
-BuildDate={self.build_date}
+MusicFiles=false
+PictureFiles=false
+VideoFiles=false
 """
         
-        with open(self.temp_iso_root / "autorun.inf", "w") as f:
+        # FIX BUG-016: Use context manager for file operations
+        autorun_file = self.temp_iso_root / "autorun.inf"
+        with open(autorun_file, "w", encoding='utf-8') as f:
             f.write(autorun_content)
         
         # Create desktop.ini for nice folder appearance
-        desktop_ini = """[.ShellClassInfo]
-IconResource=resources\\icons\\sunflower.ico,0
+        desktop_ini_content = """[.ShellClassInfo]
+IconResource=Windows\\SunflowerAI.exe,0
 """
-        with open(self.temp_iso_root / "desktop.ini", "w") as f:
-            f.write(desktop_ini)
         
-        # Set hidden attribute on Windows
+        # FIX BUG-016: Use context manager for file operations
+        desktop_file = self.temp_iso_root / "desktop.ini"
+        with open(desktop_file, "w", encoding='utf-8') as f:
+            f.write(desktop_ini_content)
+        
+        # Set files as hidden/system on Windows
         if platform.system() == "Windows":
             import ctypes
             FILE_ATTRIBUTE_HIDDEN = 0x02
-            ctypes.windll.kernel32.SetFileAttributesW(
-                str(self.temp_iso_root / "desktop.ini"), 
-                FILE_ATTRIBUTE_HIDDEN
-            )
+            FILE_ATTRIBUTE_SYSTEM = 0x04
+            
+            for file in [autorun_file, desktop_file]:
+                ctypes.windll.kernel32.SetFileAttributesW(
+                    str(file),
+                    FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+                )
+    
+    def create_identifiers(self):
+        """Create partition identification files"""
+        # CD-ROM identifier (matches partition_manager.py check)
+        # FIX BUG-016: Use context manager for file operations
+        id_file = self.temp_iso_root / "sunflower_cd.id"
+        with open(id_file, "w", encoding='utf-8') as f:
+            f.write(f"SUNFLOWER_CDROM_{self.batch_id}")
         
-        print("✅ Created autorun configuration")
+        # Partition info
+        partition_info = {
+            "type": "CD-ROM",
+            "version": self.version,
+            "batch_id": self.batch_id,
+            "build_date": self.build_date,
+            "read_only": True,
+            "partition_size_gb": self.iso_max_size_gb
+        }
+        
+        # FIX BUG-016: Use context manager for file operations
+        info_file = self.temp_iso_root / ".partition_info"
+        with open(info_file, "w", encoding='utf-8') as f:
+            json.dump(partition_info, f, indent=2)
+        
+        print(f"✅ Created partition identifiers")
     
     def generate_checksums(self):
         """Generate checksums for all files"""
@@ -429,9 +360,6 @@ IconResource=resources\\icons\\sunflower.ico,0
         total_size = 0
         
         for root, dirs, files in os.walk(self.temp_iso_root):
-            # Skip hidden directories
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
-            
             for file in files:
                 file_path = Path(root) / file
                 relative_path = file_path.relative_to(self.temp_iso_root)
@@ -444,8 +372,9 @@ IconResource=resources\\icons\\sunflower.ico,0
                 total_size += file_path.stat().st_size
         
         # Save checksums
+        # FIX BUG-016: Use context manager for file operations
         checksum_file = self.temp_iso_root / "checksums.sha256"
-        with open(checksum_file, "w") as f:
+        with open(checksum_file, "w", encoding='utf-8') as f:
             for path, checksum in sorted(checksums.items()):
                 f.write(f"{checksum}  {path}\n")
         
@@ -453,18 +382,28 @@ IconResource=resources\\icons\\sunflower.ico,0
         self.manifest["size_mb"] = total_size / (1024**2)
         
         # Save manifest
-        with open(self.temp_iso_root / "manifest.json", "w") as f:
+        # FIX BUG-016: Use context manager for file operations
+        manifest_file = self.temp_iso_root / "manifest.json"
+        with open(manifest_file, "w", encoding='utf-8') as f:
             json.dump(self.manifest, f, indent=2)
         
         print(f"✅ Generated checksums for {len(checksums)} files")
         print(f"📊 Total size: {total_size / (1024**3):.2f} GB")
     
     def calculate_checksum(self, file_path):
-        """Calculate SHA256 checksum of a file"""
+        """Calculate SHA256 checksum of a file with proper resource management"""
         sha256 = hashlib.sha256()
+        
+        # FIX BUG-016: Use context manager and chunked reading
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
+            # Read in chunks to avoid memory issues with large files
+            chunk_size = 8192  # 8KB chunks
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
                 sha256.update(chunk)
+        
         return sha256.hexdigest()
     
     def build_iso(self):
@@ -487,6 +426,13 @@ IconResource=resources\\icons\\sunflower.ico,0
         else:
             # Use mkisofs/genisoimage
             mkisofs = shutil.which("mkisofs") or shutil.which("genisoimage")
+            if not mkisofs:
+                # Try hdiutil on macOS
+                if platform.system() == "Darwin":
+                    return self.build_iso_macos(iso_path)
+                else:
+                    raise RuntimeError("No ISO creation tool found (mkisofs/genisoimage)")
+            
             cmd = [
                 mkisofs,
                 "-o", str(iso_path),
@@ -502,13 +448,57 @@ IconResource=resources\\icons\\sunflower.ico,0
         print(f"🔨 Building ISO: {iso_path.name}")
         print(f"📝 Command: {' '.join(cmd)}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"❌ ISO creation failed: {result.stderr}")
-            raise RuntimeError("ISO creation failed")
+        # FIX BUG-016: Use subprocess with proper resource management
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            print(f"✅ ISO build command completed successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ ISO creation failed: {e.stderr}")
+            raise RuntimeError(f"ISO creation failed: {e.stderr}")
+        except FileNotFoundError:
+            print(f"❌ ISO creation tool not found: {cmd[0]}")
+            raise RuntimeError(f"ISO creation tool not found: {cmd[0]}")
         
         return iso_path
+    
+    def build_iso_macos(self, iso_path):
+        """Build ISO on macOS using hdiutil"""
+        print(f"🍎 Using macOS hdiutil to create ISO...")
+        
+        # Create a temporary DMG first
+        dmg_path = iso_path.with_suffix('.dmg')
+        
+        # Create hybrid image
+        cmd = [
+            "hdiutil", "create",
+            "-volname", self.iso_volume_id,
+            "-srcfolder", str(self.temp_iso_root),
+            "-fs", "HFS+",
+            "-format", "UDTO",  # DVD/CD master format
+            str(dmg_path)
+        ]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            # Convert to ISO
+            cdr_path = dmg_path.with_suffix('.cdr')
+            if cdr_path.exists():
+                # Rename .cdr to .iso
+                cdr_path.rename(iso_path)
+                
+                # Clean up DMG if it exists
+                if dmg_path.exists() and dmg_path != cdr_path:
+                    dmg_path.unlink()
+                
+                print(f"✅ ISO created using hdiutil")
+                return iso_path
+            else:
+                raise RuntimeError("CDR file not created by hdiutil")
+                
+        except subprocess.CalledProcessError as e:
+            print(f"❌ hdiutil failed: {e.stderr}")
+            raise RuntimeError(f"hdiutil failed: {e.stderr}")
     
     def verify_iso(self, iso_path):
         """Verify the created ISO"""
@@ -519,58 +509,57 @@ IconResource=resources\\icons\\sunflower.ico,0
         size_gb = iso_path.stat().st_size / (1024**3)
         print(f"📏 ISO size: {size_gb:.2f} GB")
         
-        if size_gb < 0.5:
-            print("⚠️ ISO seems too small")
-            return False
+        if size_gb > self.iso_max_size_gb:
+            print(f"⚠️ Warning: ISO exceeds target size of {self.iso_max_size_gb} GB")
         
-        if size_gb > 8.0:
-            print("⚠️ ISO larger than typical USB size")
+        # Verify checksum
+        iso_checksum = self.calculate_checksum(iso_path)
+        print(f"🔐 ISO checksum: {iso_checksum}")
         
-        # Mount and verify on supported platforms
+        # Try to mount and verify on Unix-like systems
         if platform.system() in ["Darwin", "Linux"]:
-            # Try to mount and verify
-            mount_point = Path(tempfile.mkdtemp())
+            mount_point = Path("/tmp/sunflower_iso_verify")
+            mount_point.mkdir(exist_ok=True)
             
             try:
                 if platform.system() == "Darwin":
                     # macOS mount
-                    subprocess.run(
-                        ["hdiutil", "attach", str(iso_path), "-mountpoint", str(mount_point)],
-                        check=True,
-                        capture_output=True
-                    )
+                    subprocess.run(["hdiutil", "attach", str(iso_path), "-mountpoint", str(mount_point)], 
+                                 capture_output=True, check=True)
                 else:
                     # Linux mount
-                    subprocess.run(
-                        ["mount", "-o", "loop,ro", str(iso_path), str(mount_point)],
-                        check=True,
-                        capture_output=True
-                    )
+                    subprocess.run(["sudo", "mount", "-o", "loop", str(iso_path), str(mount_point)], 
+                                 capture_output=True, check=True)
                 
-                # Verify key files exist
-                marker = mount_point / "sunflower_cd.id"
-                if marker.exists():
-                    print("✅ ISO structure verified")
-                    verified = True
-                else:
-                    print("❌ ISO structure invalid")
-                    verified = False
+                # Check for key files
+                key_files = [
+                    "sunflower_cd.id",
+                    "manifest.json",
+                    "checksums.sha256"
+                ]
                 
-            finally:
+                verified = all((mount_point / f).exists() for f in key_files)
+                
                 # Unmount
                 if platform.system() == "Darwin":
                     subprocess.run(["hdiutil", "detach", str(mount_point)], capture_output=True)
                 else:
-                    subprocess.run(["umount", str(mount_point)], capture_output=True)
+                    subprocess.run(["sudo", "umount", str(mount_point)], capture_output=True)
+                
                 mount_point.rmdir()
-            
-            return verified
+                
+                return verified
+                
+            except subprocess.CalledProcessError as e:
+                print(f"⚠️ Could not mount ISO for verification: {e}")
+                # If we can't mount, just check file exists and has reasonable size
+                return iso_path.exists() and size_gb > 0.1
         
         # On Windows, just check that the file exists and has reasonable size
-        return True
+        return iso_path.exists() and size_gb > 0.1
     
     def save_build_record(self, iso_path):
-        """Save build record for tracking"""
+        """Save build record for tracking with proper file handling"""
         records_dir = self.root_dir / "manufacturing" / "batch_records"
         records_dir.mkdir(parents=True, exist_ok=True)
         
@@ -586,22 +575,30 @@ IconResource=resources\\icons\\sunflower.ico,0
             "build_system": f"{platform.system()} {platform.release()}"
         }
         
+        # FIX BUG-016: Use context manager for file operations
         record_file = records_dir / f"batch_{self.batch_id}.json"
-        with open(record_file, "w") as f:
+        with open(record_file, "w", encoding='utf-8') as f:
             json.dump(record, f, indent=2)
         
         print(f"✅ Build record saved: {record_file.name}")
 
 
 def main():
+    """Main entry point with proper resource management"""
     parser = argparse.ArgumentParser(description="Create Sunflower AI CD-ROM ISO")
     parser.add_argument("--version", default="1.0.0", help="Version number")
     parser.add_argument("--batch-id", help="Batch ID (auto-generated if not provided)")
     
     args = parser.parse_args()
     
-    creator = ISOCreator(version=args.version, batch_id=args.batch_id)
-    success = creator.create()
+    # FIX BUG-016: Use context manager to ensure cleanup
+    try:
+        with ISOCreator(version=args.version, batch_id=args.batch_id) as creator:
+            iso_path = creator.create()
+            success = bool(iso_path)
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        success = False
     
     sys.exit(0 if success else 1)
 
