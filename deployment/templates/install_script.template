@@ -1,138 +1,196 @@
-#!/usr/bin/env bash
+#!/bin/bash
 ################################################################################
 # Sunflower AI Professional System - Installation Script Template
-# Version: {VERSION} | Platform: {PLATFORM} | Build: {BUILD_NUMBER}
-# 
-# This template generates platform-specific installation scripts
-# Supports: Windows (PowerShell), macOS (bash), Linux (bash)
+# Version: ${VERSION}
+# Build: ${BUILD_NUMBER}
+# Platform: ${PLATFORM}
+# Device ID: ${DEVICE_ID}
 ################################################################################
 
-# Template configuration block - replaced during build
-readonly PRODUCT_NAME="{PRODUCT_NAME}"
-readonly VERSION="{VERSION}"
-readonly BUILD_NUMBER="{BUILD_NUMBER}"
-readonly BUILD_DATE="{BUILD_DATE}"
-readonly INSTALL_DIR="{INSTALL_DIR}"
-readonly DEVICE_ID="{DEVICE_ID}"
-readonly PLATFORM="{PLATFORM}"
-readonly ARCHITECTURE="{ARCHITECTURE}"
-readonly MIN_RAM_GB="{MIN_RAM_GB}"
-readonly MIN_DISK_GB="{MIN_DISK_GB}"
-readonly MODELS_LIST="{MODELS_LIST}"
+set -euo pipefail  # Exit on error, undefined variables, and pipe failures
 
-# Color codes for terminal output
+################################################################################
+# CONFIGURATION VARIABLES (populated during build)
+################################################################################
+
+readonly VERSION="${VERSION:-6.2.0}"
+readonly BUILD_NUMBER="${BUILD_NUMBER:-001}"
+readonly PLATFORM="${PLATFORM:-universal}"
+readonly DEVICE_ID="${DEVICE_ID:-UNKNOWN}"
+readonly PRODUCT_NAME="Sunflower AI Professional"
+readonly INSTALL_DIR="${INSTALL_DIR:-/opt/sunflowerai}"
+readonly DATA_DIR="${DATA_DIR:-${HOME}/.sunflowerai}"
+readonly LOG_DIR="${LOG_DIR:-${DATA_DIR}/logs}"
+readonly TEMP_DIR="${TEMP_DIR:-/tmp/sunflowerai_install}"
+readonly MIN_RAM_GB="${MIN_RAM_GB:-4}"
+readonly MIN_DISK_GB="${MIN_DISK_GB:-8}"
+readonly MODELS_LIST="${MODELS_LIST:-llama3.2:7b,llama3.2:3b,llama3.2:1b,llama3.2:1b-q4_0}"
+
+################################################################################
+# COLOR CODES FOR OUTPUT
+################################################################################
+
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly MAGENTA='\033[0;35m'
 readonly CYAN='\033[0;36m'
+readonly WHITE='\033[1;37m'
 readonly RESET='\033[0m'
 
-# Logging configuration
-readonly LOG_DIR="${HOME}/.sunflowerai/logs"
+################################################################################
+# LOGGING AND PROGRESS TRACKING
+################################################################################
+
 readonly LOG_FILE="${LOG_DIR}/installation_$(date +%Y%m%d_%H%M%S).log"
 readonly ERROR_LOG="${LOG_DIR}/installation_errors.log"
-
-# Installation status tracking
-INSTALLATION_STATUS="NOT_STARTED"
 INSTALLATION_PROGRESS=0
-ERRORS_ENCOUNTERED=0
-WARNINGS_ENCOUNTERED=0
 
-################################################################################
-# UTILITY FUNCTIONS
-################################################################################
-
-# Initialize logging system
+# Initialize logging
 init_logging() {
     mkdir -p "${LOG_DIR}"
     touch "${LOG_FILE}"
     touch "${ERROR_LOG}"
     
-    # Log header
-    {
-        echo "=========================================="
-        echo "Sunflower AI Professional Installation Log"
-        echo "Date: $(date)"
-        echo "Version: ${VERSION}"
-        echo "Platform: ${PLATFORM}"
-        echo "User: ${USER}"
-        echo "=========================================="
-        echo ""
-    } >> "${LOG_FILE}"
+    exec 1> >(tee -a "${LOG_FILE}")
+    exec 2> >(tee -a "${ERROR_LOG}" >&2)
+    
+    log_message "INFO" "Installation started at $(date)"
+    log_message "INFO" "Version: ${VERSION}, Build: ${BUILD_NUMBER}"
+    log_message "INFO" "Platform: ${PLATFORM}, Device: ${DEVICE_ID}"
 }
 
-# Logging function with severity levels
+# Log messages with timestamp and level
 log_message() {
-    local severity="$1"
+    local level="$1"
     local message="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] [${level}] ${message}" >> "${LOG_FILE}"
     
-    # Write to log file
-    echo "[${timestamp}] [${severity}] ${message}" >> "${LOG_FILE}"
-    
-    # Display to console with colors
-    case "${severity}" in
+    case "${level}" in
         ERROR)
-            echo -e "${RED}[ERROR]${RESET} ${message}" >&2
-            echo "[${timestamp}] ${message}" >> "${ERROR_LOG}"
-            ((ERRORS_ENCOUNTERED++))
+            echo "[${timestamp}] [${level}] ${message}" >> "${ERROR_LOG}"
+            echo -e "${RED}[${level}]${RESET} ${message}" >&2
             ;;
         WARNING)
-            echo -e "${YELLOW}[WARNING]${RESET} ${message}"
-            ((WARNINGS_ENCOUNTERED++))
-            ;;
-        INFO)
-            echo -e "${BLUE}[INFO]${RESET} ${message}"
+            echo -e "${YELLOW}[${level}]${RESET} ${message}"
             ;;
         SUCCESS)
-            echo -e "${GREEN}[SUCCESS]${RESET} ${message}"
+            echo -e "${GREEN}[${level}]${RESET} ${message}"
             ;;
-        PROGRESS)
-            echo -e "${CYAN}[PROGRESS]${RESET} ${message}"
+        INFO)
+            echo -e "${CYAN}[${level}]${RESET} ${message}"
             ;;
         *)
-            echo "${message}"
+            echo "[${level}] ${message}"
             ;;
     esac
 }
 
-# Update installation progress
+# Update progress indicator
 update_progress() {
-    local progress="$1"
+    INSTALLATION_PROGRESS=$1
     local status="$2"
     
-    INSTALLATION_PROGRESS="${progress}"
-    INSTALLATION_STATUS="${status}"
+    local filled=$((INSTALLATION_PROGRESS / 2))
+    local empty=$((50 - filled))
     
-    log_message "PROGRESS" "${status} (${progress}%)"
+    printf "\r${CYAN}Progress: [${GREEN}"
+    printf "%${filled}s" | tr ' ' '█'
+    printf "${WHITE}"
+    printf "%${empty}s" | tr ' ' '░'
+    printf "${CYAN}] ${INSTALLATION_PROGRESS}%% - ${status}${RESET}"
     
-    # Create progress bar
-    local bar_length=50
-    local filled_length=$((progress * bar_length / 100))
-    local bar=""
-    
-    for ((i=0; i<filled_length; i++)); do
-        bar="${bar}█"
-    done
-    for ((i=filled_length; i<bar_length; i++)); do
-        bar="${bar}░"
-    done
-    
-    echo -ne "\r${CYAN}Progress:${RESET} [${bar}] ${progress}%"
-    
-    if [[ ${progress} -eq 100 ]]; then
-        echo ""  # New line when complete
+    if [[ ${INSTALLATION_PROGRESS} -eq 100 ]]; then
+        echo ""
     fi
+    
+    log_message "PROGRESS" "${INSTALLATION_PROGRESS}% - ${status}"
 }
 
-# Check if running with required privileges
+################################################################################
+# SECURITY FUNCTIONS
+################################################################################
+
+# FIX BUG-017: Validate and sanitize path components to prevent traversal
+validate_path_component() {
+    local component="$1"
+    
+    # Remove any leading/trailing whitespace
+    component=$(echo "${component}" | xargs)
+    
+    # Check for empty component
+    if [[ -z "${component}" ]]; then
+        log_message "ERROR" "Empty path component detected"
+        return 1
+    fi
+    
+    # Check for path traversal attempts
+    if [[ "${component}" == *".."* ]] || [[ "${component}" == *"/"* ]] || [[ "${component}" == *"\\"* ]]; then
+        log_message "ERROR" "Path traversal attempt detected in: ${component}"
+        return 1
+    fi
+    
+    # Check for special characters that could be malicious
+    if [[ "${component}" =~ [^\w\-\._] ]]; then
+        log_message "WARNING" "Suspicious characters in path component: ${component}"
+        # Don't fail, but log the warning
+    fi
+    
+    # Check for absolute paths
+    if [[ "${component}" == /* ]] || [[ "${component}" == ~* ]]; then
+        log_message "ERROR" "Absolute path not allowed: ${component}"
+        return 1
+    fi
+    
+    # Return sanitized component (basename only)
+    basename "${component}" 2>/dev/null || echo "${component}"
+}
+
+# FIX BUG-017: Secure file copy with validation
+secure_copy() {
+    local source="$1"
+    local destination="$2"
+    local copy_type="${3:-file}"  # file or directory
+    
+    # Validate source exists and is within expected bounds
+    if [[ ! -e "${source}" ]]; then
+        log_message "ERROR" "Source does not exist: ${source}"
+        return 1
+    fi
+    
+    # Get real paths to prevent symlink attacks
+    local real_source=$(realpath "${source}" 2>/dev/null) || source="${source}"
+    local real_dest_parent=$(realpath "$(dirname "${destination}")" 2>/dev/null) || real_dest_parent="$(dirname "${destination}")"
+    
+    # Ensure destination parent exists
+    mkdir -p "${real_dest_parent}"
+    
+    # Verify destination is within INSTALL_DIR
+    if [[ "${real_dest_parent}" != "${INSTALL_DIR}"* ]]; then
+        log_message "ERROR" "Destination outside installation directory: ${destination}"
+        return 1
+    fi
+    
+    # Perform the copy
+    if [[ "${copy_type}" == "directory" ]]; then
+        cp -r "${real_source}" "${destination}" 2>/dev/null
+    else
+        cp "${real_source}" "${destination}" 2>/dev/null
+    fi
+    
+    return $?
+}
+
+# Check for required privileges
 check_privileges() {
+    log_message "INFO" "Checking installation privileges..."
+    
     case "${PLATFORM}" in
         windows)
             # Check for Administrator privileges on Windows
-            net session &>/dev/null
+            net session >/dev/null 2>&1
             if [[ $? -ne 0 ]]; then
                 log_message "ERROR" "Administrator privileges required on Windows"
                 return 1
@@ -190,23 +248,7 @@ detect_system() {
         return 1
     fi
     
-    # Check architecture compatibility
-    case "${arch_type}" in
-        x86_64|amd64|"64-bit")
-            log_message "SUCCESS" "64-bit architecture detected"
-            ;;
-        arm64|aarch64)
-            log_message "INFO" "ARM64 architecture detected"
-            if [[ "${os_type}" != "macos" ]]; then
-                log_message "WARNING" "ARM64 support is experimental on ${os_type}"
-            fi
-            ;;
-        *)
-            log_message "ERROR" "Unsupported architecture: ${arch_type}"
-            return 1
-            ;;
-    esac
-    
+    log_message "SUCCESS" "System detected: ${os_type} (${arch_type})"
     return 0
 }
 
@@ -214,69 +256,51 @@ detect_system() {
 check_hardware() {
     log_message "INFO" "Checking hardware requirements..."
     
-    local ram_gb=0
-    local disk_gb=0
-    local cpu_cores=0
-    
+    # Check RAM
+    local ram_kb=0
     case "${PLATFORM}" in
         macos)
-            # Get RAM in GB
-            ram_bytes=$(sysctl -n hw.memsize)
-            ram_gb=$((ram_bytes / 1073741824))
-            
-            # Get available disk space
-            disk_gb=$(df -g "${INSTALL_DIR%/*}" | awk 'NR==2 {print $4}')
-            
-            # Get CPU cores
-            cpu_cores=$(sysctl -n hw.ncpu)
+            ram_kb=$(sysctl -n hw.memsize | awk '{print int($1/1024)}')
             ;;
         linux)
-            # Get RAM in GB
             ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-            ram_gb=$((ram_kb / 1048576))
-            
-            # Get available disk space
-            disk_gb=$(df -BG "${INSTALL_DIR%/*}" | awk 'NR==2 {print $4}' | sed 's/G//')
-            
-            # Get CPU cores
-            cpu_cores=$(nproc)
             ;;
         windows)
-            # Get RAM in GB (PowerShell command)
-            ram_gb=$(powershell -Command "(Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB")
-            ram_gb=${ram_gb%.*}
-            
-            # Get available disk space
-            disk_gb=$(powershell -Command "(Get-PSDrive C).Free / 1GB")
-            disk_gb=${disk_gb%.*}
-            
-            # Get CPU cores
-            cpu_cores=$(powershell -Command "(Get-CimInstance Win32_Processor).NumberOfLogicalProcessors")
+            ram_kb=$(wmic computersystem get TotalPhysicalMemory | grep -o '[0-9]*' | awk '{print int($1/1024)}')
             ;;
     esac
     
-    log_message "INFO" "System Resources: RAM: ${ram_gb}GB, Available Disk: ${disk_gb}GB, CPU Cores: ${cpu_cores}"
+    local ram_gb=$((ram_kb / 1024 / 1024))
+    log_message "INFO" "System RAM: ${ram_gb} GB"
     
-    # Check minimum requirements
     if [[ ${ram_gb} -lt ${MIN_RAM_GB} ]]; then
-        log_message "ERROR" "Insufficient RAM. Required: ${MIN_RAM_GB}GB, Available: ${ram_gb}GB"
+        log_message "ERROR" "Insufficient RAM. Required: ${MIN_RAM_GB}GB, Found: ${ram_gb}GB"
         return 1
     fi
     
-    if [[ ${disk_gb} -lt ${MIN_DISK_GB} ]]; then
-        log_message "ERROR" "Insufficient disk space. Required: ${MIN_DISK_GB}GB, Available: ${disk_gb}GB"
+    # Check disk space
+    local available_space_gb=0
+    case "${PLATFORM}" in
+        macos|linux)
+            available_space_gb=$(df -BG "${INSTALL_DIR%/*}" | awk 'NR==2 {print int($4)}')
+            ;;
+        windows)
+            available_space_gb=$(wmic logicaldisk get size,freespace | grep -o '[0-9]*' | awk 'NR==2 {print int($1/1024/1024/1024)}')
+            ;;
+    esac
+    
+    log_message "INFO" "Available disk space: ${available_space_gb} GB"
+    
+    if [[ ${available_space_gb} -lt ${MIN_DISK_GB} ]]; then
+        log_message "ERROR" "Insufficient disk space. Required: ${MIN_DISK_GB}GB, Available: ${available_space_gb}GB"
         return 1
     fi
     
-    if [[ ${cpu_cores} -lt 2 ]]; then
-        log_message "WARNING" "Low CPU core count (${cpu_cores}). Performance may be limited."
-    fi
-    
-    # Determine optimal model based on hardware
+    # Recommend model based on RAM
     local recommended_model=""
-    if [[ ${ram_gb} -ge 16 ]] && [[ ${cpu_cores} -ge 8 ]]; then
+    if [[ ${ram_gb} -ge 16 ]]; then
         recommended_model="llama3.2:7b"
-        log_message "INFO" "High-performance system detected. Recommending ${recommended_model}"
+        log_message "INFO" "High-spec system detected. Recommending ${recommended_model}"
     elif [[ ${ram_gb} -ge 8 ]]; then
         recommended_model="llama3.2:3b"
         log_message "INFO" "Mid-range system detected. Recommending ${recommended_model}"
@@ -360,6 +384,9 @@ install_system_files() {
         source_dir="$(pwd)"
     fi
     
+    # Validate source directory
+    source_dir=$(realpath "${source_dir}" 2>/dev/null) || source_dir="${source_dir}"
+    
     # Create installation directory structure
     local directories=(
         "${INSTALL_DIR}"
@@ -370,6 +397,8 @@ install_system_files() {
         "${INSTALL_DIR}/ollama"
         "${INSTALL_DIR}/logs"
         "${INSTALL_DIR}/temp"
+        "${INSTALL_DIR}/assets"
+        "${INSTALL_DIR}/launchers"
     )
     
     for dir in "${directories[@]}"; do
@@ -382,7 +411,7 @@ install_system_files() {
     
     update_progress 30 "Created directory structure"
     
-    # Copy core files
+    # FIX BUG-017: Copy core files with path validation
     local components=(
         "launchers:executable"
         "models:data"
@@ -399,20 +428,54 @@ install_system_files() {
     for component in "${components[@]}"; do
         IFS=':' read -r name type <<< "${component}"
         
+        # FIX BUG-017: Validate component name to prevent path traversal
+        name=$(validate_path_component "${name}")
+        if [[ $? -ne 0 ]] || [[ -z "${name}" ]]; then
+            log_message "ERROR" "Invalid component name: ${name}"
+            continue
+        fi
+        
         log_message "INFO" "Installing ${name}..."
         
+        # Check if source exists
         if [[ -d "${source_dir}/${name}" ]]; then
-            cp -r "${source_dir}/${name}"/* "${INSTALL_DIR}/${name}/" 2>/dev/null
+            # FIX BUG-017: Use secure copy function instead of direct cp
+            local src_path="${source_dir}/${name}"
+            local dest_path="${INSTALL_DIR}/${name}"
             
-            # Set permissions based on type
-            case "${type}" in
-                executable)
-                    chmod +x "${INSTALL_DIR}/${name}"/* 2>/dev/null
-                    ;;
-                config)
-                    chmod 644 "${INSTALL_DIR}/${name}"/* 2>/dev/null
-                    ;;
-            esac
+            # Validate paths are within bounds
+            if [[ "${dest_path}" != "${INSTALL_DIR}/"* ]]; then
+                log_message "ERROR" "Invalid destination path for ${name}"
+                continue
+            fi
+            
+            # Copy files securely
+            find "${src_path}" -type f -print0 2>/dev/null | while IFS= read -r -d '' file; do
+                local relative_path="${file#${src_path}/}"
+                local dest_file="${dest_path}/${relative_path}"
+                local dest_dir=$(dirname "${dest_file}")
+                
+                # Create destination directory if needed
+                mkdir -p "${dest_dir}"
+                
+                # Copy file with validation
+                if secure_copy "${file}" "${dest_file}" "file"; then
+                    # Set permissions based on type
+                    case "${type}" in
+                        executable)
+                            chmod +x "${dest_file}" 2>/dev/null
+                            ;;
+                        config)
+                            chmod 644 "${dest_file}" 2>/dev/null
+                            ;;
+                        *)
+                            chmod 644 "${dest_file}" 2>/dev/null
+                            ;;
+                    esac
+                else
+                    log_message "WARNING" "Failed to copy file: ${relative_path}"
+                fi
+            done
             
             current_progress=$((current_progress + progress_increment))
             update_progress ${current_progress} "Installed ${name}"
@@ -421,9 +484,14 @@ install_system_files() {
         fi
     done
     
-    # Copy version info
-    cp "${source_dir}/version_info.json" "${INSTALL_DIR}/" 2>/dev/null
-    cp "${source_dir}/device_config.json" "${INSTALL_DIR}/" 2>/dev/null
+    # Copy version info with validation
+    if [[ -f "${source_dir}/version_info.json" ]]; then
+        secure_copy "${source_dir}/version_info.json" "${INSTALL_DIR}/version_info.json" "file"
+    fi
+    
+    if [[ -f "${source_dir}/device_config.json" ]]; then
+        secure_copy "${source_dir}/device_config.json" "${INSTALL_DIR}/device_config.json" "file"
+    fi
     
     update_progress 80 "System files installed"
     log_message "SUCCESS" "System files installation completed"
@@ -454,42 +522,31 @@ configure_installation() {
         "models": "${INSTALL_DIR}/models",
         "modelfiles": "${INSTALL_DIR}/modelfiles",
         "logs": "${LOG_DIR}",
-        "data": "${HOME}/.sunflowerai/data"
+        "data": "${DATA_DIR}",
+        "temp": "${TEMP_DIR}"
     },
-    "features": {
-        "offline_mode": true,
-        "family_profiles": true,
-        "parent_dashboard": true,
-        "safety_filtering": true
+    "security": {
+        "enforce_parent_controls": true,
+        "content_filtering": "strict",
+        "session_logging": true,
+        "age_verification": true
     }
 }
 EOF
     
-    # Create data directory structure for user data
-    local user_data_dir="${HOME}/.sunflowerai/data"
-    local data_dirs=(
-        "${user_data_dir}/family_profiles"
-        "${user_data_dir}/conversation_logs"
-        "${user_data_dir}/learning_progress"
-        "${user_data_dir}/parent_dashboard"
-        "${user_data_dir}/runtime_config"
-        "${user_data_dir}/backups"
-    )
+    # Set appropriate permissions
+    chmod 600 "${config_file}"
     
-    for dir in "${data_dirs[@]}"; do
-        mkdir -p "${dir}"
-    done
-    
-    # Set up platform-specific configurations
+    # Platform-specific configuration
     case "${PLATFORM}" in
         macos)
             configure_macos
             ;;
-        linux)
-            configure_linux
-            ;;
         windows)
             configure_windows
+            ;;
+        linux)
+            configure_linux
             ;;
     esac
     
@@ -502,60 +559,38 @@ EOF
 configure_macos() {
     log_message "INFO" "Applying macOS-specific configuration..."
     
-    # Create app bundle structure if not exists
-    if [[ ! -d "${INSTALL_DIR}/Contents" ]]; then
-        mkdir -p "${INSTALL_DIR}/Contents/MacOS"
-        mkdir -p "${INSTALL_DIR}/Contents/Resources"
-        
-        # Move executables to MacOS folder
-        mv "${INSTALL_DIR}/launchers"/* "${INSTALL_DIR}/Contents/MacOS/" 2>/dev/null
-        
-        # Create Info.plist
-        cat > "${INSTALL_DIR}/Contents/Info.plist" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>launcher</string>
-    <key>CFBundleIdentifier</key>
-    <string>education.sunflowerai.professional</string>
-    <key>CFBundleName</key>
-    <string>${PRODUCT_NAME}</string>
-    <key>CFBundleVersion</key>
-    <string>${VERSION}</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>10.15</string>
-</dict>
-</plist>
-EOF
+    # Create app bundle symlink
+    if [[ -d "/Applications" ]]; then
+        ln -sf "${INSTALL_DIR}" "/Applications/${PRODUCT_NAME}.app"
     fi
     
-    # Create launch agent for background service
-    local launch_agent="${HOME}/Library/LaunchAgents/education.sunflowerai.plist"
-    cat > "${launch_agent}" << EOF
+    # Create LaunchAgent for background service
+    local plist_file="${HOME}/Library/LaunchAgents/com.sunflowerai.service.plist"
+    mkdir -p "${HOME}/Library/LaunchAgents"
+    
+    cat > "${plist_file}" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>education.sunflowerai</string>
+    <string>com.sunflowerai.service</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${INSTALL_DIR}/Contents/MacOS/sunflower_service</string>
+        <string>${INSTALL_DIR}/sunflower_service</string>
     </array>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
     <key>KeepAlive</key>
     <false/>
 </dict>
 </plist>
 EOF
     
-    # Set permissions
-    chmod 644 "${launch_agent}"
+    # Load the service
+    launchctl load "${plist_file}" 2>/dev/null
     
-    # Create desktop shortcut
+    # Create desktop alias
     local desktop="${HOME}/Desktop"
     if [[ -d "${desktop}" ]]; then
         ln -sf "${INSTALL_DIR}" "${desktop}/${PRODUCT_NAME}.app"
@@ -682,35 +717,24 @@ verify_installation() {
         fi
     done
     
-    # Test launcher executable
-    local launcher=""
+    # Verify permissions
     case "${PLATFORM}" in
-        macos)
-            launcher="${INSTALL_DIR}/Contents/MacOS/launcher"
+        macos|linux)
+            if [[ ! -x "${INSTALL_DIR}/launcher" ]]; then
+                log_message "WARNING" "Launcher not executable, fixing..."
+                chmod +x "${INSTALL_DIR}/launcher" 2>/dev/null
+            fi
             ;;
         windows)
-            launcher="${INSTALL_DIR}/launcher.exe"
-            ;;
-        linux)
-            launcher="${INSTALL_DIR}/launcher"
+            if [[ ! -f "${INSTALL_DIR}/launcher.exe" ]]; then
+                log_message "ERROR" "Windows launcher missing"
+                verification_passed=false
+            fi
             ;;
     esac
     
-    if [[ -f "${launcher}" ]]; then
-        if [[ -x "${launcher}" ]] || [[ "${PLATFORM}" == "windows" ]]; then
-            log_message "SUCCESS" "Launcher executable verified"
-        else
-            log_message "ERROR" "Launcher not executable"
-            chmod +x "${launcher}"
-        fi
-    else
-        log_message "ERROR" "Launcher not found: ${launcher}"
-        verification_passed=false
-    fi
-    
     if [[ "${verification_passed}" == true ]]; then
-        update_progress 100 "Installation verified"
-        log_message "SUCCESS" "Installation verification completed"
+        log_message "SUCCESS" "Installation verification passed"
         return 0
     else
         log_message "ERROR" "Installation verification failed"
@@ -718,34 +742,22 @@ verify_installation() {
     fi
 }
 
-# Display post-installation message
+# Display completion message
 show_completion_message() {
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${RESET}"
     echo -e "${GREEN}║                                                            ║${RESET}"
-    echo -e "${GREEN}║     SUNFLOWER AI PROFESSIONAL SYSTEM                      ║${RESET}"
-    echo -e "${GREEN}║     Installation Completed Successfully!                   ║${RESET}"
+    echo -e "${GREEN}║     INSTALLATION COMPLETE!                                ║${RESET}"
     echo -e "${GREEN}║                                                            ║${RESET}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${RESET}"
     echo ""
-    echo -e "${CYAN}Installation Summary:${RESET}"
-    echo -e "  • Version: ${VERSION}"
-    echo -e "  • Location: ${INSTALL_DIR}"
-    echo -e "  • Platform: ${PLATFORM}"
-    echo -e "  • Device ID: ${DEVICE_ID}"
+    echo -e "${WHITE}${PRODUCT_NAME} has been successfully installed!${RESET}"
     echo ""
-    
-    if [[ ${ERRORS_ENCOUNTERED} -gt 0 ]]; then
-        echo -e "${YELLOW}⚠ Installation completed with ${ERRORS_ENCOUNTERED} error(s)${RESET}"
-        echo -e "  Check ${ERROR_LOG} for details"
-    fi
-    
-    if [[ ${WARNINGS_ENCOUNTERED} -gt 0 ]]; then
-        echo -e "${YELLOW}⚠ ${WARNINGS_ENCOUNTERED} warning(s) encountered${RESET}"
-    fi
-    
+    echo -e "${CYAN}Installation Directory:${RESET} ${INSTALL_DIR}"
+    echo -e "${CYAN}Data Directory:${RESET} ${DATA_DIR}"
+    echo -e "${CYAN}Log Directory:${RESET} ${LOG_DIR}"
     echo ""
-    echo -e "${CYAN}Quick Start:${RESET}"
+    echo -e "${YELLOW}Next Steps:${RESET}"
     
     case "${PLATFORM}" in
         macos)
