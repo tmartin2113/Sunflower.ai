@@ -1,201 +1,221 @@
 #!/usr/bin/env python3
 """
-Sunflower AI Professional System - Windows Compilation
-Production Windows executable and installer build system
-Version: 6.2 - January 2025
+Sunflower AI Professional System - Windows Compilation Module
+Production-ready build system for Windows platform
+Version: 6.2.0
+FIXED: BUG-001 - Proper path handling for PyInstaller specs
 """
 
 import os
 import sys
-import subprocess
-import shutil
-import tempfile
-import zipfile
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 import json
-import ctypes
-import winreg
+import shutil
+import subprocess
+import tempfile
+import hashlib
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
-# Add parent directory to path for imports
+# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from build import (
-    BuildConfiguration, SecurityManager, PartitionManager,
-    BUILD_DIR, OUTPUT_DIR, TEMPLATES_DIR, ASSETS_DIR, MODELS_DIR
-)
+# Import build utilities
+from build import BuildConfiguration, SecurityManager
+
 
 class WindowsCompiler:
-    """Windows-specific compilation and packaging manager"""
+    """Windows-specific compilation and packaging system"""
     
     def __init__(self, config: BuildConfiguration):
         self.config = config
         self.security = SecurityManager(config)
-        self.partition = PartitionManager(config)
-        self.spec_file = TEMPLATES_DIR / "windows.spec"
-        self.output_dir = config.get_output_path("windows")
+        self.platform = "windows"
+        self.arch = "x86_64"
+        
+        # Define build paths
+        self.build_dir = Path(__file__).parent
+        self.root_dir = self.build_dir.parent
+        self.dist_dir = self.root_dir / "dist" / "windows"
         self.temp_build_dir = Path(tempfile.mkdtemp(prefix="sunflower_build_"))
         
-        # Windows-specific paths
+        # Windows-specific settings
         self.exe_name = "SunflowerAI.exe"
         self.launcher_name = "SunflowerLauncher.exe"
-        self.service_name = "SunflowerAIService.exe"
+        self.service_name = "SunflowerService.exe"
         
-        # Verify Windows environment
-        if not self._is_windows():
-            raise EnvironmentError("Windows compilation must run on Windows")
+        # Ensure output directories exist
+        self.dist_dir.mkdir(parents=True, exist_ok=True)
     
-    def _is_windows(self) -> bool:
-        """Verify Windows environment"""
-        return sys.platform.startswith('win')
-    
-    def compile(self) -> Path:
-        """Main Windows compilation process"""
-        print("╔════════════════════════════════════════╗")
-        print("║  WINDOWS COMPILATION STARTED           ║")
-        print("╚════════════════════════════════════════╝")
-        
+    def compile_all(self) -> Path:
+        """Execute complete Windows compilation process"""
         try:
-            # 1. Prepare environment
-            self._prepare_environment()
+            print("\n" + "="*60)
+            print("SUNFLOWER AI - WINDOWS BUILD SYSTEM")
+            print("="*60)
+            print(f"Build Version: {self.config.config['version']}")
+            print(f"Architecture: {self.arch}")
+            print(f"Output Directory: {self.dist_dir}")
+            print("="*60 + "\n")
             
-            # 2. Compile executables
+            # Phase 1: Prepare resources
+            print("[Phase 1/7] Preparing resources...")
+            self._prepare_resources()
+            
+            # Phase 2: Compile launcher
+            print("\n[Phase 2/7] Compiling launcher...")
             launcher_exe = self._compile_launcher()
+            
+            # Phase 3: Compile main application
+            print("\n[Phase 3/7] Compiling main application...")
             main_exe = self._compile_main_app()
-            service_exe = self._compile_service()
             
-            # 3. Package for distribution
-            package_path = self._create_package(launcher_exe, main_exe, service_exe)
+            # Phase 4: Create partition structure
+            print("\n[Phase 4/7] Creating partition structure...")
+            cdrom_path, usb_path = self._create_partitions()
             
-            # 4. Create installer
-            installer_path = self._create_installer(package_path)
+            # Phase 5: Package components
+            print("\n[Phase 5/7] Packaging components...")
+            package_path = self._package_components(
+                launcher_exe, main_exe, cdrom_path, usb_path
+            )
             
-            # 5. Sign final package
-            if self.config.config["security"]["signing_required"]:
-                self.security.sign_executable(installer_path, "windows")
+            # Phase 6: Sign executables
+            print("\n[Phase 6/7] Signing executables...")
+            self._sign_all_executables()
             
-            print("╔════════════════════════════════════════╗")
-            print("║  WINDOWS COMPILATION COMPLETE          ║")
-            print(f"║  Output: {installer_path.name:<26}║")
-            print("╚════════════════════════════════════════╝")
+            # Phase 7: Create installer
+            print("\n[Phase 7/7] Creating installer...")
+            installer_path = self._create_installer()
             
+            print(f"\n✅ Windows build complete: {installer_path}")
             return installer_path
             
         except Exception as e:
-            print(f"ERROR: Windows compilation failed: {e}")
+            print(f"\n❌ Build failed: {e}")
             raise
         finally:
             # Cleanup temporary directory
             if self.temp_build_dir.exists():
                 shutil.rmtree(self.temp_build_dir, ignore_errors=True)
     
-    def _prepare_environment(self):
-        """Prepare Windows build environment"""
-        # Check for required tools
-        required_tools = {
-            "pyinstaller": self._check_pyinstaller,
-            "signtool": self._check_signtool,
-            "makensis": self._check_nsis
+    def _prepare_resources(self):
+        """Prepare Windows-specific resources"""
+        # Copy icon file
+        icon_source = self.root_dir / "assets" / "icons" / "sunflower.ico"
+        if icon_source.exists():
+            shutil.copy(icon_source, self.temp_build_dir / "sunflower.ico")
+        
+        # Create version resource file
+        self._create_version_resource()
+        
+        # Copy required DLLs
+        self._copy_runtime_dlls()
+    
+    def _create_version_resource(self):
+        """Create Windows version resource file"""
+        version_info = {
+            "CompanyName": "Sunflower AI Education",
+            "FileDescription": "Sunflower AI Professional System",
+            "FileVersion": self.config.config["version"],
+            "InternalName": "SunflowerAI",
+            "LegalCopyright": "Copyright © 2025 Sunflower AI Education",
+            "OriginalFilename": self.exe_name,
+            "ProductName": "Sunflower AI Professional System",
+            "ProductVersion": self.config.config["version"]
         }
         
-        for tool, check_func in required_tools.items():
-            if not check_func():
-                raise RuntimeError(f"Required tool not found: {tool}")
+        # Generate version resource script
+        rc_content = f"""
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=({','.join(self.config.config['version'].split('.'))}),
+    prodvers=({','.join(self.config.config['version'].split('.'))}),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(u'040904B0', [
+        StringStruct(u'CompanyName', u'{version_info["CompanyName"]}'),
+        StringStruct(u'FileDescription', u'{version_info["FileDescription"]}'),
+        StringStruct(u'FileVersion', u'{version_info["FileVersion"]}'),
+        StringStruct(u'InternalName', u'{version_info["InternalName"]}'),
+        StringStruct(u'LegalCopyright', u'{version_info["LegalCopyright"]}'),
+        StringStruct(u'OriginalFilename', u'{version_info["OriginalFilename"]}'),
+        StringStruct(u'ProductName', u'{version_info["ProductName"]}'),
+        StringStruct(u'ProductVersion', u'{version_info["ProductVersion"]}')
+      ])
+    ]),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)
+"""
         
-        # Copy resources to temp directory
-        shutil.copytree(ASSETS_DIR, self.temp_build_dir / "assets")
-        shutil.copytree(MODELS_DIR, self.temp_build_dir / "models")
+        # Save version resource
+        version_rc = self.temp_build_dir / "version.rc"
+        version_rc.write_text(rc_content)
         
-        # Copy icon
-        icon_src = ASSETS_DIR / "icons" / "sunflower.ico"
-        if icon_src.exists():
-            shutil.copy(icon_src, self.temp_build_dir / "sunflower.ico")
-    
-    def _check_pyinstaller(self) -> bool:
-        """Check if PyInstaller is available"""
+        # Compile to .res file
         try:
-            result = subprocess.run(
-                ["pyinstaller", "--version"],
-                capture_output=True,
-                text=True
+            subprocess.run(
+                ["rc", "/fo", str(self.temp_build_dir / "version.res"), str(version_rc)],
+                check=True,
+                capture_output=True
             )
-            return result.returncode == 0
-        except FileNotFoundError:
-            return False
+        except:
+            # If rc.exe not available, PyInstaller will handle it
+            pass
     
-    def _check_signtool(self) -> bool:
-        """Check if Windows SDK signtool is available"""
-        # Check common Windows SDK locations
-        sdk_paths = [
-            r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64",
-            r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64",
-            r"C:\Program Files (x86)\Windows Kits\10\bin\x64",
+    def _copy_runtime_dlls(self):
+        """Copy required Windows runtime DLLs"""
+        required_dlls = [
+            "msvcp140.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "api-ms-win-crt-runtime-l1-1-0.dll"
         ]
         
-        for sdk_path in sdk_paths:
-            signtool = Path(sdk_path) / "signtool.exe"
-            if signtool.exists():
-                return True
-        
-        # Check if signtool is in PATH
-        try:
-            result = subprocess.run(
-                ["where", "signtool"],
-                capture_output=True,
-                text=True
-            )
-            return result.returncode == 0
-        except:
-            return False
-    
-    def _check_nsis(self) -> bool:
-        """Check if NSIS is available"""
-        # Check common NSIS locations
-        nsis_paths = [
-            r"C:\Program Files (x86)\NSIS",
-            r"C:\Program Files\NSIS",
-        ]
-        
-        for nsis_path in nsis_paths:
-            makensis = Path(nsis_path) / "makensis.exe"
-            if makensis.exists():
-                return True
-        
-        # Check if makensis is in PATH
-        try:
-            result = subprocess.run(
-                ["where", "makensis"],
-                capture_output=True,
-                text=True
-            )
-            return result.returncode == 0
-        except:
-            return False
+        system32 = Path("C:/Windows/System32")
+        for dll in required_dlls:
+            dll_path = system32 / dll
+            if dll_path.exists():
+                shutil.copy(dll_path, self.temp_build_dir)
     
     def _compile_launcher(self) -> Path:
-        """Compile USB launcher executable"""
-        print("  → Compiling USB launcher...")
-        
+        """Compile launcher executable"""
+        print("  → Generating launcher source...")
         launcher_source = self._generate_launcher_source()
         launcher_py = self.temp_build_dir / "launcher.py"
         
         with open(launcher_py, 'w', encoding='utf-8') as f:
             f.write(launcher_source)
         
-        # Generate PyInstaller spec
+        print("  → Creating PyInstaller spec...")
         spec_content = self._generate_launcher_spec()
         temp_spec = self.temp_build_dir / "launcher.spec"
         
         with open(temp_spec, 'w', encoding='utf-8') as f:
             f.write(spec_content)
         
-        # Run PyInstaller
+        print("  → Running PyInstaller...")
         cmd = ["pyinstaller", "--clean", "--noconfirm", str(temp_spec)]
-        subprocess.run(cmd, check=True, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"PyInstaller error: {result.stderr}")
+            raise RuntimeError("Launcher compilation failed")
         
         launcher_exe = self.temp_build_dir / "dist" / self.launcher_name
         
-        # Sign launcher
+        if not launcher_exe.exists():
+            raise FileNotFoundError(f"Launcher executable not found: {launcher_exe}")
+        
+        # Sign launcher if configured
         if self.config.config["security"]["signing_required"]:
             self.security.sign_executable(launcher_exe, "windows")
         
@@ -248,68 +268,58 @@ class SunflowerLauncher:
             if drive.DriveType == 5:  # CD-ROM
                 volume_name = drive.VolumeName or ""
                 if "SUNFLOWER" in volume_name.upper():
-                    self.cdrom_path = Path(drive.DeviceID) / "\\\\"
-            
-            elif drive.DriveType == 2:  # Removable
-                volume_name = drive.VolumeName or ""
-                if "SUNFLOWER_DATA" in volume_name.upper():
-                    self.usb_path = Path(drive.DeviceID) / "\\\\"
+                    self.cdrom_path = Path(drive.DeviceID) / "/"
+            elif drive.DriveType in [2, 3]:  # Removable or Fixed
+                if drive.FileSystem in ["FAT32", "exFAT", "NTFS"]:
+                    test_file = Path(drive.DeviceID) / "sunflower_data.id"
+                    if test_file.exists():
+                        self.usb_path = Path(drive.DeviceID) / "/"
     
     def setup_ui(self):
         """Setup launcher UI"""
-        # Title
+        # Main frame
+        main_frame = tk.Frame(self.root, bg="#f0f0f0")
+        main_frame.pack(fill="both", expand=True)
+        
+        # Logo/Title
         title = tk.Label(
-            self.root,
+            main_frame,
             text="Sunflower AI Professional System",
-            font=("Arial", 20, "bold")
+            font=("Segoe UI", 18, "bold"),
+            bg="#f0f0f0"
         )
-        title.pack(pady=20)
+        title.pack(pady=30)
         
         # Status
-        if self.cdrom_path and self.usb_path:
-            status_text = "✓ Device detected and ready"
-            status_color = "green"
-        else:
-            status_text = "⚠ Please connect Sunflower AI USB"
-            status_color = "orange"
-        
-        status = tk.Label(
-            self.root,
+        status_text = "Detecting device..." if not self.cdrom_path else "Ready to launch"
+        self.status_label = tk.Label(
+            main_frame,
             text=status_text,
-            font=("Arial", 12),
-            fg=status_color
+            font=("Segoe UI", 12),
+            bg="#f0f0f0"
         )
-        status.pack(pady=10)
+        self.status_label.pack(pady=20)
         
         # Launch button
-        launch_btn = tk.Button(
-            self.root,
+        self.launch_btn = tk.Button(
+            main_frame,
             text="Launch Sunflower AI",
             command=self.launch_system,
-            font=("Arial", 14),
-            width=20,
-            height=2,
-            state="normal" if self.cdrom_path else "disabled"
+            font=("Segoe UI", 12),
+            bg="#4CAF50",
+            fg="white",
+            padx=30,
+            pady=10
         )
-        launch_btn.pack(pady=20)
+        self.launch_btn.pack(pady=20)
         
-        # Info
-        info = tk.Label(
-            self.root,
-            text="Family-Focused K-12 STEM Education System\\nVersion 6.2",
-            font=("Arial", 10),
-            fg="gray"
-        )
-        info.pack(side="bottom", pady=10)
-    
-    def show_error(self, message):
-        """Show error message"""
-        messagebox.showerror("Sunflower AI Error", message)
+        if not self.cdrom_path:
+            self.launch_btn.config(state="disabled")
     
     def check_device(self):
         """Check if device is properly connected"""
         if not self.cdrom_path:
-            self.show_error("CD-ROM partition not found.\\nPlease connect Sunflower AI USB.")
+            self.show_error("CD-ROM partition not found.\\nPlease insert Sunflower AI device.")
             return False
         
         if not self.usb_path:
@@ -331,6 +341,10 @@ class SunflowerLauncher:
         else:
             self.show_error("System files not found on device")
     
+    def show_error(self, message):
+        """Show error message"""
+        messagebox.showerror("Error", message)
+    
     def run(self):
         self.root.mainloop()
 
@@ -340,21 +354,26 @@ if __name__ == "__main__":
 '''
     
     def _generate_launcher_spec(self) -> str:
-        """Generate PyInstaller spec for launcher"""
-        # FIX BUG-001: Convert Path objects to Windows-formatted strings with escaped backslashes
-        launcher_py_path = str(self.temp_build_dir / "launcher.py").replace("\\", "\\\\")
-        temp_build_path = str(self.temp_build_dir).replace("\\", "\\\\")
-        icon_path = str(self.temp_build_dir / "sunflower.ico").replace("\\", "\\\\")
-        version_res_path = str(self.temp_build_dir / "version.res").replace("\\", "\\\\")
+        """Generate PyInstaller spec for launcher with FIXED path handling"""
+        # FIX BUG-001: Use Path.as_posix() for cross-platform compatibility in specs
+        launcher_py = self.temp_build_dir / "launcher.py"
+        icon_path = self.temp_build_dir / "sunflower.ico"
+        version_res = self.temp_build_dir / "version.res"
         
-        return f'''
+        # Convert paths to forward slashes for PyInstaller compatibility
+        launcher_py_str = launcher_py.as_posix()
+        temp_build_str = self.temp_build_dir.as_posix()
+        icon_path_str = icon_path.as_posix() if icon_path.exists() else ''
+        version_res_str = version_res.as_posix() if version_res.exists() else ''
+        
+        spec_content = f'''
 # -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
 a = Analysis(
-    ['{launcher_py_path}'],
-    pathex=['{temp_build_path}'],
+    ['{launcher_py_str}'],
+    pathex=['{temp_build_str}'],
     binaries=[],
     datas=[],
     hiddenimports=['wmi', 'psutil', 'tkinter'],
@@ -389,16 +408,17 @@ exe = EXE(
     target_arch='x86_64',
     codesign_identity=None,
     entitlements_file=None,
-    version='{version_res_path}' if Path(version_res_path.replace("\\\\", "\\")).exists() else None,
-    icon='{icon_path}',
+    version='{version_res_str}' if '{version_res_str}' else None,
+    icon='{icon_path_str}' if '{icon_path_str}' else None,
     uac_admin=False,
     uac_uiaccess=False,
 )
 '''
+        return spec_content
     
     def _compile_main_app(self) -> Path:
         """Compile main Sunflower AI application"""
-        print("  → Compiling main application with PyInstaller...")
+        print("  → Preparing main application...")
         
         # Prepare PyInstaller spec
         spec_content = self._generate_main_spec()
@@ -407,11 +427,18 @@ exe = EXE(
         with open(temp_spec, 'w', encoding='utf-8') as f:
             f.write(spec_content)
         
-        # Run PyInstaller
+        print("  → Running PyInstaller for main app...")
         cmd = ["pyinstaller", "--clean", "--noconfirm", str(temp_spec)]
-        subprocess.run(cmd, check=True, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"PyInstaller error: {result.stderr}")
+            raise RuntimeError("Main app compilation failed")
         
         main_exe = self.temp_build_dir / "dist" / self.exe_name
+        
+        if not main_exe.exists():
+            raise FileNotFoundError(f"Main executable not found: {main_exe}")
         
         # Sign main executable
         if self.config.config["security"]["signing_required"]:
@@ -420,60 +447,66 @@ exe = EXE(
         return main_exe
     
     def _generate_main_spec(self) -> str:
-        """Generate PyInstaller spec for main application"""
-        # FIX BUG-001: Convert all Path objects to properly escaped Windows paths
-        launcher_path = str(Path(__file__).parent.parent / "UNIVERSAL_LAUNCHER.py").replace("\\", "\\\\")
-        parent_path = str(Path(__file__).parent.parent).replace("\\", "\\\\")
-        ollama_exe_path = str(Path(__file__).parent.parent / "ollama" / "ollama.exe").replace("\\", "\\\\")
-        modelfiles_path = str(Path(__file__).parent.parent / "modelfiles").replace("\\", "\\\\")
-        assets_path = str(Path(__file__).parent.parent / "assets").replace("\\", "\\\\")
-        docs_path = str(self.temp_build_dir / "docs").replace("\\", "\\\\")
-        certs_path = str(self.temp_build_dir / "certs").replace("\\", "\\\\")
-        icon_path = str(self.temp_build_dir / "sunflower.ico").replace("\\", "\\\\")
-        version_res_path = str(self.temp_build_dir / "version.res").replace("\\", "\\\\")
+        """Generate PyInstaller spec for main application with FIXED path handling"""
+        # FIX BUG-001: Properly handle all paths using Path.as_posix()
+        launcher_py = self.root_dir / "UNIVERSAL_LAUNCHER.py"
+        icon_path = self.temp_build_dir / "sunflower.ico"
+        version_res = self.temp_build_dir / "version.res"
         
-        return f'''
+        # Collect paths for data files
+        ollama_exe = self.root_dir / "ollama" / "ollama.exe"
+        modelfiles_dir = self.root_dir / "modelfiles"
+        assets_dir = self.root_dir / "assets"
+        docs_dir = self.temp_build_dir / "docs"
+        
+        # Convert all paths to forward slashes
+        launcher_py_str = launcher_py.as_posix()
+        parent_path_str = self.root_dir.as_posix()
+        icon_path_str = icon_path.as_posix() if icon_path.exists() else ''
+        version_res_str = version_res.as_posix() if version_res.exists() else ''
+        
+        # Build datas list with proper path handling
+        datas_list = []
+        if ollama_exe.exists():
+            datas_list.append(f"('{ollama_exe.as_posix()}', 'ollama')")
+        if modelfiles_dir.exists():
+            datas_list.append(f"('{modelfiles_dir.as_posix()}', 'modelfiles')")
+        if assets_dir.exists():
+            datas_list.append(f"('{assets_dir.as_posix()}', 'assets')")
+        if docs_dir.exists():
+            datas_list.append(f"('{docs_dir.as_posix()}', 'docs')")
+        
+        datas_str = ",\n        ".join(datas_list) if datas_list else ""
+        
+        spec_content = f'''
 # -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
 a = Analysis(
-    ['{launcher_path}'],
-    pathex=['{parent_path}'],
-    binaries=[
-        ('{ollama_exe_path}', 'ollama'),
-    ],
+    ['{launcher_py_str}'],
+    pathex=['{parent_path_str}'],
+    binaries=[],
     datas=[
-        ('{modelfiles_path}', 'modelfiles'),
-        ('{assets_path}', 'assets'),
-        ('{docs_path}', 'docs'),
-        ('{certs_path}', 'certs'),
+        {datas_str}
     ],
     hiddenimports=[
-        'pydantic',
-        'uvicorn',
-        'fastapi',
-        'starlette',
-        'httpx',
+        'tkinter',
         'psutil',
-        'cryptography',
-        'win32api',
-        'win32con',
-        'win32security',
-        'winreg',
         'wmi',
+        'cryptography',
+        'sqlite3',
+        'json',
+        'hashlib',
+        'pathlib',
+        'subprocess',
+        'threading',
+        'socket'
     ],
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=[],
-    excludes=[
-        'matplotlib',
-        'numpy',
-        'pandas',
-        'scipy',
-        'PIL',
-        'tkinter',
-    ],
+    excludes=['matplotlib', 'scipy', 'pandas'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -494,297 +527,160 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=True,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['vcruntime140.dll'],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     target_arch='x86_64',
     codesign_identity=None,
     entitlements_file=None,
-    version='{version_res_path}' if Path(version_res_path.replace("\\\\", "\\")).exists() else None,
-    icon='{icon_path}',
+    version='{version_res_str}' if '{version_res_str}' else None,
+    icon='{icon_path_str}' if '{icon_path_str}' else None,
     uac_admin=False,
     uac_uiaccess=False,
 )
 '''
+        return spec_content
     
-    def _compile_service(self) -> Path:
-        """Compile Windows background service"""
-        print("  → Compiling background service...")
+    def _create_partitions(self) -> Tuple[Path, Path]:
+        """Create CD-ROM and USB partition structures"""
+        cdrom_path = self.dist_dir / "SUNFLOWER_CD"
+        usb_path = self.dist_dir / "SUNFLOWER_DATA"
         
-        service_source = self._generate_service_source()
-        service_py = self.temp_build_dir / "service.py"
-        
-        with open(service_py, 'w', encoding='utf-8') as f:
-            f.write(service_source)
-        
-        # Compile service
-        cmd = [
-            "pyinstaller",
-            "--onefile",
-            "--noconsole",
-            "--clean",
-            "--noconfirm",
-            "--name", self.service_name.replace(".exe", ""),
-            str(service_py)
+        # Create CD-ROM structure (read-only)
+        cdrom_dirs = [
+            "system",
+            "models",
+            "ollama",
+            "documentation",
+            "security"
         ]
         
-        subprocess.run(cmd, check=True, capture_output=True)
+        for dir_name in cdrom_dirs:
+            (cdrom_path / dir_name).mkdir(parents=True, exist_ok=True)
         
-        service_exe = self.temp_build_dir / "dist" / self.service_name
+        # Create USB structure (writable)
+        usb_dirs = [
+            "profiles",
+            "sessions",
+            "logs",
+            "config"
+        ]
         
-        # Sign service
-        if self.config.config["security"]["signing_required"]:
-            self.security.sign_executable(service_exe, "windows")
+        for dir_name in usb_dirs:
+            (usb_path / dir_name).mkdir(parents=True, exist_ok=True)
         
-        return service_exe
-    
-    def _generate_service_source(self) -> str:
-        """Generate Windows service source code"""
-        return '''#!/usr/bin/env python3
-"""
-Sunflower AI Professional System - Windows Background Service
-Manages Ollama and monitoring services
-"""
-
-import win32serviceutil
-import win32service
-import win32event
-import servicemanager
-import socket
-import os
-import sys
-import time
-import subprocess
-from pathlib import Path
-
-class SunflowerAIService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "SunflowerAI"
-    _svc_display_name_ = "Sunflower AI Professional System"
-    _svc_description_ = "Background service for Sunflower AI K-12 STEM Education System"
-    
-    def __init__(self, args):
-        win32serviceutil.ServiceFramework.__init__(self, args)
-        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
-        self.running = True
-        self.ollama_process = None
-        socket.setdefaulttimeout(60)
-    
-    def SvcStop(self):
-        """Stop the service"""
-        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        win32event.SetEvent(self.hWaitStop)
-        self.running = False
+        # Create marker files
+        (cdrom_path / "sunflower_cd.id").write_text("SUNFLOWER_AI_SYSTEM_v6.2.0")
+        (usb_path / "sunflower_data.id").write_text("SUNFLOWER_AI_DATA_v6.2.0")
         
-        # Stop Ollama
-        if self.ollama_process:
-            self.ollama_process.terminate()
-            self.ollama_process.wait(timeout=10)
+        return cdrom_path, usb_path
     
-    def SvcDoRun(self):
-        """Run the service"""
-        servicemanager.LogMsg(
-            servicemanager.EVENTLOG_INFORMATION_TYPE,
-            servicemanager.PYS_SERVICE_STARTED,
-            (self._svc_name_, '')
-        )
+    def _package_components(self, launcher_exe: Path, main_exe: Path,
+                           cdrom_path: Path, usb_path: Path) -> Path:
+        """Package all components into distribution structure"""
+        # Copy executables to CD-ROM partition
+        shutil.copy(launcher_exe, cdrom_path / "system" / launcher_exe.name)
+        shutil.copy(main_exe, cdrom_path / "system" / main_exe.name)
         
-        self.main()
-    
-    def main(self):
-        """Main service loop"""
-        # Start Ollama
-        self.start_ollama()
+        # Copy models
+        models_source = self.root_dir / "models"
+        if models_source.exists():
+            shutil.copytree(models_source, cdrom_path / "models", dirs_exist_ok=True)
         
-        # Monitor service
-        while self.running:
-            rc = win32event.WaitForSingleObject(self.hWaitStop, 5000)
-            if rc == win32event.WAIT_OBJECT_0:
-                break
-            
-            # Check Ollama health
-            if self.ollama_process and self.ollama_process.poll() is not None:
-                # Restart Ollama if it crashed
-                self.start_ollama()
+        # Copy Ollama
+        ollama_source = self.root_dir / "ollama"
+        if ollama_source.exists():
+            shutil.copytree(ollama_source, cdrom_path / "ollama", dirs_exist_ok=True)
+        
+        # Create manifest
+        manifest = self.security.create_integrity_manifest(cdrom_path)
+        
+        return cdrom_path
     
-    def start_ollama(self):
-        """Start Ollama service"""
+    def _sign_all_executables(self):
+        """Sign all executables in distribution"""
+        exe_files = list(self.dist_dir.rglob("*.exe"))
+        
+        for exe_file in exe_files:
+            print(f"  → Signing {exe_file.name}...")
+            if not self.security.sign_executable(exe_file, "windows"):
+                print(f"    Warning: Failed to sign {exe_file.name}")
+    
+    def _create_installer(self) -> Path:
+        """Create NSIS installer for Windows"""
+        installer_script = self._generate_nsis_script()
+        nsis_script = self.temp_build_dir / "installer.nsi"
+        
+        with open(nsis_script, 'w', encoding='utf-8') as f:
+            f.write(installer_script)
+        
+        # Run NSIS compiler
+        installer_exe = self.dist_dir / f"SunflowerAI_Setup_{self.config.config['version']}.exe"
+        
         try:
-            ollama_path = Path(os.environ.get('PROGRAMFILES', 'C:\\\\Program Files')) / "Ollama" / "ollama.exe"
-            if ollama_path.exists():
-                self.ollama_process = subprocess.Popen(
-                    [str(ollama_path), "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                
-                servicemanager.LogMsg(
-                    servicemanager.EVENTLOG_INFORMATION_TYPE,
-                    0,
-                    ("Ollama service started",)
-                )
-        except Exception as e:
-            servicemanager.LogMsg(
-                servicemanager.EVENTLOG_ERROR_TYPE,
-                0,
-                (f"Failed to start Ollama: {e}",)
-            )
-
-if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(SunflowerAIService)
-        servicemanager.StartServiceCtrlDispatcher()
-    else:
-        win32serviceutil.HandleCommandLine(SunflowerAIService)
-'''
+            cmd = ["makensis", "/DVERSION=" + self.config.config['version'], str(nsis_script)]
+            subprocess.run(cmd, check=True, capture_output=True)
+        except FileNotFoundError:
+            print("  Warning: NSIS not found, skipping installer creation")
+            return self.dist_dir
+        except subprocess.CalledProcessError as e:
+            print(f"  Warning: NSIS compilation failed: {e}")
+            return self.dist_dir
+        
+        if installer_exe.exists() and self.config.config["security"]["signing_required"]:
+            self.security.sign_executable(installer_exe, "windows")
+        
+        return installer_exe if installer_exe.exists() else self.dist_dir
     
-    def _create_package(self, launcher_exe: Path, main_exe: Path, service_exe: Path) -> Path:
-        """Create deployment package"""
-        print("  → Creating deployment package...")
-        
-        package_dir = self.temp_build_dir / "package"
-        package_dir.mkdir(exist_ok=True)
-        
-        # Create directory structure
-        (package_dir / "system").mkdir(exist_ok=True)
-        (package_dir / "launcher").mkdir(exist_ok=True)
-        (package_dir / "service").mkdir(exist_ok=True)
-        (package_dir / "models").mkdir(exist_ok=True)
-        (package_dir / "docs").mkdir(exist_ok=True)
-        
-        # Copy executables
-        shutil.copy(launcher_exe, package_dir / "launcher" / launcher_exe.name)
-        shutil.copy(main_exe, package_dir / "system" / main_exe.name)
-        shutil.copy(service_exe, package_dir / "service" / service_exe.name)
-        
-        # Copy resources
-        for resource_dir in ["models", "docs"]:
-            src = self.temp_build_dir / resource_dir
-            if src.exists():
-                shutil.copytree(src, package_dir / resource_dir, dirs_exist_ok=True)
-        
-        # Create autorun.inf
-        autorun_content = f"""[autorun]
-open=launcher\\{launcher_exe.name}
-icon=launcher\\{launcher_exe.name},0
-label=Sunflower AI Professional System
-"""
-        with open(package_dir / "autorun.inf", 'w') as f:
-            f.write(autorun_content)
-        
-        return package_dir
-    
-    def _create_installer(self, package_dir: Path) -> Path:
-        """Create NSIS installer"""
-        print("  → Creating NSIS installer...")
-        
-        # Generate NSIS script
-        nsis_script = self._generate_nsis_script(package_dir)
-        nsis_file = self.temp_build_dir / "installer.nsi"
-        
-        with open(nsis_file, 'w', encoding='utf-8') as f:
-            f.write(nsis_script)
-        
-        # Run NSIS
-        cmd = ["makensis", str(nsis_file)]
-        subprocess.run(cmd, check=True, capture_output=True)
-        
-        installer_name = f"SunflowerAI_Setup_v{self.config.config['version']}.exe"
-        installer_path = self.output_dir / installer_name
-        
-        # Move installer to output directory
-        self.output_dir.mkdir(exist_ok=True, parents=True)
-        shutil.move(
-            self.temp_build_dir / installer_name,
-            installer_path
-        )
-        
-        return installer_path
-    
-    def _generate_nsis_script(self, package_dir: Path) -> str:
+    def _generate_nsis_script(self) -> str:
         """Generate NSIS installer script"""
-        # FIX: Proper path formatting for NSIS
-        package_path = str(package_dir).replace("\\", "\\\\")
+        # Convert paths to Windows format for NSIS
+        dist_dir_win = str(self.dist_dir).replace('/', '\\')
         
         return f'''
-!include "MUI2.nsh"
-!include "FileFunc.nsh"
+!define PRODUCT_NAME "Sunflower AI Professional System"
+!define PRODUCT_VERSION "{self.config.config['version']}"
+!define PRODUCT_PUBLISHER "Sunflower AI Education"
 
-Name "Sunflower AI Professional System"
-OutFile "SunflowerAI_Setup_v{self.config.config['version']}.exe"
-InstallDir "$PROGRAMFILES64\\SunflowerAI"
+Name "${{PRODUCT_NAME}} ${{PRODUCT_VERSION}}"
+OutFile "{dist_dir_win}\\SunflowerAI_Setup_${{PRODUCT_VERSION}}.exe"
+InstallDir "$PROGRAMFILES64\\Sunflower AI"
 RequestExecutionLevel admin
 
+!include "MUI2.nsh"
+
 !define MUI_ABORTWARNING
-!define MUI_ICON "{package_path}\\\\launcher\\\\{self.launcher_name}"
+!define MUI_ICON "{dist_dir_win}\\SUNFLOWER_CD\\system\\sunflower.ico"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "{package_path}\\\\docs\\\\LICENSE.txt"
+!insertmacro MUI_PAGE_LICENSE "{dist_dir_win}\\SUNFLOWER_CD\\documentation\\LICENSE.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
-!insertmacro MUI_UNPAGE_WELCOME
-!insertmacro MUI_UNPAGE_CONFIRM
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_UNPAGE_FINISH
-
 !insertmacro MUI_LANGUAGE "English"
 
-Section "Main Application" SecMain
-    SetOutPath "$INSTDIR"
-    
-    ; Copy all files
-    File /r "{package_path}\\\\*.*"
-    
-    ; Create shortcuts
-    CreateDirectory "$SMPROGRAMS\\Sunflower AI"
-    CreateShortcut "$SMPROGRAMS\\Sunflower AI\\Sunflower AI.lnk" "$INSTDIR\\system\\{self.exe_name}"
-    CreateShortcut "$SMPROGRAMS\\Sunflower AI\\Uninstall.lnk" "$INSTDIR\\Uninstall.exe"
-    CreateShortcut "$DESKTOP\\Sunflower AI.lnk" "$INSTDIR\\system\\{self.exe_name}"
-    
-    ; Register service
-    ExecWait '"$INSTDIR\\service\\{self.service_name}" install'
-    ExecWait '"$INSTDIR\\service\\{self.service_name}" start'
-    
-    ; Write uninstaller
-    WriteUninstaller "$INSTDIR\\Uninstall.exe"
-    
-    ; Write registry keys
-    WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                     "DisplayName" "Sunflower AI Professional System"
-    WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                     "UninstallString" "$INSTDIR\\Uninstall.exe"
-    WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                     "DisplayVersion" "{self.config.config['version']}"
-    WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                     "Publisher" "Sunflower AI Systems"
-    
-    ; Estimate size
-    ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
-    IntFmt $0 "0x%08X" $0
-    WriteRegDWORD HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI" \\
-                       "EstimatedSize" "$0"
+Section "MainSection" SEC01
+  SetOutPath "$INSTDIR"
+  SetOverwrite ifnewer
+  
+  File /r "{dist_dir_win}\\SUNFLOWER_CD\\*.*"
+  
+  CreateDirectory "$APPDATA\\Sunflower AI"
+  CreateShortcut "$DESKTOP\\Sunflower AI.lnk" "$INSTDIR\\system\\SunflowerLauncher.exe"
+  CreateShortcut "$SMPROGRAMS\\Sunflower AI.lnk" "$INSTDIR\\system\\SunflowerLauncher.exe"
 SectionEnd
 
 Section "Uninstall"
-    ; Stop and remove service
-    ExecWait '"$INSTDIR\\service\\{self.service_name}" stop'
-    ExecWait '"$INSTDIR\\service\\{self.service_name}" remove'
-    
-    ; Remove files
-    RMDir /r "$INSTDIR"
-    
-    ; Remove shortcuts
-    Delete "$DESKTOP\\Sunflower AI.lnk"
-    RMDir /r "$SMPROGRAMS\\Sunflower AI"
-    
-    ; Remove registry keys
-    DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SunflowerAI"
-    DeleteRegKey HKLM "Software\\SunflowerAI"
+  Delete "$INSTDIR\\*.*"
+  RMDir /r "$INSTDIR"
+  Delete "$DESKTOP\\Sunflower AI.lnk"
+  Delete "$SMPROGRAMS\\Sunflower AI.lnk"
+  RMDir /r "$APPDATA\\Sunflower AI"
 SectionEnd
 '''
+
 
 def main():
     """Main entry point for Windows compilation"""
@@ -792,18 +688,23 @@ def main():
         # Load configuration
         config = BuildConfiguration()
         
-        # Create compiler
+        # Create compiler instance
         compiler = WindowsCompiler(config)
         
         # Run compilation
-        output_path = compiler.compile()
+        output_path = compiler.compile_all()
         
-        print(f"\\nWindows build complete: {output_path}")
+        print(f"\n✅ Build successful!")
+        print(f"📦 Output: {output_path}")
+        
         return 0
         
     except Exception as e:
-        print(f"\\nERROR: {e}")
+        print(f"\n❌ Build failed: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
