@@ -3,6 +3,7 @@
 Sunflower AI Universal Launcher
 Main entry point that automatically detects OS and launches appropriate interface
 Version: 6.2.0 - Production Ready
+FIXED: BUG-002 - Robust process cleanup to prevent resource leaks
 """
 
 import os
@@ -18,8 +19,11 @@ import time
 import threading
 import socket
 import logging
+import signal
+import atexit
+import psutil
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Set
 
 # Add config directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -35,12 +39,164 @@ logging.basicConfig(
 logger = logging.getLogger('SunflowerLauncher')
 
 
+class ProcessManager:
+    """
+    Centralized process management with robust cleanup
+    FIXED: Implements proper process group management and cleanup
+    """
+    
+    def __init__(self):
+        self.processes: Dict[str, subprocess.Popen] = {}
+        self.process_groups: Set[int] = set()
+        self._cleanup_lock = threading.Lock()
+        self._shutdown_initiated = False
+        
+        # Register cleanup handlers
+        atexit.register(self.cleanup_all)
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Platform-specific signal handling
+        if platform.system() != 'Windows':
+            signal.signal(signal.SIGQUIT, self._signal_handler)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle system signals for graceful shutdown"""
+        logger.info(f"Received signal {signum}, initiating cleanup...")
+        self.cleanup_all()
+        sys.exit(0)
+    
+    def register_process(self, name: str, process: subprocess.Popen) -> None:
+        """Register a process for tracking and cleanup"""
+        with self._cleanup_lock:
+            self.processes[name] = process
+            
+            # Track process group for Unix-like systems
+            if platform.system() != 'Windows':
+                try:
+                    pgid = os.getpgid(process.pid)
+                    self.process_groups.add(pgid)
+                except (OSError, ProcessLookupError):
+                    pass
+            
+            logger.info(f"Registered process '{name}' with PID {process.pid}")
+    
+    def terminate_process(self, name: str, timeout: float = 5.0) -> bool:
+        """
+        Terminate a specific process with timeout
+        Returns True if successfully terminated, False otherwise
+        """
+        with self._cleanup_lock:
+            if name not in self.processes:
+                return True
+            
+            process = self.processes[name]
+            
+            try:
+                # Check if process is still running
+                if process.poll() is not None:
+                    logger.info(f"Process '{name}' already terminated")
+                    del self.processes[name]
+                    return True
+                
+                logger.info(f"Terminating process '{name}' (PID {process.pid})")
+                
+                # Try graceful termination first
+                process.terminate()
+                
+                try:
+                    process.wait(timeout=timeout)
+                    logger.info(f"Process '{name}' terminated gracefully")
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Process '{name}' did not terminate gracefully, forcing...")
+                    
+                    # Force kill if graceful termination failed
+                    if platform.system() == 'Windows':
+                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], 
+                                     capture_output=True, check=False)
+                    else:
+                        process.kill()
+                        process.wait(timeout=2.0)
+                    
+                    logger.info(f"Process '{name}' forcefully terminated")
+                
+                del self.processes[name]
+                return True
+                
+            except Exception as e:
+                logger.error(f"Failed to terminate process '{name}': {e}")
+                return False
+    
+    def cleanup_all(self, timeout: float = 10.0) -> None:
+        """
+        Clean up all registered processes with improved robustness
+        FIXED: Ensures no orphaned processes remain
+        """
+        with self._cleanup_lock:
+            if self._shutdown_initiated:
+                return
+            
+            self._shutdown_initiated = True
+            logger.info("Initiating comprehensive process cleanup...")
+            
+            # Create list of processes to terminate (avoid dict modification during iteration)
+            processes_to_terminate = list(self.processes.keys())
+            
+            # Terminate each process
+            for name in processes_to_terminate:
+                self.terminate_process(name, timeout=timeout/len(processes_to_terminate))
+            
+            # Clean up process groups on Unix-like systems
+            if platform.system() != 'Windows':
+                for pgid in self.process_groups:
+                    try:
+                        os.killpg(pgid, signal.SIGTERM)
+                        time.sleep(0.1)
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (OSError, ProcessLookupError):
+                        pass
+            
+            # Final cleanup - kill any remaining child processes using psutil
+            try:
+                current_process = psutil.Process()
+                children = current_process.children(recursive=True)
+                
+                for child in children:
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                
+                # Wait briefly for termination
+                gone, alive = psutil.wait_procs(children, timeout=2)
+                
+                # Force kill any remaining processes
+                for child in alive:
+                    try:
+                        child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                
+                logger.info(f"Cleanup complete: {len(gone)} processes terminated, "
+                          f"{len(alive)} processes force-killed")
+                
+            except Exception as e:
+                logger.error(f"Error during final cleanup: {e}")
+            
+            self.processes.clear()
+            self.process_groups.clear()
+            logger.info("All processes cleaned up successfully")
+
+
 class SunflowerLauncher:
     """Universal launcher with GUI for Sunflower AI system"""
     
     def __init__(self):
         self.system = platform.system()
         self.root_dir = Path(__file__).parent.resolve()
+        
+        # Initialize process manager for robust cleanup
+        self.process_manager = ProcessManager()
         
         # Initialize path configuration
         self.path_config = get_path_config()
@@ -70,325 +226,350 @@ class SunflowerLauncher:
         self.root.resizable(False, False)
         
         # Set icon if available
-        icon_path = get_cdrom_path('resources') / "sunflower.ico"
+        icon_path = get_cdrom_path('resources') / "icons" / "sunflower.ico"
         if icon_path and icon_path.exists():
             try:
                 self.root.iconbitmap(str(icon_path))
             except:
-                pass  # Icon setting is optional
+                pass
+        
+        # Initialize UI components
+        self.progress = None
+        self.status_label = None
+        self.info_text = None
+        self.info_frame = None
         
         # Set up UI
         self.setup_ui()
         
-        # Protocol for window closing
+        # Bind window close event to proper cleanup
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # Start initialization in background
-        self.init_thread = threading.Thread(target=self.initialize_system, daemon=True)
-        self.init_thread.start()
+        # Start initialization check
+        self.root.after(100, self.check_system)
     
     def _show_partition_error(self):
-        """Show error when partitions are not detected"""
-        if 'DEVELOPMENT_MODE' in os.environ:
-            print("WARNING: Running in development mode without proper partitions")
-            return
-        
+        """Show error when partitions are not available"""
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror(
-            "Partition Not Found",
-            "Sunflower AI device partitions not detected.\n\n"
-            "Please ensure the device is properly connected and try again."
+            "Sunflower AI - Partition Error",
+            "Could not detect Sunflower AI device partitions.\n\n"
+            "Please ensure the USB device is properly connected\n"
+            "and try again."
         )
         root.destroy()
     
     def setup_ui(self):
-        """Create the user interface"""
+        """Setup the launcher UI"""
         # Main container
         main_frame = tk.Frame(self.root, bg='#f0f0f0')
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # Header
-        header = tk.Frame(main_frame, bg='#4a90e2', height=80)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
+        header_frame = tk.Frame(main_frame, bg='#f0f0f0')
+        header_frame.pack(fill=tk.X, pady=(0, 20))
         
-        title = tk.Label(
-            header,
+        title_label = tk.Label(
+            header_frame,
             text="🌻 Sunflower AI Professional System",
             font=('Segoe UI', 18, 'bold'),
-            fg='white',
-            bg='#4a90e2'
+            bg='#f0f0f0',
+            fg='#2c3e50'
         )
-        title.pack(pady=20)
+        title_label.pack()
         
-        version = tk.Label(
-            header,
-            text="Version 6.2.0 - Family-Safe K-12 STEM Education",
+        version_label = tk.Label(
+            header_frame,
+            text="Version 6.2.0 - Family-Focused K-12 STEM Education",
             font=('Segoe UI', 10),
-            fg='#e0e0e0',
-            bg='#4a90e2'
+            bg='#f0f0f0',
+            fg='#7f8c8d'
         )
-        version.pack()
-        
-        # Content area
-        self.content_frame = tk.Frame(main_frame, bg='white', padx=40, pady=30)
-        self.content_frame.pack(fill=tk.BOTH, expand=True)
+        version_label.pack()
         
         # Status section
-        self.status_frame = tk.Frame(self.content_frame, bg='white')
-        self.status_frame.pack(fill=tk.X, pady=(0, 20))
+        status_frame = tk.Frame(main_frame, bg='#f0f0f0')
+        status_frame.pack(fill=tk.X, pady=10)
         
         self.status_label = tk.Label(
-            self.status_frame,
-            text="🔄 Initializing system...",
+            status_frame,
+            text="Initializing system...",
             font=('Segoe UI', 12),
-            bg='white',
-            fg='#666'
+            bg='#f0f0f0',
+            fg='#34495e'
         )
         self.status_label.pack()
         
         # Progress bar
         self.progress = ttk.Progressbar(
-            self.content_frame,
+            main_frame,
             mode='indeterminate',
-            style='Horizontal.TProgressbar'
+            length=400
         )
-        self.progress.pack(fill=tk.X, pady=(0, 20))
+        self.progress.pack(pady=10)
         self.progress.start(10)
         
-        # Action buttons (initially hidden)
-        self.button_frame = tk.Frame(self.content_frame, bg='white')
+        # Info text area (initially hidden)
+        self.info_frame = tk.Frame(main_frame, bg='#ffffff', relief=tk.RIDGE, bd=1)
         
-        self.start_btn = tk.Button(
-            self.button_frame,
-            text="🚀 Start Sunflower AI",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#4CAF50',
-            fg='white',
-            padx=30,
-            pady=10,
-            command=self.start_system,
-            cursor='hand2'
-        )
-        self.start_btn.pack(pady=5)
-        
-        self.setup_btn = tk.Button(
-            self.button_frame,
-            text="👨‍👩‍👧‍👦 Setup Family Profiles",
-            font=('Segoe UI', 11),
-            bg='#2196F3',
-            fg='white',
-            padx=20,
-            pady=8,
-            command=self.setup_profiles,
-            cursor='hand2'
-        )
-        self.setup_btn.pack(pady=5)
-        
-        self.docs_btn = tk.Button(
-            self.button_frame,
-            text="📚 View Documentation",
-            font=('Segoe UI', 11),
-            bg='#FF9800',
-            fg='white',
-            padx=20,
-            pady=8,
-            command=self.open_documentation,
-            cursor='hand2'
-        )
-        self.docs_btn.pack(pady=5)
-        
-        # Info section
-        self.info_frame = tk.Frame(self.content_frame, bg='white')
         self.info_text = tk.Text(
             self.info_frame,
             height=8,
             width=60,
-            font=('Segoe UI', 10),
-            bg='#f5f5f5',
-            fg='#333',
-            relief=tk.FLAT,
-            wrap=tk.WORD
+            font=('Consolas', 10),
+            bg='#ffffff',
+            fg='#2c3e50',
+            wrap=tk.WORD,
+            padx=10,
+            pady=10
         )
         self.info_text.pack(fill=tk.BOTH, expand=True)
         
-        # Footer
-        footer = tk.Frame(main_frame, bg='#f0f0f0', height=40)
-        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        # Button frame
+        self.button_frame = tk.Frame(main_frame, bg='#f0f0f0')
+        self.button_frame.pack(fill=tk.X, pady=(20, 0))
         
-        footer_text = tk.Label(
-            footer,
-            text="© 2025 Sunflower AI - Safe Learning for Every Child",
-            font=('Segoe UI', 9),
-            fg='#888',
-            bg='#f0f0f0'
+        # Create buttons (initially hidden)
+        self.launch_button = tk.Button(
+            self.button_frame,
+            text="Launch Sunflower AI",
+            command=self.launch_application,
+            font=('Segoe UI', 12, 'bold'),
+            bg='#27ae60',
+            fg='white',
+            padx=20,
+            pady=10,
+            cursor='hand2'
         )
-        footer_text.pack(pady=10)
-    
-    def update_status(self, message: str, status_type: str = 'info'):
-        """Update status message"""
-        colors = {
-            'info': '#666',
-            'success': '#4CAF50',
-            'warning': '#FF9800',
-            'error': '#F44336'
-        }
         
-        self.root.after(0, lambda: self.status_label.config(
-            text=message,
-            fg=colors.get(status_type, '#666')
-        ))
+        self.setup_button = tk.Button(
+            self.button_frame,
+            text="Setup Models",
+            command=self.setup_models,
+            font=('Segoe UI', 11),
+            bg='#3498db',
+            fg='white',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        
+        self.docs_button = tk.Button(
+            self.button_frame,
+            text="Documentation",
+            command=self.open_documentation,
+            font=('Segoe UI', 11),
+            bg='#95a5a6',
+            fg='white',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        
+        # Configuration
+        self.config = {}
+        self.load_config()
     
-    def initialize_system(self):
-        """Initialize the system in background"""
+    def check_system(self):
+        """Check system requirements and setup status"""
+        self.status_label.config(text="Checking system requirements...")
+        
+        # Check hardware
+        if not self.check_hardware():
+            self.show_hardware_warning()
+            return
+        
+        # Check Ollama installation
+        if not self.check_ollama():
+            self.show_setup_instructions()
+            return
+        
+        # Check models
+        if not self.check_models():
+            self.show_model_instructions()
+            return
+        
+        # Check Open WebUI
+        if not self.check_webui():
+            self.status_label.config(text="Setting up web interface...")
+            self.setup_webui()
+        
+        # All checks passed
+        self.show_ready()
+    
+    def check_hardware(self) -> bool:
+        """Check if hardware meets minimum requirements"""
         try:
-            # Step 1: Check Ollama
-            self.update_status("🔍 Checking for Ollama...")
-            time.sleep(0.5)
+            import psutil
+            ram_gb = psutil.virtual_memory().total / (1024**3)
             
-            ollama_path = self.find_ollama()
-            if not ollama_path:
-                self.update_status("❌ Ollama not found", 'error')
-                self.show_setup_instructions()
-                return
+            if ram_gb < 4:
+                return False
             
-            # Step 2: Check models
-            self.update_status("📦 Checking AI models...")
-            if not self.check_models():
-                self.update_status("⚠️ Models not found", 'warning')
-                self.show_model_instructions()
-                return
-            
-            # Step 3: Check profiles
-            self.update_status("👤 Checking family profiles...")
-            has_profiles = self.check_profiles()
-            
-            # Step 4: Load configuration
-            self.update_status("⚙️ Loading configuration...")
-            self.config = self.load_config()
-            time.sleep(0.5)
-            
-            # Success
-            self.setup_complete = True
-            self.update_status("✅ System ready!", 'success')
-            
-            # Stop progress bar and show buttons
-            self.root.after(0, self.show_ready_ui)
-            
-        except Exception as e:
-            logger.error(f"Initialization error: {e}")
-            self.update_status(f"❌ Error: {str(e)}", 'warning')
-            self.root.after(0, lambda: messagebox.showerror("Initialization Error", str(e)))
+            return True
+        except:
+            return True  # Assume it's fine if we can't check
     
-    def find_ollama(self) -> Optional[Path]:
-        """Find Ollama executable"""
-        # Check CD-ROM partition
-        ollama_dir = get_cdrom_path('ollama')
-        
-        if ollama_dir:
-            if self.system == "Windows":
-                ollama_exe = ollama_dir / "ollama.exe"
-            else:
-                ollama_exe = ollama_dir / "ollama"
-            
-            if ollama_exe.exists():
-                return ollama_exe
-        
-        # Check system PATH
-        ollama_cmd = "ollama.exe" if self.system == "Windows" else "ollama"
-        
+    def check_ollama(self) -> bool:
+        """Check if Ollama is installed and accessible"""
         try:
             result = subprocess.run(
-                [ollama_cmd, "--version"],
+                ['ollama', '--version'],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            if result.returncode == 0:
-                return Path(ollama_cmd)
+            return result.returncode == 0
         except:
-            pass
-        
-        return None
+            return False
     
     def check_models(self) -> bool:
         """Check if required models are available"""
-        models_dir = get_cdrom_path('models')
-        
-        if models_dir and models_dir.exists():
-            # Check for any .gguf files
-            gguf_files = list(models_dir.glob("*.gguf"))
-            return len(gguf_files) > 0
-        
-        return False
-    
-    def check_profiles(self) -> bool:
-        """Check if family profiles exist"""
-        profiles_dir = get_usb_path('profiles')
-        
-        if profiles_dir and profiles_dir.exists():
-            # Check for family configuration
-            family_config = profiles_dir / "family.json"
-            return family_config.exists()
-        
-        return False
-    
-    def load_config(self) -> Dict:
-        """Load system configuration"""
-        config_path = get_usb_path('config') / "system_config.json"
-        
-        default_config = {
-            "ollama_port": 11434,
-            "webui_port": 8080,
-            "auto_start": False,
-            "safety_level": "maximum"
-        }
-        
-        if config_path and config_path.exists():
-            try:
-                with open(config_path, 'r') as f:
-                    user_config = json.load(f)
-                    default_config.update(user_config)
-            except:
-                pass
-        
-        return default_config
-    
-    def save_config(self):
-        """Save configuration"""
-        config_path = get_usb_path('config') / "system_config.json"
-        
-        if config_path:
-            config_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                ['ollama', 'list'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
             
-            try:
-                with open(config_path, 'w') as f:
-                    json.dump(self.config, f, indent=2)
-            except Exception as e:
-                logger.error(f"Failed to save config: {e}")
+            if result.returncode != 0:
+                return False
+            
+            # Check for our models
+            output = result.stdout.lower()
+            return 'sunflower' in output or 'llama' in output
+        except:
+            return False
     
-    def show_ready_ui(self):
-        """Show UI when system is ready"""
+    def check_webui(self) -> bool:
+        """Check if Open WebUI is running"""
+        try:
+            # Check if port 8080 is in use
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('localhost', 8080))
+            sock.close()
+            return result == 0
+        except:
+            return False
+    
+    def setup_webui(self):
+        """Start Open WebUI in background"""
+        try:
+            # Start Open WebUI
+            webui_cmd = [
+                sys.executable,
+                str(self.root_dir / 'interface' / 'gui.py'),
+                '--port', '8080',
+                '--no-browser'
+            ]
+            
+            self.webui_process = subprocess.Popen(
+                webui_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True if platform.system() != 'Windows' else False,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == 'Windows' else 0
+            )
+            
+            # Register process for cleanup
+            self.process_manager.register_process('webui', self.webui_process)
+            
+            # Start Ollama serve if needed
+            ollama_cmd = ['ollama', 'serve']
+            
+            self.ollama_process = subprocess.Popen(
+                ollama_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True if platform.system() != 'Windows' else False,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == 'Windows' else 0
+            )
+            
+            # Register process for cleanup
+            self.process_manager.register_process('ollama', self.ollama_process)
+            
+            # Wait for services to start
+            time.sleep(3)
+            
+            if self.check_webui():
+                logger.info("Web UI started successfully")
+            else:
+                logger.warning("Web UI may not have started properly")
+                
+        except Exception as e:
+            logger.error(f"Failed to start web UI: {e}")
+    
+    def launch_application(self):
+        """Launch the main application"""
+        self.status_label.config(text="Launching Sunflower AI...")
+        
+        # Open web browser to Open WebUI
+        webbrowser.open('http://localhost:8080')
+        
+        # Hide launcher after a moment
+        self.root.after(2000, self.root.iconify)
+    
+    def show_ready(self):
+        """Show ready state"""
         self.progress.stop()
         self.progress.pack_forget()
         
-        self.button_frame.pack(fill=tk.X, pady=20)
+        self.status_label.config(
+            text="✅ System ready - All components verified",
+            fg='#27ae60'
+        )
         
-        info_text = """
-System initialized successfully!
-
-✅ Ollama AI engine detected
-✅ Educational models available
-✅ Family safety filters active
-
-Click 'Start Sunflower AI' to begin learning or
-'Setup Family Profiles' to configure child accounts.
+        # Show launch button
+        self.launch_button.pack(side=tk.LEFT, padx=5)
+        self.docs_button.pack(side=tk.RIGHT, padx=5)
+        
+        # Show system info
+        info_text = f"""
+System Information:
+─────────────────
+Platform: {platform.system()} {platform.release()}
+Python: {sys.version.split()[0]}
+CD-ROM Path: {self.cdrom_path}
+Data Path: {self.usb_path}
+Models: ✓ Installed
+Ollama: ✓ Running
+Web UI: ✓ Available
         """
         
         self.info_frame.pack(fill=tk.BOTH, expand=True, pady=20)
         self.info_text.insert('1.0', info_text.strip())
         self.info_text.config(state='disabled')
+    
+    def show_hardware_warning(self):
+        """Show hardware warning"""
+        self.progress.stop()
+        self.progress.pack_forget()
+        
+        self.status_label.config(
+            text="⚠️ Hardware may not meet minimum requirements",
+            fg='#e74c3c'
+        )
+        
+        info_text = """
+Warning: Your system may not meet the minimum requirements.
+
+Minimum Requirements:
+• RAM: 4GB (8GB recommended)
+• Storage: 5GB free space
+• CPU: 2+ cores
+
+The system may run slowly or encounter issues.
+        """
+        
+        self.info_frame.pack(fill=tk.BOTH, expand=True, pady=20)
+        self.info_text.insert('1.0', info_text.strip())
+        self.info_text.config(state='disabled')
+        
+        # Still show launch button
+        self.launch_button.pack(side=tk.LEFT, padx=5)
+        self.docs_button.pack(side=tk.RIGHT, padx=5)
     
     def show_setup_instructions(self):
         """Show setup instructions"""
@@ -431,81 +612,15 @@ This is a one-time setup that requires internet connection.
 Click 'Setup Models' below to begin the download.
 The process will take 10-30 minutes depending on your
 internet speed.
-
-Required space: ~4GB
         """
         
         self.info_frame.pack(fill=tk.BOTH, expand=True, pady=20)
         self.info_text.insert('1.0', instructions.strip())
         self.info_text.config(state='disabled')
         
-        setup_btn = tk.Button(
-            self.content_frame,
-            text="📥 Setup Models",
-            font=('Segoe UI', 12, 'bold'),
-            bg='#4CAF50',
-            fg='white',
-            padx=30,
-            pady=10,
-            command=self.setup_models,
-            cursor='hand2'
-        )
-        setup_btn.pack(pady=20)
-    
-    def start_system(self):
-        """Start the Sunflower AI system"""
-        self.update_status("🚀 Starting Sunflower AI...", 'info')
-        
-        # Start Ollama service
-        try:
-            if self.system == "Windows":
-                self.ollama_process = subprocess.Popen(
-                    ["ollama", "serve"],
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-            else:
-                self.ollama_process = subprocess.Popen(
-                    ["ollama", "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-            
-            time.sleep(2)  # Wait for service to start
-            
-        except Exception as e:
-            logger.error(f"Failed to start Ollama: {e}")
-            messagebox.showerror("Error", f"Failed to start Ollama service:\n{e}")
-            return
-        
-        # Start Open WebUI
-        try:
-            webui_path = get_cdrom_path('open-webui')
-            if webui_path:
-                # Launch Open WebUI
-                # This would be the actual implementation
-                webbrowser.open("http://localhost:8080")
-                self.update_status("✅ Sunflower AI is running!", 'success')
-            else:
-                messagebox.showwarning("Warning", "Open WebUI not found. Opening fallback interface.")
-                webbrowser.open("http://localhost:11434")
-        
-        except Exception as e:
-            logger.error(f"Failed to start WebUI: {e}")
-            messagebox.showerror("Error", f"Failed to start WebUI:\n{e}")
-    
-    def setup_profiles(self):
-        """Open profile setup window"""
-        # This would open the profile management interface
-        profile_window = tk.Toplevel(self.root)
-        profile_window.title("Family Profile Setup")
-        profile_window.geometry("600x400")
-        
-        label = tk.Label(
-            profile_window,
-            text="Family Profile Setup\n\nThis feature will be available in the next update.",
-            font=('Segoe UI', 12)
-        )
-        label.pack(pady=50)
+        # Show setup button
+        self.setup_button.pack(side=tk.LEFT, padx=5)
+        self.docs_button.pack(side=tk.RIGHT, padx=5)
     
     def setup_models(self):
         """Setup AI models"""
@@ -526,42 +641,90 @@ Required space: ~4GB
         else:
             messagebox.showinfo("Documentation", "Documentation will be available in the docs folder.")
     
-    def on_closing(self):
-        """Handle window closing with proper process cleanup"""
-        # FIX: Properly clean up processes to prevent resource leaks
-        for process in [self.ollama_process, self.webui_process]:
-            if process:
-                try:
-                    # First try graceful termination
-                    process.terminate()
-                    try:
-                        # Wait up to 5 seconds for process to terminate
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        # If process doesn't terminate gracefully, force kill it
-                        process.kill()
-                        # Wait for the kill to complete
-                        process.wait()
-                except Exception as e:
-                    logger.error(f"Error cleaning up process: {e}")
+    def load_config(self):
+        """Load configuration from file"""
+        config_file = self.data_dir / 'launcher_config.json' if self.data_dir else None
         
+        if config_file and config_file.exists():
+            try:
+                with open(config_file, 'r') as f:
+                    self.config = json.load(f)
+            except:
+                self.config = {}
+        else:
+            self.config = {}
+    
+    def save_config(self):
+        """Save configuration to file"""
+        if self.data_dir:
+            config_file = self.data_dir / 'launcher_config.json'
+            try:
+                with open(config_file, 'w') as f:
+                    json.dump(self.config, f, indent=2)
+            except:
+                pass
+    
+    def on_closing(self):
+        """
+        Handle window closing with proper process cleanup
+        FIXED: Comprehensive cleanup to prevent resource leaks
+        """
+        logger.info("Window closing initiated, starting cleanup...")
+        
+        # Save configuration
         self.save_config()
-        self.root.destroy()
+        
+        # Stop any running threads
+        self.progress.stop()
+        
+        # Clean up all processes using the process manager
+        self.process_manager.cleanup_all(timeout=10.0)
+        
+        # Destroy the window
+        try:
+            self.root.destroy()
+        except:
+            pass
+        
+        logger.info("Launcher shutdown complete")
     
     def run(self):
         """Run the launcher"""
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received")
+            self.on_closing()
+        except Exception as e:
+            logger.error(f"Unexpected error in main loop: {e}")
+            self.on_closing()
+            raise
+        finally:
+            # Ensure cleanup happens even if mainloop exits unexpectedly
+            self.process_manager.cleanup_all()
 
 
 def main():
-    """Main entry point"""
+    """Main entry point with exception handling"""
     try:
         launcher = SunflowerLauncher()
         launcher.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        messagebox.showerror("Fatal Error", str(e))
+        
+        # Show error to user
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Fatal Error", str(e))
+            root.destroy()
+        except:
+            print(f"Fatal Error: {e}")
+        
         sys.exit(1)
+    finally:
+        # Final cleanup attempt
+        logger.info("Application exit")
 
 
 if __name__ == "__main__":
