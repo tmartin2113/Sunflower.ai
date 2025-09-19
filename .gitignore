@@ -1,6 +1,7 @@
 # Sunflower AI Professional System - Git Ignore Patterns
 # Version: 6.2
 # Comprehensive ignore patterns for production repository
+# FIXED: BUG-004 - Complete file without truncation
 
 ###########################################
 # Python
@@ -188,6 +189,13 @@ error.log
 access.log
 debug.log
 sunflower_ai.log
+ollama.log
+webui.log
+system.log
+audit.log
+security.log
+manufacturing.log
+production.log
 
 # Session data
 sessions/
@@ -274,6 +282,8 @@ Icon?
 .com.apple.timemachine.donotpresent
 *.dmg
 *.app
+*.xcworkspace
+*.xcodeproj
 
 # Linux
 .directory
@@ -356,6 +366,12 @@ api_keys.txt
 *.asc
 *.enc
 
+# Manufacturing tokens
+.secure/
+*_tokens.enc
+*_SECURE.enc
+.master.key
+
 ###########################################
 # Development Tools
 ###########################################
@@ -363,6 +379,7 @@ api_keys.txt
 .docker/
 docker-compose.override.yml
 .dockerignore.local
+*.dockerignore
 
 # Kubernetes
 *.kubeconfig
@@ -464,11 +481,47 @@ yarn.lock
 ###########################################
 # DO NOT IGNORE - Critical for Production
 ###########################################
-# !requirements.txt
-# !requirements-dev.txt
-# !Modelfiles/
-# !Documentation/
-# !quickstart_guide.md
-# !safety_filters/default/
-# !cdrom_simulation/SUNFLOWER_SYSTEM.marker
-# !usb_simulation/SUNFLOWER_DATA.marker
+# These files MUST be tracked in git
+!requirements.txt
+!requirements-dev.txt
+!requirements-test.txt
+!requirements-build.txt
+!Modelfiles/
+!modelfiles/
+!Documentation/
+!documentation/
+!quickstart_guide.md
+!safety_filters/default/
+!cdrom_simulation/SUNFLOWER_SYSTEM.marker
+!usb_simulation/SUNFLOWER_DATA.marker
+!.github/workflows/*.yml
+!Makefile
+!README.md
+!LICENSE
+!setup.py
+!pyproject.toml
+
+# Manufacturing templates (needed for production)
+!manufacturing/templates/
+!production/templates/
+
+# Build scripts (required)
+!build/*.py
+!scripts/*.py
+!deployment/*.py
+
+# Configuration templates
+!config/*.template
+!config/*.example
+
+# Test data that should be tracked
+!tests/test_data/safe_prompts.json
+!tests/test_data/unsafe_prompts.json
+!tests/test_data/edge_cases.json
+
+# Documentation that must be included
+!docs/*.md
+!docs/*.pdf
+!docs/images/
+
+# End of .gitignore
