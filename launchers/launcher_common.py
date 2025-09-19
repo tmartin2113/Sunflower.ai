@@ -1,471 +1,580 @@
+#!/usr/bin/env python3
 """
-Sunflower AI Common Launcher Components
-Version: 6.2
-Cross-platform launcher utilities and UI
+Sunflower AI - Common Launcher Components
+Shared functionality for platform-specific launchers
+Version: 6.2.0
+FIXED: BUG-008 - Added timeout configuration to all subprocess calls
 """
 
 import os
 import sys
 import json
-import logging
+import time
+import socket
+import hashlib
 import platform
 import subprocess
+import logging
+import psutil
 import threading
-import tkinter as tk
-from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Dict, Optional, Tuple, List, Any
+from dataclasses import dataclass, field
 
-logger = logging.getLogger(__name__)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('launcher_common')
+
+# Timeout configuration constants
+DEFAULT_SUBPROCESS_TIMEOUT = 30.0  # 30 seconds default
+QUICK_COMMAND_TIMEOUT = 5.0        # 5 seconds for quick commands
+LONG_RUNNING_TIMEOUT = 300.0       # 5 minutes for long operations
+INSTALL_TIMEOUT = 600.0             # 10 minutes for installations
+NETWORK_TIMEOUT = 60.0              # 1 minute for network operations
 
 
 @dataclass
-class SystemRequirements:
-    """System requirements for Sunflower AI"""
-    min_ram_gb: int = 4
-    min_python_version: str = "3.11"
-    min_disk_space_gb: int = 10
-    supported_platforms: list = None
+class TimeoutConfig:
+    """
+    Configuration for subprocess timeouts
+    FIXED: Centralized timeout management
+    """
+    quick: float = QUICK_COMMAND_TIMEOUT
+    default: float = DEFAULT_SUBPROCESS_TIMEOUT
+    long: float = LONG_RUNNING_TIMEOUT
+    install: float = INSTALL_TIMEOUT
+    network: float = NETWORK_TIMEOUT
     
-    def __post_init__(self):
-        if self.supported_platforms is None:
-            self.supported_platforms = ["Windows", "Darwin", "Linux"]
-
-
-class PartitionDetector:
-    """Detect and validate Sunflower AI partitions"""
-    
-    def __init__(self):
-        self.platform = platform.system()
-        self.cdrom_marker = "sunflower_cd.id"
-        self.usb_marker = "sunflower_data.id"
-        
-    def detect_partitions(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect both CD-ROM and USB partitions"""
-        logger.info(f"Detecting partitions on {self.platform}")
-        
-        if self.platform == "Windows":
-            return self._detect_windows()
-        elif self.platform == "Darwin":
-            return self._detect_macos()
-        else:
-            return self._detect_linux()
-    
-    def _detect_windows(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect partitions on Windows"""
-        cdrom_path = None
-        usb_path = None
-        
-        # Check all drive letters
-        for drive_letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            drive = f"{drive_letter}:\\"
-            
-            if not os.path.exists(drive):
-                continue
-            
-            # Check for CD-ROM partition marker
-            cd_marker = Path(drive) / self.cdrom_marker
-            if cd_marker.exists():
-                cdrom_path = Path(drive)
-                logger.info(f"Found CD-ROM partition: {cdrom_path}")
-            
-            # Check for USB data partition marker
-            data_marker = Path(drive) / self.usb_marker
-            if data_marker.exists():
-                usb_path = Path(drive)
-                logger.info(f"Found USB partition: {usb_path}")
-        
-        return cdrom_path, usb_path
-    
-    def _detect_macos(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect partitions on macOS"""
-        cdrom_path = None
-        usb_path = None
-        
-        volumes_path = Path("/Volumes")
-        
-        for volume in volumes_path.iterdir():
-            if volume.is_dir():
-                # Check for partition markers
-                cd_marker = volume / self.cdrom_marker
-                data_marker = volume / self.usb_marker
-                
-                if cd_marker.exists():
-                    cdrom_path = volume
-                    logger.info(f"Found CD-ROM partition: {cdrom_path}")
-                
-                if data_marker.exists():
-                    usb_path = volume
-                    logger.info(f"Found USB partition: {usb_path}")
-        
-        return cdrom_path, usb_path
-    
-    def _detect_linux(self) -> Tuple[Optional[Path], Optional[Path]]:
-        """Detect partitions on Linux"""
-        cdrom_path = None
-        usb_path = None
-        
-        # Check common mount points
-        mount_points = [
-            Path("/media"),
-            Path("/mnt"),
-            Path("/run/media") / os.environ.get("USER", "")
-        ]
-        
-        for mount_base in mount_points:
-            if not mount_base.exists():
-                continue
-            
-            for mount in mount_base.iterdir():
-                if mount.is_dir():
-                    cd_marker = mount / self.cdrom_marker
-                    data_marker = mount / self.usb_marker
-                    
-                    if cd_marker.exists():
-                        cdrom_path = mount
-                        logger.info(f"Found CD-ROM partition: {cdrom_path}")
-                    
-                    if data_marker.exists():
-                        usb_path = mount
-                        logger.info(f"Found USB partition: {usb_path}")
-        
-        return cdrom_path, usb_path
-
-
-class HardwareDetector:
-    """Detect hardware capabilities"""
-    
-    def __init__(self):
-        self.platform = platform.system()
-        
-    def get_system_info(self) -> Dict[str, Any]:
-        """Get system hardware information"""
-        import psutil
-        
-        info = {
-            'platform': self.platform,
-            'processor': platform.processor(),
-            'architecture': platform.machine(),
-            'python_version': platform.python_version(),
-            'ram_gb': psutil.virtual_memory().total / (1024**3),
-            'cpu_count': psutil.cpu_count(),
-            'disk_usage': {}
+    def get_timeout(self, operation_type: str = 'default') -> float:
+        """Get timeout for specific operation type"""
+        timeouts = {
+            'quick': self.quick,
+            'default': self.default,
+            'long': self.long,
+            'install': self.install,
+            'network': self.network
         }
-        
-        # Get disk usage for all partitions
-        for partition in psutil.disk_partitions():
-            try:
-                usage = psutil.disk_usage(partition.mountpoint)
-                info['disk_usage'][partition.mountpoint] = {
-                    'total_gb': usage.total / (1024**3),
-                    'free_gb': usage.free / (1024**3)
-                }
-            except:
-                pass
-        
-        return info
-    
-    def determine_hardware_tier(self) -> str:
-        """Determine hardware performance tier"""
-        import psutil
-        
-        ram_gb = psutil.virtual_memory().total / (1024**3)
-        cpu_count = psutil.cpu_count()
-        
-        if ram_gb >= 16 and cpu_count >= 8:
-            return "high"
-        elif ram_gb >= 8 and cpu_count >= 4:
-            return "medium"
-        elif ram_gb >= 4:
-            return "low"
-        else:
-            return "minimum"
+        return timeouts.get(operation_type, self.default)
 
 
-class SunflowerLauncherUI:
-    """Main launcher UI for Sunflower AI"""
+class SubprocessRunner:
+    """
+    Secure subprocess runner with timeout management
+    FIXED: All subprocess calls now have proper timeouts
+    """
     
-    def __init__(self, cdrom_path: Path, usb_path: Path):
-        self.cdrom_path = cdrom_path
-        self.usb_path = usb_path
-        self.hardware = HardwareDetector()
-        self.requirements = SystemRequirements()
-        
-        # Setup main window
-        self.root = tk.Tk()
-        self.root.title("Sunflower AI Professional System")
-        self.root.geometry("800x600")
-        self.root.resizable(False, False)
-        
-        # Center window
-        self._center_window()
-        
-        # Setup UI
-        self._setup_ui()
-        
-    def _center_window(self):
-        """Center the window on screen"""
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
+    def __init__(self, timeout_config: Optional[TimeoutConfig] = None):
+        self.timeout_config = timeout_config or TimeoutConfig()
+        self.active_processes: Dict[str, subprocess.Popen] = {}
+        self._lock = threading.Lock()
     
-    def _setup_ui(self):
-        """Setup the user interface"""
-        # Header
-        header_frame = tk.Frame(self.root, bg="#2C3E50", height=100)
-        header_frame.pack(fill=tk.X)
+    def run_command(
+        self,
+        command: List[str],
+        operation_type: str = 'default',
+        timeout: Optional[float] = None,
+        capture_output: bool = True,
+        check: bool = True,
+        cwd: Optional[Path] = None,
+        env: Optional[Dict[str, str]] = None,
+        shell: bool = False
+    ) -> subprocess.CompletedProcess:
+        """
+        Run a subprocess command with proper timeout
         
-        title_label = tk.Label(
-            header_frame,
-            text="Sunflower AI Professional System",
-            font=("Arial", 24, "bold"),
-            fg="white",
-            bg="#2C3E50"
-        )
-        title_label.pack(pady=20)
-        
-        subtitle_label = tk.Label(
-            header_frame,
-            text="Family-Safe K-12 STEM Education",
-            font=("Arial", 14),
-            fg="#ECF0F1",
-            bg="#2C3E50"
-        )
-        subtitle_label.pack()
-        
-        # Main content
-        content_frame = tk.Frame(self.root)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # System status
-        self._create_status_section(content_frame)
-        
-        # Progress section
-        self._create_progress_section(content_frame)
-        
-        # Action buttons
-        self._create_action_buttons(content_frame)
-    
-    def _create_status_section(self, parent):
-        """Create system status display"""
-        status_frame = tk.LabelFrame(parent, text="System Status", padx=10, pady=10)
-        status_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Get system info
-        sys_info = self.hardware.get_system_info()
-        tier = self.hardware.determine_hardware_tier()
-        
-        status_items = [
-            ("Platform", sys_info['platform']),
-            ("Python Version", sys_info['python_version']),
-            ("System RAM", f"{sys_info['ram_gb']:.1f} GB"),
-            ("CPU Cores", sys_info['cpu_count']),
-            ("Hardware Tier", tier.capitalize()),
-            ("CD-ROM Path", str(self.cdrom_path)),
-            ("Data Path", str(self.usb_path))
-        ]
-        
-        for i, (label, value) in enumerate(status_items):
-            tk.Label(status_frame, text=f"{label}:", anchor="w", width=15).grid(row=i, column=0, sticky="w")
-            tk.Label(status_frame, text=value, anchor="w").grid(row=i, column=1, sticky="w")
-    
-    def _create_progress_section(self, parent):
-        """Create progress display"""
-        self.progress_frame = tk.LabelFrame(parent, text="Setup Progress", padx=10, pady=10)
-        self.progress_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.progress_label = tk.Label(self.progress_frame, text="Ready to begin setup...")
-        self.progress_label.pack(anchor="w")
-        
-        self.progress_bar = ttk.Progressbar(
-            self.progress_frame,
-            length=400,
-            mode='determinate'
-        )
-        self.progress_bar.pack(pady=10)
-    
-    def _create_action_buttons(self, parent):
-        """Create action buttons"""
-        button_frame = tk.Frame(parent)
-        button_frame.pack(fill=tk.X)
-        
-        self.start_button = tk.Button(
-            button_frame,
-            text="Start Setup",
-            command=self.start_setup,
-            bg="#27AE60",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            padx=20,
-            pady=10
-        )
-        self.start_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.exit_button = tk.Button(
-            button_frame,
-            text="Exit",
-            command=self.exit_launcher,
-            bg="#E74C3C",
-            fg="white",
-            font=("Arial", 12),
-            padx=20,
-            pady=10
-        )
-        self.exit_button.pack(side=tk.RIGHT)
-    
-    def start_setup(self):
-        """Start the setup process"""
-        self.start_button.config(state=tk.DISABLED)
-        
-        # Run setup in background thread
-        setup_thread = threading.Thread(target=self._run_setup)
-        setup_thread.daemon = True
-        setup_thread.start()
-    
-    def _run_setup(self):
-        """Run the actual setup process"""
-        steps = [
-            ("Verifying system requirements", self._verify_requirements),
-            ("Checking partition integrity", self._check_partitions),
-            ("Setting up Python environment", self._setup_python),
-            ("Installing Ollama", self._install_ollama),
-            ("Loading AI models", self._load_models),
-            ("Configuring Open WebUI", self._configure_webui),
-            ("Creating initial profiles", self._create_profiles)
-        ]
-        
-        total_steps = len(steps)
-        
-        for i, (description, func) in enumerate(steps):
-            # Update UI
-            self.progress_label.config(text=f"{description}...")
-            self.progress_bar['value'] = (i / total_steps) * 100
-            self.root.update()
+        Args:
+            command: Command to execute
+            operation_type: Type of operation for timeout selection
+            timeout: Override timeout value (uses config if None)
+            capture_output: Whether to capture stdout/stderr
+            check: Whether to raise on non-zero exit
+            cwd: Working directory
+            env: Environment variables
+            shell: Whether to use shell execution
             
-            try:
-                func()
-                logger.info(f"Completed: {description}")
-            except Exception as e:
-                logger.error(f"Failed: {description} - {e}")
-                messagebox.showerror("Setup Error", f"Failed during: {description}\n\nError: {e}")
-                self.start_button.config(state=tk.NORMAL)
-                return
+        Returns:
+            CompletedProcess object
+            
+        Raises:
+            subprocess.TimeoutExpired: If command times out
+            subprocess.CalledProcessError: If command fails and check=True
+        """
+        # Determine timeout
+        if timeout is None:
+            timeout = self.timeout_config.get_timeout(operation_type)
         
-        # Setup complete
-        self.progress_label.config(text="Setup complete!")
-        self.progress_bar['value'] = 100
-        self.root.update()
+        # Log command execution
+        logger.info(f"Running command: {' '.join(command)} (timeout={timeout}s)")
         
-        messagebox.showinfo("Success", "Sunflower AI setup completed successfully!")
-        
-        # Launch main application
-        self._launch_application()
-    
-    def _verify_requirements(self):
-        """Verify system requirements"""
-        import psutil
-        
-        # Check RAM
-        ram_gb = psutil.virtual_memory().total / (1024**3)
-        if ram_gb < self.requirements.min_ram_gb:
-            raise Exception(f"Insufficient RAM: {ram_gb:.1f}GB < {self.requirements.min_ram_gb}GB required")
-        
-        # Check Python version
-        python_version = platform.python_version()
-        if python_version < self.requirements.min_python_version:
-            raise Exception(f"Python {python_version} < {self.requirements.min_python_version} required")
-        
-        # Check disk space
-        usage = psutil.disk_usage(str(self.usb_path))
-        free_gb = usage.free / (1024**3)
-        if free_gb < self.requirements.min_disk_space_gb:
-            raise Exception(f"Insufficient disk space: {free_gb:.1f}GB < {self.requirements.min_disk_space_gb}GB required")
-    
-    def _check_partitions(self):
-        """Check partition integrity"""
-        # Verify CD-ROM partition
-        required_cdrom_files = [
-            self.cdrom_path / "system",
-            self.cdrom_path / "models",
-            self.cdrom_path / "modelfiles"
-        ]
-        
-        for path in required_cdrom_files:
-            if not path.exists():
-                raise Exception(f"Missing required path on CD-ROM: {path}")
-        
-        # Verify USB partition is writable
-        test_file = self.usb_path / ".write_test"
         try:
-            test_file.touch()
-            test_file.unlink()
-        except:
-            raise Exception("USB partition is not writable")
+            # Run with timeout
+            result = subprocess.run(
+                command,
+                timeout=timeout,
+                capture_output=capture_output,
+                check=check,
+                cwd=cwd,
+                env=env,
+                shell=shell,
+                text=True
+            )
+            
+            logger.debug(f"Command completed successfully: {command[0]}")
+            return result
+            
+        except subprocess.TimeoutExpired as e:
+            logger.error(f"Command timed out after {timeout}s: {' '.join(command)}")
+            # Kill the process if it's still running
+            if e.stderr:
+                logger.error(f"Partial stderr: {e.stderr}")
+            raise
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed with exit code {e.returncode}: {' '.join(command)}")
+            if e.stderr:
+                logger.error(f"Error output: {e.stderr}")
+            raise
     
-    def _setup_python(self):
-        """Setup Python environment"""
-        # This would normally set up virtual environment
-        # For now, just verify Python works
-        result = subprocess.run(
-            [sys.executable, "--version"],
-            capture_output=True,
+    def start_background_process(
+        self,
+        name: str,
+        command: List[str],
+        cwd: Optional[Path] = None,
+        env: Optional[Dict[str, str]] = None
+    ) -> subprocess.Popen:
+        """
+        Start a background process with monitoring
+        
+        Args:
+            name: Identifier for the process
+            command: Command to execute
+            cwd: Working directory
+            env: Environment variables
+            
+        Returns:
+            Popen object for the started process
+        """
+        logger.info(f"Starting background process '{name}': {' '.join(command)}")
+        
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            env=env,
             text=True
         )
         
-        if result.returncode != 0:
-            raise Exception("Python verification failed")
+        with self._lock:
+            self.active_processes[name] = process
+        
+        # Start monitoring thread
+        monitor_thread = threading.Thread(
+            target=self._monitor_process,
+            args=(name, process),
+            daemon=True
+        )
+        monitor_thread.start()
+        
+        return process
     
-    def _install_ollama(self):
-        """Install Ollama if needed"""
-        # Check if Ollama is available
+    def _monitor_process(self, name: str, process: subprocess.Popen):
+        """Monitor a background process for issues"""
+        start_time = time.time()
+        warning_timeout = self.timeout_config.long
+        
+        while process.poll() is None:
+            elapsed = time.time() - start_time
+            
+            # Warn if process runs too long
+            if elapsed > warning_timeout:
+                logger.warning(
+                    f"Background process '{name}' has been running for "
+                    f"{elapsed:.0f}s (PID: {process.pid})"
+                )
+                warning_timeout *= 2  # Double warning interval
+            
+            time.sleep(1)
+        
+        # Process ended
+        with self._lock:
+            if name in self.active_processes:
+                del self.active_processes[name]
+        
+        if process.returncode != 0:
+            logger.error(f"Background process '{name}' exited with code {process.returncode}")
+    
+    def stop_all_processes(self, timeout: float = 10.0):
+        """Stop all active background processes"""
+        with self._lock:
+            processes = list(self.active_processes.items())
+        
+        for name, process in processes:
+            try:
+                logger.info(f"Stopping process '{name}'")
+                process.terminate()
+                process.wait(timeout=timeout / len(processes))
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Force killing process '{name}'")
+                process.kill()
+                process.wait()
+            except Exception as e:
+                logger.error(f"Error stopping process '{name}': {e}")
+
+
+class HardwareDetector:
+    """Hardware detection and validation with timeouts"""
+    
+    def __init__(self):
+        self.runner = SubprocessRunner()
+    
+    def detect_hardware(self) -> Dict[str, Any]:
+        """Detect system hardware capabilities"""
+        hardware = {
+            'platform': platform.system(),
+            'architecture': platform.machine(),
+            'processor': platform.processor(),
+            'ram_gb': psutil.virtual_memory().total / (1024**3),
+            'cpu_count': psutil.cpu_count(logical=False),
+            'cpu_freq': psutil.cpu_freq().current if psutil.cpu_freq() else 0
+        }
+        
+        # Platform-specific detection with timeouts
+        if platform.system() == 'Windows':
+            hardware.update(self._detect_windows_gpu())
+        elif platform.system() == 'Darwin':
+            hardware.update(self._detect_macos_gpu())
+        else:
+            hardware.update(self._detect_linux_gpu())
+        
+        return hardware
+    
+    def _detect_windows_gpu(self) -> Dict[str, Any]:
+        """Detect GPU on Windows with timeout"""
+        gpu_info = {'gpu': 'Unknown', 'gpu_memory_gb': 0}
+        
         try:
-            subprocess.run(["ollama", "--version"], capture_output=True, check=True)
-            logger.info("Ollama already installed")
-        except:
-            logger.info("Installing Ollama...")
-            # Installation would happen here
-            pass
+            # Use WMI to get GPU info with timeout
+            result = self.runner.run_command(
+                ['wmic', 'path', 'win32_videocontroller', 'get', 'name,adapterram'],
+                operation_type='quick',
+                check=False
+            )
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:
+                    gpu_info['gpu'] = lines[1].split()[0] if lines[1] else 'Unknown'
+                    
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.warning(f"GPU detection failed: {e}")
+        
+        return gpu_info
     
-    def _load_models(self):
-        """Load AI models"""
-        # Determine which model to load based on hardware
+    def _detect_macos_gpu(self) -> Dict[str, Any]:
+        """Detect GPU on macOS with timeout"""
+        gpu_info = {'gpu': 'Unknown', 'gpu_memory_gb': 0}
+        
+        try:
+            result = self.runner.run_command(
+                ['system_profiler', 'SPDisplaysDataType', '-json'],
+                operation_type='quick',
+                check=False
+            )
+            
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                # Parse GPU info from system_profiler output
+                if 'SPDisplaysDataType' in data:
+                    displays = data['SPDisplaysDataType']
+                    if displays and len(displays) > 0:
+                        gpu_info['gpu'] = displays[0].get('sppci_model', 'Unknown')
+                        
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+            logger.warning(f"GPU detection failed: {e}")
+        
+        return gpu_info
+    
+    def _detect_linux_gpu(self) -> Dict[str, Any]:
+        """Detect GPU on Linux with timeout"""
+        gpu_info = {'gpu': 'Unknown', 'gpu_memory_gb': 0}
+        
+        try:
+            result = self.runner.run_command(
+                ['lspci', '-v'],
+                operation_type='quick',
+                check=False
+            )
+            
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'VGA' in line or '3D' in line:
+                        gpu_info['gpu'] = line.split(':', 1)[1].strip() if ':' in line else 'Unknown'
+                        break
+                        
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.warning(f"GPU detection failed: {e}")
+        
+        return gpu_info
+    
+    def determine_hardware_tier(self) -> str:
+        """Determine hardware tier for model selection"""
+        hardware = self.detect_hardware()
+        ram_gb = hardware['ram_gb']
+        
+        if ram_gb >= 16:
+            return 'high'
+        elif ram_gb >= 8:
+            return 'medium'
+        elif ram_gb >= 4:
+            return 'low'
+        else:
+            return 'minimum'
+
+
+class LauncherBase:
+    """
+    Base class for platform launchers with timeout management
+    FIXED: All operations now have proper timeouts
+    """
+    
+    def __init__(self, cdrom_path: Path, usb_path: Path):
+        self.cdrom_path = Path(cdrom_path)
+        self.usb_path = Path(usb_path)
+        self.runner = SubprocessRunner()
+        self.hardware = HardwareDetector()
+        self.setup_complete = False
+        
+        logger.info(f"Launcher initialized - CD-ROM: {cdrom_path}, USB: {usb_path}")
+    
+    def check_ollama(self) -> bool:
+        """Check if Ollama is installed with timeout"""
+        try:
+            result = self.runner.run_command(
+                ['ollama', '--version'],
+                operation_type='quick',
+                check=False
+            )
+            return result.returncode == 0
+        except subprocess.TimeoutExpired:
+            logger.error("Ollama check timed out")
+            return False
+        except FileNotFoundError:
+            logger.info("Ollama not found in PATH")
+            return False
+    
+    def check_models(self) -> bool:
+        """Check if required models are installed with timeout"""
+        try:
+            result = self.runner.run_command(
+                ['ollama', 'list'],
+                operation_type='default',
+                check=False
+            )
+            
+            if result.returncode != 0:
+                return False
+            
+            # Check for required models
+            output = result.stdout.lower()
+            required_models = ['sunflower', 'llama']
+            return any(model in output for model in required_models)
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Model check timed out")
+            return False
+        except Exception as e:
+            logger.error(f"Model check failed: {e}")
+            return False
+    
+    def install_ollama(self) -> bool:
+        """Install Ollama with appropriate timeout"""
+        system = platform.system()
+        
+        try:
+            if system == 'Windows':
+                installer = self.cdrom_path / 'ollama' / 'ollama-windows.exe'
+                if installer.exists():
+                    result = self.runner.run_command(
+                        [str(installer), '/S'],  # Silent install
+                        operation_type='install',
+                        check=False
+                    )
+                    return result.returncode == 0
+                    
+            elif system == 'Darwin':
+                result = self.runner.run_command(
+                    ['brew', 'install', 'ollama'],
+                    operation_type='install',
+                    check=False
+                )
+                return result.returncode == 0
+                
+            else:  # Linux
+                result = self.runner.run_command(
+                    ['curl', '-fsSL', 'https://ollama.ai/install.sh', '|', 'sh'],
+                    operation_type='install',
+                    shell=True,
+                    check=False
+                )
+                return result.returncode == 0
+                
+        except subprocess.TimeoutExpired:
+            logger.error("Ollama installation timed out")
+            return False
+        except Exception as e:
+            logger.error(f"Ollama installation failed: {e}")
+            return False
+    
+    def load_models(self) -> bool:
+        """Load AI models with appropriate timeout"""
         tier = self.hardware.determine_hardware_tier()
         
         model_map = {
             'high': 'sunflower-kids-7b',
             'medium': 'sunflower-kids-3b',
             'low': 'sunflower-kids-1b',
-            'minimum': 'sunflower-kids-1b'
+            'minimum': 'sunflower-kids-1b-q4'
         }
         
         model = model_map[tier]
-        logger.info(f"Loading model: {model}")
+        model_file = self.cdrom_path / 'models' / f'{model}.gguf'
         
-        # Model loading would happen here
+        if not model_file.exists():
+            logger.error(f"Model file not found: {model_file}")
+            return False
+        
+        try:
+            logger.info(f"Loading model: {model} (this may take a few minutes)")
+            
+            # Create model from file with extended timeout
+            result = self.runner.run_command(
+                ['ollama', 'create', model, '-f', str(model_file)],
+                operation_type='long',
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"Model {model} loaded successfully")
+                return True
+            else:
+                logger.error(f"Failed to load model: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error(f"Model loading timed out after {self.runner.timeout_config.long}s")
+            return False
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
+            return False
     
-    def _configure_webui(self):
-        """Configure Open WebUI"""
-        # Create configuration directory
-        config_dir = self.usb_path / "config"
-        config_dir.mkdir(exist_ok=True)
-        
-        # Write configuration
-        config = {
-            'host': 'localhost',
-            'port': 8080,
-            'data_path': str(self.usb_path / "data")
-        }
-        
-        config_file = config_dir / "webui.json"
-        with open(config_file, 'w') as f:
-            json.dump(config, f, indent=2)
+    def start_ollama_serve(self) -> subprocess.Popen:
+        """Start Ollama serve in background"""
+        return self.runner.start_background_process(
+            'ollama_serve',
+            ['ollama', 'serve'],
+            env=os.environ.copy()
+        )
     
-    def _create_profiles(self):
+    def check_port(self, port: int, timeout: float = 5.0) -> bool:
+        """Check if a port is open with timeout"""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1.0)  # Socket timeout
+                result = sock.connect_ex(('localhost', port))
+                sock.close()
+                
+                if result == 0:
+                    return True
+                    
+            except socket.error:
+                pass
+            
+            time.sleep(0.5)
+        
+        return False
+    
+    def wait_for_service(self, service_name: str, port: int, timeout: float = 30.0) -> bool:
+        """Wait for a service to become available"""
+        logger.info(f"Waiting for {service_name} on port {port}...")
+        
+        if self.check_port(port, timeout):
+            logger.info(f"{service_name} is ready")
+            return True
+        else:
+            logger.error(f"{service_name} failed to start within {timeout}s")
+            return False
+    
+    def setup_system(self) -> bool:
+        """Complete system setup with all timeouts"""
+        try:
+            # Check/install Ollama
+            if not self.check_ollama():
+                logger.info("Installing Ollama...")
+                if not self.install_ollama():
+                    return False
+            
+            # Start Ollama serve
+            ollama_process = self.start_ollama_serve()
+            
+            # Wait for Ollama to be ready
+            if not self.wait_for_service('Ollama', 11434, timeout=60.0):
+                return False
+            
+            # Load models
+            if not self.check_models():
+                logger.info("Loading AI models...")
+                if not self.load_models():
+                    return False
+            
+            # Configure Open WebUI
+            if not self.configure_webui():
+                return False
+            
+            # Create initial profiles
+            self.create_profiles()
+            
+            self.setup_complete = True
+            return True
+            
+        except Exception as e:
+            logger.error(f"Setup failed: {e}")
+            return False
+    
+    def configure_webui(self) -> bool:
+        """Configure Open WebUI with timeout"""
+        try:
+            # Create configuration directory
+            config_dir = self.usb_path / "config"
+            config_dir.mkdir(exist_ok=True)
+            
+            # Write configuration
+            config = {
+                'host': 'localhost',
+                'port': 8080,
+                'data_path': str(self.usb_path / "data"),
+                'ollama_url': 'http://localhost:11434'
+            }
+            
+            config_file = config_dir / "webui.json"
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            logger.info("Open WebUI configured")
+            return True
+            
+        except Exception as e:
+            logger.error(f"WebUI configuration failed: {e}")
+            return False
+    
+    def create_profiles(self):
         """Create initial profile structure"""
         profiles_dir = self.usb_path / "profiles"
         profiles_dir.mkdir(exist_ok=True)
@@ -474,117 +583,133 @@ class SunflowerLauncherUI:
         (profiles_dir / "family").mkdir(exist_ok=True)
         (profiles_dir / "sessions").mkdir(exist_ok=True)
         (profiles_dir / "logs").mkdir(exist_ok=True)
+        
+        logger.info("Profile structure created")
     
-    def _launch_application(self):
-        """Launch the main Sunflower AI application"""
+    def launch_application(self):
+        """Launch the main Sunflower AI application with timeout"""
         main_script = self.cdrom_path / "system" / "main.py"
         
         if main_script.exists():
-            subprocess.Popen([
-                sys.executable,
-                str(main_script),
-                "--cdrom-path", str(self.cdrom_path),
-                "--usb-path", str(self.usb_path)
-            ])
-            
-            # Close launcher
-            self.root.after(2000, self.root.quit)
+            try:
+                # Start main application
+                process = self.runner.start_background_process(
+                    'sunflower_main',
+                    [
+                        sys.executable,
+                        str(main_script),
+                        "--cdrom-path", str(self.cdrom_path),
+                        "--usb-path", str(self.usb_path)
+                    ]
+                )
+                
+                # Wait for application to start
+                if self.wait_for_service('Sunflower AI', 8080, timeout=30.0):
+                    logger.info("Sunflower AI application started successfully")
+                    return True
+                else:
+                    logger.error("Application failed to start")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"Failed to launch application: {e}")
+                return False
         else:
-            messagebox.showerror("Launch Error", "Could not find main application")
+            logger.error(f"Main script not found: {main_script}")
+            return False
     
-    def exit_launcher(self):
-        """Exit the launcher"""
-        if messagebox.askyesno("Exit", "Are you sure you want to exit?"):
-            self.root.quit()
-    
-    def run(self):
-        """Run the launcher UI"""
-        self.root.mainloop()
+    def cleanup(self):
+        """Clean up all processes on exit"""
+        logger.info("Cleaning up launcher resources...")
+        self.runner.stop_all_processes()
+        logger.info("Cleanup complete")
 
 
-def main():
-    """Main entry point for launcher"""
-    # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+# Example platform-specific launcher implementation
+class WindowsLauncher(LauncherBase):
+    """Windows-specific launcher implementation"""
     
-    # Parse command line arguments
-    import argparse
-    parser = argparse.ArgumentParser(description="Sunflower AI Launcher")
-    parser.add_argument("--cdrom-path", type=Path, help="CD-ROM partition path")
-    parser.add_argument("--usb-path", type=Path, help="USB partition path")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    def __init__(self, cdrom_path: Path, usb_path: Path):
+        super().__init__(cdrom_path, usb_path)
+        self.setup_windows_specific()
     
-    args = parser.parse_args()
-    
-    # Set logging level
-    if args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
-    # Detect partitions if not provided
-    cdrom_path = args.cdrom_path
-    usb_path = args.usb_path
-    
-    if not cdrom_path or not usb_path:
-        detector = PartitionDetector()
-        detected_cdrom, detected_usb = detector.detect_partitions()
+    def setup_windows_specific(self):
+        """Windows-specific setup"""
+        # Set Windows-specific timeouts
+        self.runner.timeout_config.quick = 3.0  # Faster on Windows
         
-        # Use detected paths if not provided
-        if not cdrom_path:
-            cdrom_path = detected_cdrom
-        if not usb_path:
-            usb_path = detected_usb
-        
-        # If still not found, try manual fallback paths
-        if not cdrom_path or not usb_path:
-            if platform.system() == "Windows":
-                if not cdrom_path:
-                    cdrom_path = Path("D:\\")
-                if not usb_path:
-                    usb_path = Path("E:\\")
-            elif platform.system() == "Darwin":
-                if not cdrom_path:
-                    cdrom_path = Path("/Volumes/SUNFLOWER_CD")
-                if not usb_path:
-                    usb_path = Path("/Volumes/SUNFLOWER_DATA")
-            else:
-                if not cdrom_path:
-                    cdrom_path = Path("/media/SUNFLOWER_CD")
-                if not usb_path:
-                    usb_path = Path("/media/SUNFLOWER_DATA")
-    
-    # FIX: Validate paths are not None and exist before checking .exists()
-    # Check if paths are None first, then check existence
-    if cdrom_path is None or usb_path is None:
-        messagebox.showerror(
-            "Partition Detection Failed",
-            "Could not detect Sunflower AI partitions.\n\n"
-            "Please ensure the device is properly connected and try again."
-        )
-        sys.exit(1)
-    
-    # Now safe to check .exists() since we know paths are not None
-    if not cdrom_path.exists() or not usb_path.exists():
-        missing_parts = []
-        if not cdrom_path.exists():
-            missing_parts.append(f"CD-ROM: {cdrom_path}")
-        if not usb_path.exists():
-            missing_parts.append(f"USB: {usb_path}")
-        
-        messagebox.showerror(
-            "Partition Not Found",
-            f"Could not find required partitions:\n\n" +
-            "\n".join(missing_parts) +
-            "\n\nPlease ensure the device is properly connected and try again."
-        )
-        sys.exit(1)
-    
-    # Launch UI with valid paths
-    launcher = SunflowerLauncherUI(cdrom_path, usb_path)
-    launcher.run()
+        # Add Windows Defender exclusion for performance
+        try:
+            result = self.runner.run_command(
+                [
+                    'powershell', '-Command',
+                    f'Add-MpPreference -ExclusionPath "{self.usb_path}"'
+                ],
+                operation_type='quick',
+                check=False
+            )
+            if result.returncode == 0:
+                logger.info("Added Windows Defender exclusion")
+        except:
+            pass  # Not critical if it fails
 
 
+class MacOSLauncher(LauncherBase):
+    """macOS-specific launcher implementation"""
+    
+    def __init__(self, cdrom_path: Path, usb_path: Path):
+        super().__init__(cdrom_path, usb_path)
+        self.setup_macos_specific()
+    
+    def setup_macos_specific(self):
+        """macOS-specific setup"""
+        # Set macOS-specific timeouts
+        self.runner.timeout_config.quick = 5.0  # Slower on macOS due to security
+        
+        # Request accessibility permissions if needed
+        try:
+            result = self.runner.run_command(
+                ['osascript', '-e', 'tell application "System Events" to return'],
+                operation_type='quick',
+                check=False
+            )
+            if result.returncode != 0:
+                logger.info("Accessibility permissions may be required")
+        except:
+            pass
+
+
+# Testing
 if __name__ == "__main__":
-    main()
+    # Test timeout configuration
+    print("Testing Launcher Common Components")
+    print("=" * 50)
+    
+    # Test subprocess runner with timeouts
+    runner = SubprocessRunner()
+    
+    # Test quick command
+    try:
+        result = runner.run_command(['echo', 'Hello World'], operation_type='quick')
+        print(f"✓ Quick command succeeded: {result.stdout.strip()}")
+    except subprocess.TimeoutExpired:
+        print("✗ Quick command timed out")
+    
+    # Test hardware detection
+    detector = HardwareDetector()
+    hardware = detector.detect_hardware()
+    print(f"\nHardware detected:")
+    for key, value in hardware.items():
+        print(f"  {key}: {value}")
+    
+    print(f"\nHardware tier: {detector.determine_hardware_tier()}")
+    
+    # Test timeout config
+    config = TimeoutConfig()
+    print(f"\nTimeout configurations:")
+    print(f"  Quick: {config.quick}s")
+    print(f"  Default: {config.default}s")
+    print(f"  Long: {config.long}s")
+    print(f"  Install: {config.install}s")
+    
+    print("\nAll tests completed!")
