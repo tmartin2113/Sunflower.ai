@@ -1,11 +1,12 @@
 @echo off
+REM ============================================================================
 REM Sunflower AI Windows Quick Launcher
-REM Easy one-click setup for Windows users
+REM Version: 6.2 - Production Ready (No ANSI Colors)
+REM Purpose: Easy one-click setup for Windows users
+REM Location: Repository root directory
+REM ============================================================================
 
 setlocal enabledelayedexpansion
-
-REM Set console colors
-color 0A
 
 REM Clear screen and show header
 cls
@@ -19,11 +20,14 @@ REM Check for Administrator privileges
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [WARNING] Not running as Administrator
-    echo Some features may require admin privileges
+    echo          Some features may require admin privileges
     echo.
 )
 
-REM Check Python installation
+REM ============================================================================
+REM SYSTEM REQUIREMENTS CHECK
+REM ============================================================================
+
 echo [1/7] Checking Python installation...
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
@@ -38,7 +42,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 ) else (
     for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
-    echo       Found Python !PYTHON_VERSION!
+    echo       [OK] Found Python !PYTHON_VERSION!
 )
 
 REM Check available memory
@@ -48,50 +52,50 @@ for /f "skip=1" %%p in ('wmic computersystem get TotalPhysicalMemory') do (
     goto :mem_found
 )
 :mem_found
-set /a MEM_GB=!MEM:~0,-9!
+set /a MEM_GB=!MEM:~0,-9! 2>nul
 if !MEM_GB! LSS 4 (
     echo       [WARNING] Low RAM detected: !MEM_GB!GB
-    echo       Minimum 4GB recommended for optimal performance
+    echo                 Minimum 4GB recommended for optimal performance
 ) else (
-    echo       RAM: !MEM_GB!GB [OK]
+    echo       [OK] RAM: !MEM_GB!GB
 )
 
 REM Check Docker Desktop
 echo [3/7] Checking Docker Desktop...
 docker --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo       Docker Desktop not found
+    echo       [INFO] Docker Desktop not found
     echo.
     choice /C YN /M "Would you like to use Docker for easier setup?"
     if !errorlevel! equ 1 (
         echo.
-        echo Opening Docker Desktop download page...
+        echo [INFO] Opening Docker Desktop download page...
         start https://www.docker.com/products/docker-desktop
         echo.
         echo Please install Docker Desktop and restart this script
         pause
         exit /b 0
     ) else (
-        echo       Proceeding without Docker (standalone mode)
+        echo       [INFO] Proceeding without Docker (standalone mode)
         set USE_DOCKER=0
     )
 ) else (
-    echo       Docker Desktop found
+    echo       [OK] Docker Desktop found
     set USE_DOCKER=1
     
     REM Check if Docker is running
     docker ps >nul 2>&1
     if !errorlevel! neq 0 (
-        echo       Starting Docker Desktop...
+        echo       [INFO] Starting Docker Desktop...
         start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-        echo       Waiting for Docker to start (this may take a minute)...
+        echo             Waiting for Docker to start (this may take a minute)...
         
         :wait_docker
         timeout /t 5 /nobreak >nul
         docker ps >nul 2>&1
         if !errorlevel! neq 0 goto wait_docker
         
-        echo       Docker Desktop started successfully
+        echo       [OK] Docker Desktop started successfully
     )
 )
 
@@ -99,61 +103,76 @@ REM Check/Install Ollama
 echo [4/7] Checking Ollama installation...
 ollama --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo       Ollama not found
+    echo       [INFO] Ollama not found
     echo.
-    echo Downloading Ollama installer...
-    
-    REM Download Ollama installer
-    if not exist "temp" mkdir temp
-    powershell -Command "Invoke-WebRequest -Uri 'https://ollama.ai/download/OllamaSetup.exe' -OutFile 'temp\OllamaSetup.exe'"
-    
-    if exist "temp\OllamaSetup.exe" (
-        echo Installing Ollama (please follow the installer)...
-        start /wait temp\OllamaSetup.exe
+    choice /C YN /M "Install Ollama now? (Required for AI models)"
+    if !errorlevel! equ 1 (
+        echo.
+        echo [INFO] Downloading Ollama installer...
+        powershell -Command "Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile 'OllamaSetup.exe'"
         
-        REM Verify installation
-        ollama --version >nul 2>&1
-        if !errorlevel! neq 0 (
-            echo.
-            echo [ERROR] Ollama installation failed
-            echo Please install manually from: https://ollama.ai/download/windows
+        if exist OllamaSetup.exe (
+            echo [INFO] Running Ollama installer...
+            start /wait OllamaSetup.exe
+            del OllamaSetup.exe
+            echo [OK] Ollama installed successfully
+        ) else (
+            echo [ERROR] Failed to download Ollama installer
+            echo        Please install manually from: https://ollama.com
             pause
             exit /b 1
-        ) else (
-            echo       Ollama installed successfully
         )
     ) else (
-        echo [ERROR] Failed to download Ollama
-        echo Please install manually from: https://ollama.ai/download/windows
-        pause
-        exit /b 1
+        echo [WARNING] Ollama is required for AI models
+        echo           Install from: https://ollama.com
     )
 ) else (
-    echo       Ollama is installed
+    echo       [OK] Ollama is installed
 )
 
-REM Install Python dependencies
-echo [5/7] Installing Python dependencies...
-pip install --quiet --upgrade pip
-pip install --quiet requests psutil
+REM Check for required Python packages
+echo [5/7] Checking Python dependencies...
+python -c "import psutil" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo       [INFO] Installing required Python packages...
+    pip install -r requirements.txt --quiet
+    if %errorlevel% neq 0 (
+        echo       [WARNING] Some packages may not have installed correctly
+    ) else (
+        echo       [OK] Python packages installed
+    )
+) else (
+    echo       [OK] Core dependencies found
+)
 
-REM Create necessary directories
-echo [6/7] Setting up directory structure...
-if not exist "models" mkdir models
-if not exist "config" mkdir config
-if not exist "local_data" mkdir local_data
-if not exist "local_data\profiles" mkdir local_data\profiles
-if not exist "local_data\conversations" mkdir local_data\conversations
-if not exist "logs" mkdir logs
-echo       Directories created
+REM Check for model files
+echo [6/7] Checking AI models...
+ollama list >nul 2>&1
+if %errorlevel% neq 0 (
+    echo       [WARNING] Cannot check models - Ollama not running
+    echo [INFO] Starting Ollama service...
+    start /min cmd /c "ollama serve"
+    timeout /t 3 /nobreak >nul
+)
 
-REM Choose setup method
-echo.
+ollama list | findstr /i "sunflower-kids" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo       [INFO] Sunflower models not found - will download on first run
+) else (
+    echo       [OK] Sunflower models found
+)
+
+REM ============================================================================
+REM MAIN MENU
+REM ============================================================================
+
+:menu
+cls
 echo ============================================================
-echo                    SETUP METHOD
+echo           SUNFLOWER AI EDUCATION SYSTEM
 echo ============================================================
 echo.
-echo How would you like to run Sunflower AI?
+echo Select your preferred setup method:
 echo.
 echo [1] Quick Start with Docker (Recommended)
 echo [2] Run with Python Script
@@ -167,6 +186,10 @@ if !errorlevel! equ 2 goto python_setup
 if !errorlevel! equ 3 goto manual_setup
 if !errorlevel! equ 4 goto end
 
+REM ============================================================================
+REM DOCKER SETUP
+REM ============================================================================
+
 :docker_setup
 echo.
 echo [7/7] Starting Sunflower AI with Docker...
@@ -174,11 +197,18 @@ echo.
 
 REM Start services with Docker Compose
 if exist "docker-compose.dev.yml" (
-    echo Starting Docker services...
+    echo [INFO] Starting Docker services...
     docker-compose -f docker-compose.dev.yml up -d
     
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to start Docker services
+        echo        Check the error messages above
+        pause
+        goto menu
+    )
+    
     echo.
-    echo Waiting for services to initialize...
+    echo [INFO] Waiting for services to initialize...
     timeout /t 10 /nobreak >nul
     
     echo.
@@ -191,7 +221,7 @@ if exist "docker-compose.dev.yml" (
     echo.
     echo Demo Login: parent / demo123
     echo.
-    echo Opening browser in 5 seconds...
+    echo [INFO] Opening browser in 5 seconds...
     timeout /t 5 /nobreak >nul
     start http://localhost:8080
     
@@ -200,14 +230,19 @@ if exist "docker-compose.dev.yml" (
     pause >nul
     
     echo.
-    echo Stopping services...
+    echo [INFO] Stopping services...
     docker-compose -f docker-compose.dev.yml down
+    echo [OK] Services stopped
 ) else (
     echo [ERROR] docker-compose.dev.yml not found
-    echo Please ensure you're in the Sunflower AI directory
+    echo        Please ensure you're in the Sunflower AI directory
     pause
 )
 goto end
+
+REM ============================================================================
+REM PYTHON SETUP
+REM ============================================================================
 
 :python_setup
 echo.
@@ -216,40 +251,66 @@ echo.
 
 REM Check if run_local.py exists
 if exist "run_local.py" (
-    echo Launching Sunflower AI...
+    echo [INFO] Launching Sunflower AI...
     python run_local.py
+    if !errorlevel! neq 0 (
+        echo.
+        echo [ERROR] Application exited with errors
+        echo        Check the error messages above
+        pause
+    )
 ) else (
     echo [ERROR] run_local.py not found
-    echo Please ensure you're in the Sunflower AI directory
+    echo        Please ensure you're in the Sunflower AI directory
     pause
 )
 goto end
 
+REM ============================================================================
+REM MANUAL SETUP
+REM ============================================================================
+
 :manual_setup
 echo.
-echo [7/7] Manual Setup Instructions
+echo ============================================================
+echo                 MANUAL SETUP INSTRUCTIONS
 echo ============================================================
 echo.
-echo 1. Start Ollama service:
+echo Follow these steps to set up Sunflower AI manually:
+echo.
+echo STEP 1: Start Ollama service
+echo --------------------------------
+echo Run in a new terminal:
 echo    ollama serve
 echo.
-echo 2. Load Sunflower models:
-echo    ollama create sunflower-kids -f models\sunflower-kids.modelfile
-echo    ollama create sunflower-educator -f models\sunflower-educator.modelfile
+echo STEP 2: Load Sunflower models
+echo --------------------------------
+echo Run these commands:
+echo    ollama create sunflower-kids -f modelfiles\sunflower-kids.modelfile
+echo    ollama create sunflower-educator -f modelfiles\sunflower-educator.modelfile
 echo.
-echo 3. Run Open WebUI:
-echo    - With Docker:
-echo      docker run -d -p 8080:8080 ghcr.io/open-webui/open-webui:main
+echo STEP 3: Run Open WebUI
+echo --------------------------------
+echo Option A - With Docker:
+echo    docker run -d -p 8080:8080 ghcr.io/open-webui/open-webui:main
 echo.
-echo    - From source:
-echo      git clone https://github.com/open-webui/open-webui.git
-echo      cd open-webui
-echo      python backend\main.py
+echo Option B - From source:
+echo    git clone https://github.com/open-webui/open-webui.git
+echo    cd open-webui
+echo    python backend\main.py
 echo.
-echo 4. Open browser to: http://localhost:8080
+echo STEP 4: Open your browser
+echo --------------------------------
+echo Navigate to: http://localhost:8080
+echo.
+echo ============================================================
 echo.
 pause
-goto end
+goto menu
+
+REM ============================================================================
+REM EXIT
+REM ============================================================================
 
 :end
 echo.
@@ -258,9 +319,11 @@ echo           Thank you for using Sunflower AI!
 echo ============================================================
 echo.
 echo For support and documentation:
-echo - Quick Start Guide: QUICK_START.md
-echo - Testing Guide: TESTING_GUIDE.md
+echo - Quick Start Guide: docs\QUICK_START.txt
+echo - Testing Guide: docs\TESTING_GUIDE.txt
 echo - Troubleshooting: logs\sunflower_local.log
+echo.
+echo Report issues: https://github.com/sunflowerai/issues
 echo.
 pause
 exit /b 0
